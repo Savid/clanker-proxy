@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/ogen-go/ogen/ogenerrors"
 
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/internal/inbox"
+	"github.com/savid/clanker-proxy/internal/store"
 )
 
 // errUnauthorized is every authentication failure: which part was wrong is
@@ -41,7 +43,7 @@ func (s *security) HandleOwnerToken(ctx context.Context, op rest.OperationName, 
 			return ctx, ogenerrors.ErrSkipServerSecurity
 		}
 
-		if err := s.agent(ctx, t.Token); err != nil {
+		if _, err := s.agent(ctx, t.Token); err != nil {
 			return ctx, err
 		}
 
@@ -62,40 +64,68 @@ func (s *security) HandleAgentToken(ctx context.Context, _ rest.OperationName, t
 		return ctx, ogenerrors.ErrSkipServerSecurity
 	}
 
-	if err := s.agent(ctx, t.Token); err != nil {
+	a, err := s.agent(ctx, t.Token)
+	if err != nil {
 		return ctx, err
 	}
 
-	return ctx, nil
+	return withScope(ctx, a.Peers), nil
 }
 
 // agent checks an agent token, reporting any caller error as errUnauthorized.
-func (s *security) agent(ctx context.Context, token string) error {
-	_, err := s.inbox.AgentByToken(ctx, token)
+func (s *security) agent(ctx context.Context, token string) (store.AgentToken, error) {
+	a, err := s.inbox.AgentByToken(ctx, token)
 	if _, isCaller := inbox.HTTPStatus(err); err != nil && isCaller {
-		return errUnauthorized
+		return a, errUnauthorized
 	}
 
-	return err
+	return a, err
+}
+
+type scopeKey struct{}
+
+// withScope records which peers' threads an agent token may reach; none
+// recorded, or an empty list, is every peer.
+func withScope(ctx context.Context, peers []string) context.Context {
+	if len(peers) == 0 {
+		return ctx
+	}
+
+	return context.WithValue(ctx, scopeKey{}, peers)
+}
+
+// scopeOf is the peer list HandleAgentToken admitted the caller with, or
+// nil for every peer.
+func scopeOf(ctx context.Context) []string {
+	peers, _ := ctx.Value(scopeKey{}).([]string)
+
+	return peers
+}
+
+// inScope reports whether the caller may reach threads with peer.
+func inScope(ctx context.Context, peer string) bool {
+	scope := scopeOf(ctx)
+
+	return scope == nil || slices.Contains(scope, peer)
 }
 
 // ownerOrAgent admits the owner or an agent, for hand-routed operations
-// whose security lists both.
-func (s *security) ownerOrAgent(ctx context.Context, token string) (bool, error) {
+// whose security lists both, and returns ctx with an agent's scope.
+func (s *security) ownerOrAgent(ctx context.Context, token string) (context.Context, bool, error) {
 	if s.isOwner(token) {
-		return true, nil
+		return ctx, true, nil
 	}
 
 	if !strings.HasPrefix(token, inbox.AgentPrefix) {
-		return false, nil
+		return ctx, false, nil
 	}
 
-	err := s.agent(ctx, token)
+	a, err := s.agent(ctx, token)
 	if errors.Is(err, errUnauthorized) {
-		return false, nil
+		return ctx, false, nil
 	}
 
-	return err == nil, err
+	return withScope(ctx, a.Peers), err == nil, err
 }
 
 // HandlePeerSecret admits a peer and records which one in the context.

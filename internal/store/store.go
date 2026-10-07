@@ -80,6 +80,7 @@ CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
 CREATE TABLE IF NOT EXISTS agent_tokens (
 	name       TEXT PRIMARY KEY,
 	hash       TEXT NOT NULL UNIQUE,
+	peers      TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	expires_at TEXT NOT NULL DEFAULT '',
 	used_at    TEXT NOT NULL DEFAULT ''
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS webhooks (
 	url         TEXT NOT NULL,
 	events      TEXT NOT NULL,
 	origin      TEXT NOT NULL,
+	peers       TEXT NOT NULL,
 	enabled     INTEGER NOT NULL,
 	secret      TEXT NOT NULL,
 	headers     TEXT NOT NULL,

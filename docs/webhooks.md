@@ -127,6 +127,11 @@ named webhooks give each destination its own retry state.
 
 ## Event subscriptions
 
+Each endpoint takes every peer's events, or with `-peers bob,carol` only those
+peers' thread events: give a peer its own channel, or its own agent. A webhook
+with peers never receives `peering.requested`, since a requester picks the name
+it asks under; `webhook set -peers '*'` goes back to every peer.
+
 Each endpoint subscribes to `*` (all current and future types) or a fixed list:
 
 | Type | Meaning |

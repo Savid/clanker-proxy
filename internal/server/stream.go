@@ -24,7 +24,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 
 	token := bearer(r)
 
-	admitted, err := s.sec.ownerOrAgent(ctx, token)
+	ctx, admitted, err := s.sec.ownerOrAgent(ctx, token)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stream security failed", "error", err)
 		httpserve.WriteProblem(w, http.StatusInternalServerError, "")
@@ -54,7 +54,13 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	// An agent token is checked again before each event and ping, so a
 	// revoked or expired token gets nothing more.
 	live := func() bool {
-		return !strings.HasPrefix(token, inbox.AgentPrefix) || s.sec.agent(ctx, token) == nil
+		if !strings.HasPrefix(token, inbox.AgentPrefix) {
+			return true
+		}
+
+		_, agentErr := s.sec.agent(ctx, token)
+
+		return agentErr == nil
 	}
 
 	for ok := true; ok; {
@@ -68,6 +74,10 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case sum := <-changes:
 			if !live() {
 				return
+			}
+
+			if !inScope(ctx, sum.Peer) {
+				continue
 			}
 
 			out := summary(sum, self)

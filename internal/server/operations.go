@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -143,10 +144,16 @@ func (o *operations) RemovePeer(ctx context.Context, params rest.RemovePeerParam
 }
 
 func (o *operations) ListThreads(ctx context.Context, params rest.ListThreadsParams) (*rest.ThreadList, error) {
+	peer := string(params.Peer.Or(""))
+	if peer != "" && !inScope(ctx, peer) {
+		return &rest.ThreadList{Threads: []rest.ThreadSummary{}}, nil
+	}
+
 	sums, err := o.inbox.Threads(ctx, store.Filter{
 		Turn:  string(params.Turn.Or("")),
 		State: thread.State(params.State.Or("")),
-		Peer:  string(params.Peer.Or("")),
+		Peer:  peer,
+		Peers: scopeOf(ctx),
 		Label: string(params.Label.Or("")),
 		Limit: int(params.Limit.Or(100)),
 	})
@@ -163,12 +170,23 @@ func (o *operations) ListThreads(ctx context.Context, params rest.ListThreadsPar
 }
 
 func (o *operations) GetThread(ctx context.Context, params rest.GetThreadParams) (*rest.Thread, error) {
-	v, err := o.inbox.Thread(ctx, params.Ref)
+	v, err := o.scopedThread(ctx, params.Ref)
 	if err != nil {
 		return nil, err
 	}
 
 	return threadView(v, o.inbox.Self()), nil
+}
+
+// scopedThread reads a thread, answering a peer-scoped agent as if a thread
+// with any other peer did not exist, so its IDs cannot be probed.
+func (o *operations) scopedThread(ctx context.Context, ref string) (inbox.View, error) {
+	v, err := o.inbox.Thread(ctx, ref)
+	if err == nil && !inScope(ctx, v.Summary.Peer) {
+		return inbox.View{}, &inbox.Error{Kind: inbox.KindNotFound, Msg: fmt.Sprintf("no thread matches %q", ref)}
+	}
+
+	return v, err
 }
 
 func (o *operations) OpenThread(ctx context.Context, req *rest.NewThread) (*rest.ThreadSummary, error) {
@@ -186,6 +204,12 @@ func (o *operations) OpenThread(ctx context.Context, req *rest.NewThread) (*rest
 }
 
 func (o *operations) ActOnThread(ctx context.Context, req *rest.ThreadAction, params rest.ActOnThreadParams) (*rest.ThreadSummary, error) {
+	if scopeOf(ctx) != nil {
+		if _, err := o.scopedThread(ctx, params.Ref); err != nil {
+			return nil, err
+		}
+	}
+
 	v, err := o.inbox.Act(ctx, params.Ref, thread.Action(req.Action), string(req.Body.Or("")))
 	if err != nil {
 		return nil, err

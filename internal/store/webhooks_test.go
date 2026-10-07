@@ -227,3 +227,29 @@ func TestWebhookDeferIgnoresReplacedCredentials(t *testing.T) {
 		t.Fatalf("current failure not recorded: %v, %d", got.PausedUntil, got.Failures)
 	}
 }
+
+func TestWebhookPeerFilter(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	scoped := hook("bob-only", "incoming", "*")
+	scoped.Peers = []string{"bob"}
+	for _, c := range []webhook.Config{scoped, hook("everyone", "incoming", "*")} {
+		if err := st.CreateWebhook(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000002", "carol", "me", nil, t0)
+	if _, err := st.AddRequest(ctx, store.Request{ID: "12345678", Name: "bob", URL: "http://bob", Secret: "private", At: t0}, 20, t0.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, st, "bob-only", 1)[0]; got.Event != "thread.open" || got.Subject != "aaaa0000-0000-4000-8000-000000000001" {
+		t.Fatalf("bob-only got %s %s", got.Event, got.Subject)
+	}
+	deliveries(t, st, "everyone", 3)
+	got, err := st.Webhook(ctx, "bob-only")
+	if err != nil || len(got.Peers) != 1 || got.Peers[0] != "bob" {
+		t.Fatalf("peers did not persist: %v %v", got.Peers, err)
+	}
+}

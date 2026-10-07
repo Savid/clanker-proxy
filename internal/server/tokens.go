@@ -9,12 +9,12 @@ import (
 )
 
 func (o *operations) CreateAgentToken(ctx context.Context, req *rest.AgentTokenInput) (*rest.NewAgentToken, error) {
-	token, t, err := o.inbox.CreateAgentToken(ctx, string(req.Name), req.ExpiresAt.Or(time.Time{}))
+	token, t, err := o.inbox.CreateAgentToken(ctx, string(req.Name), peerNames(req.Peers), req.ExpiresAt.Or(time.Time{}))
 	if err != nil {
 		return nil, err
 	}
 
-	return &rest.NewAgentToken{Name: rest.Name(t.Name), Token: token, CreatedAt: t.CreatedAt, ExpiresAt: optTime(t.ExpiresAt)}, nil
+	return &rest.NewAgentToken{Name: rest.Name(t.Name), Token: token, Peers: toPeers(t.Peers), CreatedAt: t.CreatedAt, ExpiresAt: optTime(t.ExpiresAt)}, nil
 }
 
 func (o *operations) ListAgentTokens(ctx context.Context) (*rest.AgentTokenList, error) {
@@ -36,7 +36,7 @@ func (o *operations) DeleteAgentToken(ctx context.Context, params rest.DeleteAge
 }
 
 func agentToken(t store.AgentToken) rest.AgentTokenSummary {
-	return rest.AgentTokenSummary{Name: rest.Name(t.Name), CreatedAt: t.CreatedAt, ExpiresAt: optTime(t.ExpiresAt), UsedAt: optTime(t.UsedAt)}
+	return rest.AgentTokenSummary{Name: rest.Name(t.Name), Peers: toPeers(t.Peers), CreatedAt: t.CreatedAt, ExpiresAt: optTime(t.ExpiresAt), UsedAt: optTime(t.UsedAt)}
 }
 
 func optTime(t time.Time) rest.OptDateTime {

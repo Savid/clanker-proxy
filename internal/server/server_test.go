@@ -29,7 +29,7 @@ func newFixture(t *testing.T) fixture {
 	ib := inboxtest.New(t)
 	f := fixture{owner: inbox.NewSecret(inbox.OwnerPrefix), peerSecret: ib.ActivePeer(t, "friend")}
 
-	agent, _, err := ib.CreateAgentToken(t.Context(), "helper", time.Time{})
+	agent, _, err := ib.CreateAgentToken(t.Context(), "helper", nil, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

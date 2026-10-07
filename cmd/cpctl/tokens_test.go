@@ -136,3 +136,64 @@ func TestShowMarksBodies(t *testing.T) {
 		t.Fatalf("title with control characters: %v", err)
 	}
 }
+
+func TestPeerScopedAgentToken(t *testing.T) {
+	t.Parallel()
+	alice, bob, carol := newPerson(t, "alice"), newPerson(t, "bob"), newPerson(t, "carol")
+	peer(t, bob, alice)
+	peer(t, carol, alice)
+	// Each arrival is waited for in turn: acking bob's thread answers it, so
+	// the next wait returns carol's.
+	var fromBob, fromCarol threadJSON
+	bob.json(t, &fromBob, "send", "alice", "From bob", "-m", "hi")
+	alice.waitTurn(t, "")
+	alice.cp(t, "ack", fromBob.ID)
+	carol.json(t, &fromCarol, "send", "alice", "From carol", "-m", "private")
+	if got := alice.waitTurn(t, ""); got.ID != fromCarol.ID {
+		t.Fatalf("waited for %s, want carol's %s", got.ID, fromCarol.ID)
+	}
+
+	file := filepath.Join(t.TempDir(), "bob.token")
+	if out := alice.cp(t, "token", "add", "bob-agent", "-o", file, "-peers", "bob"); !strings.Contains(out, "for bob") {
+		t.Fatalf("token add: %s", out)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &person{name: "bob's agent", url: alice.url, token: strings.TrimSpace(string(data))}
+
+	for _, args := range [][]string{{"ls"}, {"inbox"}, {"ls", "-peer", "carol"}} {
+		if out := agent.cp(t, args...); strings.Contains(out, "From carol") {
+			t.Fatalf("%v showed carol's thread:\n%s", args, out)
+		}
+	}
+	if out := agent.cp(t, "ls"); !strings.Contains(out, "From bob") {
+		t.Fatalf("ls hid bob's thread:\n%s", out)
+	}
+	agent.cp(t, "reply", fromBob.ID, "-m", "on it")
+	for _, args := range [][]string{{"show", fromCarol.ID}, {"reply", fromCarol.ID, "-m", "leak"}} {
+		out, tryErr := agent.try(t, args...)
+		if exitOf(tryErr) != exitNotFound || !strings.Contains(out, "no thread matches") {
+			t.Fatalf("%v on carol's thread: %v %s", args[0], tryErr, out)
+		}
+	}
+	if out := alice.cp(t, "token", "ls"); !strings.Contains(out, "peers: bob") {
+		t.Fatalf("token ls: %s", out)
+	}
+}
+
+func TestPeerScopedWebhookFlags(t *testing.T) {
+	t.Parallel()
+	alice := newPerson(t, "alice")
+	if out := alice.cp(t, "webhook", "add", "bob-chat", "https://runner.example/hook", "-peers", "Bob,carol"); !strings.Contains(out, "peers: bob, carol") {
+		t.Fatalf("webhook add -peers: %s", out)
+	}
+	if _, err := alice.try(t, "webhook", "add", "requests", "https://runner.example/hook", "-peers", "bob", "-events", "peering.requested"); exitOf(err) != exitUsage {
+		t.Fatalf("peering requests on a peer webhook: %v", err)
+	}
+	alice.cp(t, "webhook", "set", "bob-chat", "-peers", "*")
+	if out := alice.cp(t, "webhook", "show", "bob-chat"); !strings.Contains(out, "peers: every peer") {
+		t.Fatalf("clearing peers: %s", out)
+	}
+}

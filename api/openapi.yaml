@@ -756,6 +756,15 @@ components:
       items:
         type: string
         enum: ['*', thread.open, thread.reply, thread.ack, thread.needs-input, thread.resolve, thread.decline, thread.close, thread.reopen, thread.withdraw, peering.requested]
+    Peers:
+      type: array
+      description: >-
+        The peers this applies to, by name. Empty: every peer, including
+        peers added later.
+      maxItems: 50
+      uniqueItems: true
+      items:
+        $ref: '#/components/schemas/Name'
     WebhookOrigin:
       type: string
       description: Incoming events from peers, outgoing owner actions, or both. Peering requests are incoming.
@@ -812,12 +821,14 @@ components:
       description: >-
         Owner-configured notifications, without destination paths, queries,
         custom header values or signing keys.
-      required: [name, type, destination, events, origin, enabled, signing, headerNames]
+      required: [name, type, destination, events, origin, peers, enabled, signing, headerNames]
       properties:
         name:
           $ref: '#/components/schemas/Name'
         type:
           $ref: '#/components/schemas/WebhookType'
+        peers:
+          $ref: '#/components/schemas/Peers'
         destination:
           type: string
           maxLength: 2048
@@ -850,8 +861,12 @@ components:
         A new webhook. Generic signing is opt-in. Destination URL, custom header
         values and signing key are write-only. Chat destinations authenticate
         with their provider URL or custom headers, without a signing key.
+        With peers, only those peers' thread events are sent, and never
+        peering requests, whose names the requester chooses.
       required: [name, type, url, events, origin, enabled]
       properties:
+        peers:
+          $ref: '#/components/schemas/Peers'
         name:
           $ref: '#/components/schemas/Name'
         type:
@@ -873,8 +888,11 @@ components:
       additionalProperties: false
       description: >-
         Changes to a destination. Omitted settings are retained. Empty secret
-        disables signing; empty headers remove custom headers. Type is immutable.
+        disables signing; empty headers remove custom headers; empty peers
+        send every peer's events. Type is immutable.
       properties:
+        peers:
+          $ref: '#/components/schemas/Peers'
         url:
           $ref: '#/components/schemas/WebhookURL'
         events:
@@ -1172,12 +1190,16 @@ components:
           type: string
           format: date-time
     AgentTokenInput:
-      description: A new agent token.
+      description: >-
+        A new agent token. With peers, it reaches only threads with those
+        peers: it lists and streams only theirs, and others' answer 404.
       type: object
       required: [name]
       properties:
         name:
           $ref: '#/components/schemas/Name'
+        peers:
+          $ref: '#/components/schemas/Peers'
         expiresAt:
           type: string
           format: date-time
@@ -1185,10 +1207,12 @@ components:
     AgentTokenSummary:
       description: An agent token, without the token.
       type: object
-      required: [name, createdAt]
+      required: [name, peers, createdAt]
       properties:
         name:
           $ref: '#/components/schemas/Name'
+        peers:
+          $ref: '#/components/schemas/Peers'
         createdAt:
           type: string
           format: date-time
@@ -1202,10 +1226,12 @@ components:
     NewAgentToken:
       description: A new agent token and the token itself, which is never shown again.
       type: object
-      required: [name, token, createdAt]
+      required: [name, token, peers, createdAt]
       properties:
         name:
           $ref: '#/components/schemas/Name'
+        peers:
+          $ref: '#/components/schemas/Peers'
         token:
           type: string
           description: The bearer token. Give it to the agent as CP_TOKEN.

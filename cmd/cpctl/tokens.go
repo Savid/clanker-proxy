@@ -18,11 +18,12 @@ import (
 func tokenCommands() []*command {
 	return []*command{
 		{
-			name: "token add", args: "<name> -o <file> [-expires <duration>]", minArgs: 1, maxArgs: 1,
+			name: "token add", args: "<name> -o <file> [-peers <names>] [-expires <duration>]", minArgs: 1, maxArgs: 1,
 			summary: "create an agent token: works every thread, but cannot send, peer or configure",
 			about: "An agent token can list, read and act on every thread, current and future, wait on them and " +
 				"read your name. Opening threads, peering, webhooks and tokens refuse it with 403 (exit 5). Give it to an agent as CP_TOKEN " +
-				"instead of the owner token. The token is shown only now: -o writes it to a new file readable only " +
+				"instead of the owner token. -peers bob,carol limits it to threads with those peers: it lists and " +
+				"follows only theirs, and any other thread answers as if it did not exist. The token is shown only now: -o writes it to a new file readable only " +
 				"by you; -o - writes it to stdout, for piping into a secret store. -expires takes a duration such as " +
 				"90d or 12h; without it, the token works until cpctl token rm.",
 			example: "cpctl token add amp-inbox -o amp.token -expires 90d",
@@ -47,13 +48,14 @@ func tokenCommands() []*command {
 func tokenAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 	out := fs.String("o", "", "new `file` for the token, or - for stdout")
 	expires := fs.String("expires", "", "lifetime such as 90d or 12h (default: until revoked)")
+	peers := fs.String("peers", "", "comma-separated peer `names` it may reach (default: every peer)")
 
 	return func(a *app, pos []string) error {
 		if *out == "" {
 			return usageError("-o is required: the token is shown only once")
 		}
 
-		req := &rest.AgentTokenInput{Name: name(pos[0])}
+		req := &rest.AgentTokenInput{Name: name(pos[0]), Peers: peerList(*peers)}
 
 		if *expires != "" {
 			d, err := parseLifetime(*expires)
@@ -91,10 +93,10 @@ func tokenAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 			return nil
 		}
 
-		created := &rest.AgentTokenSummary{Name: t.Name, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt}
+		created := &rest.AgentTokenSummary{Name: t.Name, Peers: t.Peers, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt}
 
 		return a.print(created, func(w io.Writer) {
-			fmt.Fprintf(w, "created agent token %s, %s\nwrote it to %s\n", t.Name, expiry(t.ExpiresAt, a.now()), *out)
+			fmt.Fprintf(w, "created agent token %s for %s, %s\nwrote it to %s\n", t.Name, forPeers(t.Peers), expiry(t.ExpiresAt, a.now()), *out)
 			next(w, step{"CP_TOKEN=\"$(cat " + *out + ")\" cpctl inbox", "what the agent can run with it"},
 				step{"cpctl token rm " + string(t.Name), "revoke it"})
 		})
@@ -183,7 +185,7 @@ func runTokens(a *app, _ []string) error {
 				used = "used " + at.UTC().Format(time.RFC3339)
 			}
 
-			fmt.Fprintf(tw, "%s\tcreated %s\t%s\t%s\n", t.Name, t.CreatedAt.UTC().Format(time.RFC3339), expiry(t.ExpiresAt, a.now()), used)
+			fmt.Fprintf(tw, "%s\tpeers: %s\tcreated %s\t%s\t%s\n", t.Name, forPeers(t.Peers), t.CreatedAt.UTC().Format(time.RFC3339), expiry(t.ExpiresAt, a.now()), used)
 		}
 
 		_ = tw.Flush()

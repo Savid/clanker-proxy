@@ -30,12 +30,12 @@ func (e *InvalidWebhookError) Error() string { return e.Err.Error() }
 
 func (e *InvalidWebhookError) Unwrap() error { return e.Err }
 
-const webhookColumns = `name, type, url, events, origin, enabled, secret, headers, retry_after, failures`
+const webhookColumns = `name, type, url, events, origin, peers, enabled, secret, headers, retry_after, failures`
 
 func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
 	var c webhook.Config
-	var events, headers, paused string
-	if err := row.Scan(&c.Name, &c.Type, &c.URL, &events, &c.Origin, &c.Enabled, &c.Secret, &headers, &paused, &c.Failures); err != nil {
+	var events, peers, headers, paused string
+	if err := row.Scan(&c.Name, &c.Type, &c.URL, &events, &c.Origin, &peers, &c.Enabled, &c.Secret, &headers, &paused, &c.Failures); err != nil {
 		return c, err
 	}
 	if paused != "" {
@@ -47,7 +47,19 @@ func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
 	if err := json.Unmarshal([]byte(headers), &c.Headers); err != nil {
 		return c, err
 	}
+	if err := json.Unmarshal([]byte(peers), &c.Peers); err != nil {
+		return c, err
+	}
 	return c, json.Unmarshal([]byte(events), &c.Events)
+}
+
+// peerList encodes a peer list, always as an array, so SQL can count it.
+func peerList(peers []string) string {
+	if len(peers) == 0 {
+		return "[]"
+	}
+	data, _ := json.Marshal(peers) //nolint:errchkjson // a []string always encodes
+	return string(data)
 }
 
 // Webhooks lists destinations; secrets are for internal delivery only.
@@ -87,7 +99,7 @@ func (s *Store) CreateWebhook(ctx context.Context, c webhook.Config) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO webhooks (name, type, url, events, origin, enabled, secret, headers) VALUES (?,?,?,?,?,?,?,?)`, c.Name, c.Type, c.URL, string(events), c.Origin, c.Enabled, c.Secret, string(headers))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO webhooks (name, type, url, events, origin, peers, enabled, secret, headers) VALUES (?,?,?,?,?,?,?,?,?)`, c.Name, c.Type, c.URL, string(events), c.Origin, peerList(c.Peers), c.Enabled, c.Secret, string(headers))
 	if isConstraint(err) {
 		return ErrExists
 	}
@@ -119,7 +131,7 @@ func (s *Store) UpdateWebhook(ctx context.Context, name string, change webhook.U
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, c.Enabled, c.Secret, string(headers), name); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, peers=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, peerList(c.Peers), c.Enabled, c.Secret, string(headers), name); err != nil {
 			return err
 		}
 		c.PausedUntil = time.Time{}
@@ -152,8 +164,12 @@ func webhookChanged(res sql.Result, err error) error {
 
 // queueWebhooks shares the source mutation's transaction: either both commit or neither does.
 func queueWebhooks(ctx context.Context, tx *sql.Tx, p webhook.Payload) error {
+	// A webhook with peers takes only those peers' thread events: a peering
+	// request carries a name its sender chose.
 	rows, err := tx.QueryContext(ctx, `SELECT name FROM webhooks WHERE enabled=1 AND (origin='both' OR origin=?)
- AND EXISTS (SELECT 1 FROM json_each(events) WHERE value='*' OR value=?)`, p.Origin, p.Type)
+ AND EXISTS (SELECT 1 FROM json_each(events) WHERE value='*' OR value=?)
+ AND (json_array_length(peers)=0 OR (?<>'peering.requested' AND EXISTS (SELECT 1 FROM json_each(peers) WHERE value=?)))`,
+		p.Origin, p.Type, p.Type, p.Peer)
 	if err != nil {
 		return err
 	}

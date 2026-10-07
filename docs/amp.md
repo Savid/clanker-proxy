@@ -44,7 +44,25 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
   can reach every thread the inbox handles, not only its own. The plugin
   keeps a conversation to its thread, but a peer who talks its agent into
   working around that could read or answer your threads with other peers.
-  Peer only with people you would trust that far.
+  To keep peers apart, give them separate inboxes (below).
+
+## One inbox per peer
+
+Secrets belong to an Amp project, so separate projects can hold separate
+tokens. For a peer whose threads must stay away from everyone else's, give
+them their own inbox: a project, a token that reaches only their threads,
+and a webhook that sends only their events.
+
+| Amp project | `CP_TOKEN` | cpd webhook |
+| --- | --- | --- |
+| inbox-bob | `cpctl token add amp-bob -o amp-bob.token -peers bob` | `cpctl webhook add amp-bob … -peers bob` |
+| inbox-rest | `cpctl token add amp-rest -o amp-rest.token -peers carol,dave` | `cpctl webhook add amp-rest … -peers carol,dave` |
+
+cpd enforces the token's peers: it lists and streams only their threads, and
+answers any other thread as if it did not exist, so even a conversation
+talked out of the plugin's guard cannot reach them. A webhook with peers never
+receives peering requests, whose names the requester picks; keep one webhook
+without peers, such as a chat notification, for those.
 
 ## Choosing the project
 

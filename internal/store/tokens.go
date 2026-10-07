@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,23 +11,28 @@ import (
 
 // AgentToken is an agent token's record. Only a hash of the token is kept.
 type AgentToken struct {
-	Name      string
-	Hash      string
+	Name string
+	Hash string
+	// Peers limits the token to threads with these peers; empty means all.
+	Peers     []string
 	CreatedAt time.Time
 	// ExpiresAt and UsedAt are zero when unset.
 	ExpiresAt time.Time
 	UsedAt    time.Time
 }
 
-const agentColumns = `name, hash, created_at, expires_at, used_at`
+const agentColumns = `name, hash, peers, created_at, expires_at, used_at`
 
 func scanAgentToken(row interface{ Scan(...any) error }) (AgentToken, error) {
 	var t AgentToken
-	var created, expires, used string
-	if err := row.Scan(&t.Name, &t.Hash, &created, &expires, &used); err != nil {
+	var peers, created, expires, used string
+	if err := row.Scan(&t.Name, &t.Hash, &peers, &created, &expires, &used); err != nil {
 		return t, err
 	}
-	var err error
+	err := json.Unmarshal([]byte(peers), &t.Peers)
+	if err != nil {
+		return t, err
+	}
 	if t.CreatedAt, err = parseTime(created); err != nil {
 		return t, err
 	}
@@ -58,8 +64,8 @@ func (s *Store) AddAgentToken(ctx context.Context, t AgentToken) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM agent_tokens WHERE name = ? AND expires_at != '' AND expires_at <= ?`, t.Name, formatTime(t.CreatedAt)); err != nil {
 			return fmt.Errorf("add agent token: %w", err)
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO agent_tokens (`+agentColumns+`) VALUES (?, ?, ?, ?, '')`,
-			t.Name, t.Hash, formatTime(t.CreatedAt), formatOptional(t.ExpiresAt))
+		_, err := tx.ExecContext(ctx, `INSERT INTO agent_tokens (`+agentColumns+`) VALUES (?, ?, ?, ?, ?, '')`,
+			t.Name, t.Hash, peerList(t.Peers), formatTime(t.CreatedAt), formatOptional(t.ExpiresAt))
 		if isConstraint(err) {
 			return ErrExists
 		}

@@ -56,7 +56,7 @@ type Inbox interface {
 	Act(ctx context.Context, ref string, action thread.Action, body string) (inbox.View, error)
 	Receive(ctx context.Context, peer string, e thread.Event) (inbox.Receipt, error)
 	Subscribe() (<-chan store.Summary, func())
-	CreateAgentToken(ctx context.Context, name string, expires time.Time) (string, store.AgentToken, error)
+	CreateAgentToken(ctx context.Context, name string, peers []string, expires time.Time) (string, store.AgentToken, error)
 	AgentTokens(ctx context.Context) ([]store.AgentToken, error)
 	DeleteAgentToken(ctx context.Context, name string) error
 	AgentByToken(ctx context.Context, token string) (store.AgentToken, error)

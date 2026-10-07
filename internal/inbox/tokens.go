@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,17 +26,25 @@ func tokenHash(token string) string {
 // CreateAgentToken makes an agent token named name that stops working at
 // expires, or never when expires is zero. It returns the token, which is
 // not kept.
-func (b *Inbox) CreateAgentToken(ctx context.Context, name string, expires time.Time) (string, store.AgentToken, error) {
+func (b *Inbox) CreateAgentToken(ctx context.Context, name string, peers []string, expires time.Time) (string, store.AgentToken, error) {
 	n, ok := thread.NormalizeName(name)
 	if !ok {
 		return "", store.AgentToken{}, errorf(KindInvalid, "invalid token name %q: use lower-case letters, digits and single hyphens", name)
+	}
+	scope := make([]string, 0, len(peers))
+	for _, p := range peers {
+		pn, valid := thread.NormalizeName(p)
+		if !valid || slices.Contains(scope, pn) {
+			return "", store.AgentToken{}, errorf(KindInvalid, "peers must be distinct peer names; %q is not", p)
+		}
+		scope = append(scope, pn)
 	}
 	now := b.now().UTC()
 	if !expires.IsZero() && !expires.After(now) {
 		return "", store.AgentToken{}, errorf(KindInvalid, "expiresAt must be in the future")
 	}
 	token := NewSecret(AgentPrefix)
-	t := store.AgentToken{Name: n, Hash: tokenHash(token), CreatedAt: now, ExpiresAt: expires.UTC()}
+	t := store.AgentToken{Name: n, Hash: tokenHash(token), Peers: scope, CreatedAt: now, ExpiresAt: expires.UTC()}
 	err := b.store.AddAgentToken(ctx, t)
 	if errors.Is(err, store.ErrExists) {
 		return "", t, errorf(KindConflict, "an agent token named %s exists; revoke it or choose another name", n)

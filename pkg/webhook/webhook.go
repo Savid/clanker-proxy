@@ -26,11 +26,13 @@ func Types() []string {
 // Config describes one owner-controlled destination. URL, Secret and header
 // values are credentials and must never appear in API responses or logs.
 type Config struct {
-	Name    string
-	Type    string
-	URL     string
-	Events  []string
-	Origin  string
+	Name   string
+	Type   string
+	URL    string
+	Events []string
+	Origin string
+	// Peers limits thread events to these peers; empty means every peer.
+	Peers   []string
 	Enabled bool
 	Secret  string
 	Headers []Header
@@ -53,6 +55,7 @@ type Update struct {
 	URL     *string
 	Events  []string
 	Origin  *string
+	Peers   *[]string
 	Enabled *bool
 	Secret  *string
 	Headers *[]Header
@@ -68,6 +71,9 @@ func (u Update) Apply(c Config) Config {
 	}
 	if u.Origin != nil {
 		c.Origin = *u.Origin
+	}
+	if u.Peers != nil {
+		c.Peers = *u.Peers
 	}
 	if u.Enabled != nil {
 		c.Enabled = *u.Enabled
@@ -107,6 +113,9 @@ func (c Config) Validate() error {
 			return errors.New("invalid or repeated webhook event; use '*' alone or supported event types")
 		}
 	}
+	if err := c.validatePeers(); err != nil {
+		return err
+	}
 	if err := c.validateSigning(provider); err != nil {
 		return err
 	}
@@ -124,6 +133,26 @@ func validateURL(raw string) error {
 	ip, _ := netip.ParseAddr(u.Hostname())
 	if u.Scheme != "https" && (u.Scheme != "http" || !ip.IsLoopback()) {
 		return errors.New("webhook URL requires HTTPS, or HTTP on a literal loopback address")
+	}
+	return nil
+}
+
+// MaxPeers bounds a webhook's peer list.
+const MaxPeers = 50
+
+func (c Config) validatePeers() error {
+	if len(c.Peers) > MaxPeers {
+		return errors.New("at most 50 webhook peers are allowed")
+	}
+	for i, p := range c.Peers {
+		if n, ok := thread.NormalizeName(p); !ok || n != p || slices.Contains(c.Peers[:i], p) {
+			return errors.New("webhook peers must be distinct peer names")
+		}
+	}
+	// A requester chooses the name a peering request carries, so a filtered
+	// webhook never gets one.
+	if len(c.Peers) > 0 && slices.Contains(c.Events, "peering.requested") {
+		return errors.New("peering.requested goes only to webhooks without peers; leave it out or drop -peers")
 	}
 	return nil
 }

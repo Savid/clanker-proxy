@@ -82,6 +82,12 @@ func (s *AgentTokenInput) encodeFields(e *jx.Encoder) {
 		s.Name.Encode(e)
 	}
 	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
+	{
 		if s.ExpiresAt.Set {
 			e.FieldStart("expiresAt")
 			s.ExpiresAt.Encode(e, json.EncodeDateTime)
@@ -89,9 +95,10 @@ func (s *AgentTokenInput) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfAgentTokenInput = [2]string{
+var jsonFieldsNameOfAgentTokenInput = [3]string{
 	0: "name",
-	1: "expiresAt",
+	1: "peers",
+	2: "expiresAt",
 }
 
 // Decode decodes AgentTokenInput from json.
@@ -112,6 +119,15 @@ func (s *AgentTokenInput) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"name\"")
+			}
+		case "peers":
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
 			}
 		case "expiresAt":
 			if err := func() error {
@@ -299,6 +315,12 @@ func (s *AgentTokenSummary) encodeFields(e *jx.Encoder) {
 		s.Name.Encode(e)
 	}
 	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("createdAt")
 		json.EncodeDateTime(e, s.CreatedAt)
 	}
@@ -316,11 +338,12 @@ func (s *AgentTokenSummary) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfAgentTokenSummary = [4]string{
+var jsonFieldsNameOfAgentTokenSummary = [5]string{
 	0: "name",
-	1: "createdAt",
-	2: "expiresAt",
-	3: "usedAt",
+	1: "peers",
+	2: "createdAt",
+	3: "expiresAt",
+	4: "usedAt",
 }
 
 // Decode decodes AgentTokenSummary from json.
@@ -342,8 +365,18 @@ func (s *AgentTokenSummary) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"name\"")
 			}
-		case "createdAt":
+		case "peers":
 			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
+			}
+		case "createdAt":
+			requiredBitSet[0] |= 1 << 2
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -384,7 +417,7 @@ func (s *AgentTokenSummary) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000011,
+		0b00000111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -1547,6 +1580,12 @@ func (s *NewAgentToken) encodeFields(e *jx.Encoder) {
 		s.Name.Encode(e)
 	}
 	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("token")
 		e.Str(s.Token)
 	}
@@ -1562,11 +1601,12 @@ func (s *NewAgentToken) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfNewAgentToken = [4]string{
+var jsonFieldsNameOfNewAgentToken = [5]string{
 	0: "name",
-	1: "token",
-	2: "createdAt",
-	3: "expiresAt",
+	1: "peers",
+	2: "token",
+	3: "createdAt",
+	4: "expiresAt",
 }
 
 // Decode decodes NewAgentToken from json.
@@ -1588,8 +1628,18 @@ func (s *NewAgentToken) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"name\"")
 			}
-		case "token":
+		case "peers":
 			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
+			}
+		case "token":
+			requiredBitSet[0] |= 1 << 2
 			if err := func() error {
 				v, err := d.Str()
 				s.Token = string(v)
@@ -1601,7 +1651,7 @@ func (s *NewAgentToken) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"token\"")
 			}
 		case "createdAt":
-			requiredBitSet[0] |= 1 << 2
+			requiredBitSet[0] |= 1 << 3
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -1632,7 +1682,7 @@ func (s *NewAgentToken) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000111,
+		0b00001111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -2912,6 +2962,61 @@ func (s *PeeringRequest) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *PeeringRequest) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes Peers as json.
+func (s Peers) Encode(e *jx.Encoder) {
+	unwrapped := []Name(s)
+	if unwrapped == nil {
+		e.ArrEmpty()
+		return
+	}
+	if unwrapped != nil {
+		e.ArrStart()
+		for _, elem := range unwrapped {
+			elem.Encode(e)
+		}
+		e.ArrEnd()
+	}
+}
+
+// Decode decodes Peers from json.
+func (s *Peers) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode Peers to nil")
+	}
+	var unwrapped []Name
+	if err := func() error {
+		unwrapped = make([]Name, 0)
+		if err := d.Arr(func(d *jx.Decoder) error {
+			var elem Name
+			if err := elem.Decode(d); err != nil {
+				return err
+			}
+			unwrapped = append(unwrapped, elem)
+			return nil
+		}); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = Peers(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s Peers) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *Peers) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -5068,6 +5173,12 @@ func (s *Webhook) encodeFields(e *jx.Encoder) {
 		s.Type.Encode(e)
 	}
 	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("destination")
 		e.Str(s.Destination)
 	}
@@ -5105,16 +5216,17 @@ func (s *Webhook) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfWebhook = [9]string{
+var jsonFieldsNameOfWebhook = [10]string{
 	0: "name",
 	1: "type",
-	2: "destination",
-	3: "signing",
-	4: "headerNames",
-	5: "events",
-	6: "origin",
-	7: "enabled",
-	8: "pausedUntil",
+	2: "peers",
+	3: "destination",
+	4: "signing",
+	5: "headerNames",
+	6: "events",
+	7: "origin",
+	8: "enabled",
+	9: "pausedUntil",
 }
 
 // Decode decodes Webhook from json.
@@ -5146,8 +5258,18 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"type\"")
 			}
-		case "destination":
+		case "peers":
 			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
+			}
+		case "destination":
+			requiredBitSet[0] |= 1 << 3
 			if err := func() error {
 				v, err := d.Str()
 				s.Destination = string(v)
@@ -5159,7 +5281,7 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"destination\"")
 			}
 		case "signing":
-			requiredBitSet[0] |= 1 << 3
+			requiredBitSet[0] |= 1 << 4
 			if err := func() error {
 				v, err := d.Bool()
 				s.Signing = bool(v)
@@ -5171,7 +5293,7 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"signing\"")
 			}
 		case "headerNames":
-			requiredBitSet[0] |= 1 << 4
+			requiredBitSet[0] |= 1 << 5
 			if err := func() error {
 				s.HeaderNames = make([]WebhookHeaderName, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -5189,7 +5311,7 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"headerNames\"")
 			}
 		case "events":
-			requiredBitSet[0] |= 1 << 5
+			requiredBitSet[0] |= 1 << 6
 			if err := func() error {
 				if err := s.Events.Decode(d); err != nil {
 					return err
@@ -5199,7 +5321,7 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"events\"")
 			}
 		case "origin":
-			requiredBitSet[0] |= 1 << 6
+			requiredBitSet[0] |= 1 << 7
 			if err := func() error {
 				if err := s.Origin.Decode(d); err != nil {
 					return err
@@ -5209,7 +5331,7 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"origin\"")
 			}
 		case "enabled":
-			requiredBitSet[0] |= 1 << 7
+			requiredBitSet[1] |= 1 << 0
 			if err := func() error {
 				v, err := d.Bool()
 				s.Enabled = bool(v)
@@ -5241,7 +5363,7 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 	var failures []validate.FieldError
 	for i, mask := range [2]uint8{
 		0b11111111,
-		0b00000000,
+		0b00000001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -5297,6 +5419,12 @@ func (s *WebhookCreate) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *WebhookCreate) encodeFields(e *jx.Encoder) {
 	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("name")
 		s.Name.Encode(e)
 	}
@@ -5336,15 +5464,16 @@ func (s *WebhookCreate) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfWebhookCreate = [8]string{
-	0: "name",
-	1: "type",
-	2: "url",
-	3: "events",
-	4: "origin",
-	5: "enabled",
-	6: "secret",
-	7: "headers",
+var jsonFieldsNameOfWebhookCreate = [9]string{
+	0: "peers",
+	1: "name",
+	2: "type",
+	3: "url",
+	4: "events",
+	5: "origin",
+	6: "enabled",
+	7: "secret",
+	8: "headers",
 }
 
 // Decode decodes WebhookCreate from json.
@@ -5352,12 +5481,21 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode WebhookCreate to nil")
 	}
-	var requiredBitSet [1]uint8
+	var requiredBitSet [2]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
+		case "peers":
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
+			}
 		case "name":
-			requiredBitSet[0] |= 1 << 0
+			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
 				if err := s.Name.Decode(d); err != nil {
 					return err
@@ -5367,7 +5505,7 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"name\"")
 			}
 		case "type":
-			requiredBitSet[0] |= 1 << 1
+			requiredBitSet[0] |= 1 << 2
 			if err := func() error {
 				if err := s.Type.Decode(d); err != nil {
 					return err
@@ -5377,7 +5515,7 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"type\"")
 			}
 		case "url":
-			requiredBitSet[0] |= 1 << 2
+			requiredBitSet[0] |= 1 << 3
 			if err := func() error {
 				if err := s.URL.Decode(d); err != nil {
 					return err
@@ -5387,7 +5525,7 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"url\"")
 			}
 		case "events":
-			requiredBitSet[0] |= 1 << 3
+			requiredBitSet[0] |= 1 << 4
 			if err := func() error {
 				if err := s.Events.Decode(d); err != nil {
 					return err
@@ -5397,7 +5535,7 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"events\"")
 			}
 		case "origin":
-			requiredBitSet[0] |= 1 << 4
+			requiredBitSet[0] |= 1 << 5
 			if err := func() error {
 				if err := s.Origin.Decode(d); err != nil {
 					return err
@@ -5407,7 +5545,7 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"origin\"")
 			}
 		case "enabled":
-			requiredBitSet[0] |= 1 << 5
+			requiredBitSet[0] |= 1 << 6
 			if err := func() error {
 				v, err := d.Bool()
 				s.Enabled = bool(v)
@@ -5446,8 +5584,9 @@ func (s *WebhookCreate) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [1]uint8{
-		0b00111111,
+	for i, mask := range [2]uint8{
+		0b01111110,
+		0b00000000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -6628,6 +6767,12 @@ func (s *WebhookUpdate) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *WebhookUpdate) encodeFields(e *jx.Encoder) {
 	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
+	{
 		if s.URL.Set {
 			e.FieldStart("url")
 			s.URL.Encode(e)
@@ -6665,13 +6810,14 @@ func (s *WebhookUpdate) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfWebhookUpdate = [6]string{
-	0: "url",
-	1: "events",
-	2: "origin",
-	3: "enabled",
-	4: "secret",
-	5: "headers",
+var jsonFieldsNameOfWebhookUpdate = [7]string{
+	0: "peers",
+	1: "url",
+	2: "events",
+	3: "origin",
+	4: "enabled",
+	5: "secret",
+	6: "headers",
 }
 
 // Decode decodes WebhookUpdate from json.
@@ -6682,6 +6828,15 @@ func (s *WebhookUpdate) Decode(d *jx.Decoder) error {
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
+		case "peers":
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
+			}
 		case "url":
 			if err := func() error {
 				s.URL.Reset()

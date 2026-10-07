@@ -16,7 +16,7 @@ func webhookResponse(c webhook.Config) *rest.Webhook {
 	for _, name := range c.HeaderNames() {
 		names = append(names, rest.WebhookHeaderName(name))
 	}
-	out := &rest.Webhook{Name: rest.Name(c.Name), Type: rest.WebhookType(c.Type), Destination: c.Destination(), Signing: c.Secret != "", HeaderNames: names, Events: events, Origin: rest.WebhookOrigin(c.Origin), Enabled: c.Enabled}
+	out := &rest.Webhook{Name: rest.Name(c.Name), Type: rest.WebhookType(c.Type), Destination: c.Destination(), Signing: c.Secret != "", HeaderNames: names, Events: events, Origin: rest.WebhookOrigin(c.Origin), Peers: toPeers(c.Peers), Enabled: c.Enabled}
 	if !c.PausedUntil.IsZero() {
 		out.PausedUntil = rest.NewOptDateTime(c.PausedUntil)
 	}
@@ -52,7 +52,7 @@ func (o *operations) GetWebhook(ctx context.Context, p rest.GetWebhookParams) (*
 }
 
 func (o *operations) CreateWebhook(ctx context.Context, r *rest.WebhookCreate) (*rest.Webhook, error) {
-	c, err := o.inbox.CreateWebhook(ctx, webhook.Config{Name: string(r.Name), Type: string(r.Type), URL: string(r.URL), Secret: string(r.Secret.Or("")), Headers: webhookHeaders(r.Headers), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
+	c, err := o.inbox.CreateWebhook(ctx, webhook.Config{Name: string(r.Name), Type: string(r.Type), URL: string(r.URL), Secret: string(r.Secret.Or("")), Headers: webhookHeaders(r.Headers), Events: webhookEvents(r.Events), Origin: string(r.Origin), Peers: peerNames(r.Peers), Enabled: r.Enabled})
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +69,9 @@ func (o *operations) UpdateWebhook(ctx context.Context, r *rest.WebhookUpdate, p
 	}
 	if v, ok := r.Origin.Get(); ok {
 		change.Origin = new(string(v))
+	}
+	if r.Peers != nil {
+		change.Peers = new(peerNames(r.Peers))
 	}
 	if v, ok := r.Enabled.Get(); ok {
 		change.Enabled = &v
@@ -119,4 +122,20 @@ func (o *operations) ListWebhookDeliveries(ctx context.Context, p rest.ListWebho
 
 func (o *operations) RetryWebhookDelivery(ctx context.Context, p rest.RetryWebhookDeliveryParams) error {
 	return o.inbox.RetryWebhook(ctx, string(p.Name), string(p.ID))
+}
+
+func peerNames(in rest.Peers) []string {
+	out := make([]string, 0, len(in))
+	for _, p := range in {
+		out = append(out, string(p))
+	}
+	return out
+}
+
+func toPeers(in []string) rest.Peers {
+	out := make(rest.Peers, 0, len(in))
+	for _, p := range in {
+		out = append(out, rest.Name(p))
+	}
+	return out
 }

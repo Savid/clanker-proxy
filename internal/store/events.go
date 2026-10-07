@@ -233,6 +233,8 @@ type Filter struct {
 	Self  string
 	State thread.State
 	Peer  string
+	// Peers, when set, keeps only threads with one of them.
+	Peers []string
 	Label string
 	Limit int
 }
@@ -264,6 +266,10 @@ func (s *Store) Threads(ctx context.Context, f Filter) ([]Summary, error) {
 
 	if f.Peer != "" {
 		where, args = append(where, "t.peer = ?"), append(args, f.Peer)
+	}
+
+	if len(f.Peers) > 0 {
+		where, args = append(where, "t.peer IN (SELECT value FROM json_each(?))"), append(args, peerList(f.Peers))
 	}
 
 	if f.Label != "" {

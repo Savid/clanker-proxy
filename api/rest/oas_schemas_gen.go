@@ -132,10 +132,12 @@ func (s *AgentToken) SetRoles(val []string) {
 	s.Roles = val
 }
 
-// A new agent token.
+// A new agent token. With peers, it reaches only threads with those peers: it lists and streams only
+// theirs, and others' answer 404.
 // Ref: #/components/schemas/AgentTokenInput
 type AgentTokenInput struct {
-	Name Name `json:"name"`
+	Name  Name  `json:"name"`
+	Peers Peers `json:"peers"`
 	// When it stops working. Omitted, it works until revoked.
 	ExpiresAt OptDateTime `json:"expiresAt"`
 }
@@ -143,6 +145,11 @@ type AgentTokenInput struct {
 // GetName returns the value of Name.
 func (s *AgentTokenInput) GetName() Name {
 	return s.Name
+}
+
+// GetPeers returns the value of Peers.
+func (s *AgentTokenInput) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetExpiresAt returns the value of ExpiresAt.
@@ -153,6 +160,11 @@ func (s *AgentTokenInput) GetExpiresAt() OptDateTime {
 // SetName sets the value of Name.
 func (s *AgentTokenInput) SetName(val Name) {
 	s.Name = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *AgentTokenInput) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 // SetExpiresAt sets the value of ExpiresAt.
@@ -180,6 +192,7 @@ func (s *AgentTokenList) SetTokens(val []AgentTokenSummary) {
 // Ref: #/components/schemas/AgentTokenSummary
 type AgentTokenSummary struct {
 	Name      Name        `json:"name"`
+	Peers     Peers       `json:"peers"`
 	CreatedAt time.Time   `json:"createdAt"`
 	ExpiresAt OptDateTime `json:"expiresAt"`
 	// Its last use, to the minute.
@@ -189,6 +202,11 @@ type AgentTokenSummary struct {
 // GetName returns the value of Name.
 func (s *AgentTokenSummary) GetName() Name {
 	return s.Name
+}
+
+// GetPeers returns the value of Peers.
+func (s *AgentTokenSummary) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetCreatedAt returns the value of CreatedAt.
@@ -209,6 +227,11 @@ func (s *AgentTokenSummary) GetUsedAt() OptDateTime {
 // SetName sets the value of Name.
 func (s *AgentTokenSummary) SetName(val Name) {
 	s.Name = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *AgentTokenSummary) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 // SetCreatedAt sets the value of CreatedAt.
@@ -686,7 +709,8 @@ type Name string
 // A new agent token and the token itself, which is never shown again.
 // Ref: #/components/schemas/NewAgentToken
 type NewAgentToken struct {
-	Name Name `json:"name"`
+	Name  Name  `json:"name"`
+	Peers Peers `json:"peers"`
 	// The bearer token. Give it to the agent as CP_TOKEN.
 	Token     string      `json:"token"`
 	CreatedAt time.Time   `json:"createdAt"`
@@ -696,6 +720,11 @@ type NewAgentToken struct {
 // GetName returns the value of Name.
 func (s *NewAgentToken) GetName() Name {
 	return s.Name
+}
+
+// GetPeers returns the value of Peers.
+func (s *NewAgentToken) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetToken returns the value of Token.
@@ -716,6 +745,11 @@ func (s *NewAgentToken) GetExpiresAt() OptDateTime {
 // SetName sets the value of Name.
 func (s *NewAgentToken) SetName(val Name) {
 	s.Name = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *NewAgentToken) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 // SetToken sets the value of Token.
@@ -1883,6 +1917,8 @@ func (s *PeeringRequest) SetNote(val OptNote) {
 	s.Note = val
 }
 
+type Peers []Name
+
 // RFC 9457 problem details.
 // Ref: #/components/schemas/Problem
 type Problem struct {
@@ -2924,8 +2960,9 @@ type Title string
 // keys.
 // Ref: #/components/schemas/Webhook
 type Webhook struct {
-	Name Name        `json:"name"`
-	Type WebhookType `json:"type"`
+	Name  Name        `json:"name"`
+	Type  WebhookType `json:"type"`
+	Peers Peers       `json:"peers"`
 	// Destination scheme and host only; path and query are never returned.
 	Destination string `json:"destination"`
 	// Whether generic notifications have a configured signing key.
@@ -2947,6 +2984,11 @@ func (s *Webhook) GetName() Name {
 // GetType returns the value of Type.
 func (s *Webhook) GetType() WebhookType {
 	return s.Type
+}
+
+// GetPeers returns the value of Peers.
+func (s *Webhook) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetDestination returns the value of Destination.
@@ -2994,6 +3036,11 @@ func (s *Webhook) SetType(val WebhookType) {
 	s.Type = val
 }
 
+// SetPeers sets the value of Peers.
+func (s *Webhook) SetPeers(val Peers) {
+	s.Peers = val
+}
+
 // SetDestination sets the value of Destination.
 func (s *Webhook) SetDestination(val string) {
 	s.Destination = val
@@ -3031,9 +3078,11 @@ func (s *Webhook) SetPausedUntil(val OptDateTime) {
 
 // A new webhook. Generic signing is opt-in. Destination URL, custom header values and signing key are
 // write-only. Chat destinations authenticate with their provider URL or custom headers, without a
-// signing key.
+// signing key. With peers, only those peers' thread events are sent, and never peering requests, whose
+// names the requester chooses.
 // Ref: #/components/schemas/WebhookCreate
 type WebhookCreate struct {
+	Peers   Peers            `json:"peers"`
 	Name    Name             `json:"name"`
 	Type    WebhookType      `json:"type"`
 	URL     WebhookURL       `json:"url"`
@@ -3042,6 +3091,11 @@ type WebhookCreate struct {
 	Enabled bool             `json:"enabled"`
 	Secret  OptWebhookSecret `json:"secret"`
 	Headers WebhookHeaders   `json:"headers"`
+}
+
+// GetPeers returns the value of Peers.
+func (s *WebhookCreate) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetName returns the value of Name.
@@ -3082,6 +3136,11 @@ func (s *WebhookCreate) GetSecret() OptWebhookSecret {
 // GetHeaders returns the value of Headers.
 func (s *WebhookCreate) GetHeaders() WebhookHeaders {
 	return s.Headers
+}
+
+// SetPeers sets the value of Peers.
+func (s *WebhookCreate) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 // SetName sets the value of Name.
@@ -3758,15 +3817,21 @@ func (s *WebhookType) UnmarshalText(data []byte) error {
 type WebhookURL string
 
 // Changes to a destination. Omitted settings are retained. Empty secret disables signing; empty
-// headers remove custom headers. Type is immutable.
+// headers remove custom headers; empty peers send every peer's events. Type is immutable.
 // Ref: #/components/schemas/WebhookUpdate
 type WebhookUpdate struct {
+	Peers   Peers            `json:"peers"`
 	URL     OptWebhookURL    `json:"url"`
 	Events  WebhookEvents    `json:"events"`
 	Origin  OptWebhookOrigin `json:"origin"`
 	Enabled OptBool          `json:"enabled"`
 	Secret  OptWebhookSecret `json:"secret"`
 	Headers WebhookHeaders   `json:"headers"`
+}
+
+// GetPeers returns the value of Peers.
+func (s *WebhookUpdate) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetURL returns the value of URL.
@@ -3797,6 +3862,11 @@ func (s *WebhookUpdate) GetSecret() OptWebhookSecret {
 // GetHeaders returns the value of Headers.
 func (s *WebhookUpdate) GetHeaders() WebhookHeaders {
 	return s.Headers
+}
+
+// SetPeers sets the value of Peers.
+func (s *WebhookUpdate) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 // SetURL sets the value of URL.
