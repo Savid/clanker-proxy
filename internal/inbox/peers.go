@@ -28,9 +28,10 @@ const (
 	AgentPrefix = "cpa_"
 )
 
-// Peering limits. Requests are public, so they are also rate-limited: the
-// pending cap alone would let a flood push out genuine requests and queue
-// a notification for each one.
+// Peering limits. Requests are public, so they are also rate-limited, which
+// bounds the work and storage a flood costs. The limit cannot tell senders
+// apart: during a flood a genuine requester is told to retry, and the owner
+// can still connect to them with peer add.
 const (
 	MaxPendingRequests = 20
 	RequestTTL         = 7 * 24 * time.Hour

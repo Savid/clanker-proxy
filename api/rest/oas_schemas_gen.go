@@ -672,6 +672,8 @@ type Me struct {
 	Name    Name         `json:"name"`
 	URL     OptDaemonURL `json:"url"`
 	Version string       `json:"version"`
+	// For an agent token limited to peers, those peers; absent otherwise.
+	Peers Peers `json:"peers"`
 }
 
 // GetName returns the value of Name.
@@ -689,6 +691,11 @@ func (s *Me) GetVersion() string {
 	return s.Version
 }
 
+// GetPeers returns the value of Peers.
+func (s *Me) GetPeers() Peers {
+	return s.Peers
+}
+
 // SetName sets the value of Name.
 func (s *Me) SetName(val Name) {
 	s.Name = val
@@ -702,6 +709,11 @@ func (s *Me) SetURL(val OptDaemonURL) {
 // SetVersion sets the value of Version.
 func (s *Me) SetVersion(val string) {
 	s.Version = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *Me) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 type Name string
@@ -2206,8 +2218,8 @@ type Thread struct {
 	Turn  OptName     `json:"turn"`
 	// The thread is waiting on the owner.
 	MyTurn bool `json:"myTurn"`
-	// Who wrote the last event in replay order. With myTurn, the peer here means the owner has not
-	// answered their latest move.
+	// Who made the latest move to arrive that changed something. With myTurn, the peer here means the
+	// owner has not answered it.
 	LastFrom Name `json:"lastFrom"`
 	// What the owner may do now, for actOnThread. `comment` is always among them.
 	Actions     []Action  `json:"actions"`
@@ -2719,8 +2731,8 @@ type ThreadSummary struct {
 	Turn  OptName           `json:"turn"`
 	// The thread is waiting on the owner.
 	MyTurn bool `json:"myTurn"`
-	// Who wrote the last event in replay order. With myTurn, the peer here means the owner has not
-	// answered their latest move.
+	// Who made the latest move to arrive that changed something. With myTurn, the peer here means the
+	// owner has not answered it.
 	LastFrom Name `json:"lastFrom"`
 	// What the owner may do now, for actOnThread. `comment` is always among them.
 	Actions     []Action  `json:"actions"`

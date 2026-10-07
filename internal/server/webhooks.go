@@ -123,19 +123,3 @@ func (o *operations) ListWebhookDeliveries(ctx context.Context, p rest.ListWebho
 func (o *operations) RetryWebhookDelivery(ctx context.Context, p rest.RetryWebhookDeliveryParams) error {
 	return o.inbox.RetryWebhook(ctx, string(p.Name), string(p.ID))
 }
-
-func peerNames(in rest.Peers) []string {
-	out := make([]string, 0, len(in))
-	for _, p := range in {
-		out = append(out, string(p))
-	}
-	return out
-}
-
-func toPeers(in []string) rest.Peers {
-	out := make(rest.Peers, 0, len(in))
-	for _, p := range in {
-		out = append(out, rest.Name(p))
-	}
-	return out
-}

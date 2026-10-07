@@ -56,6 +56,7 @@ const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
 const threadID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const requestID = /^[0-9a-f]{8}$/
 const ended = new Set(['thread.close', 'thread.decline', 'thread.withdraw'])
+const endedStates = new Set(['closed', 'declined', 'withdrawn'])
 
 interface Notification {
 	id: string
@@ -108,8 +109,18 @@ export default async function (amp: PluginAPI) {
 	try {
 		state = await loadState()
 	} catch (err) {
-		// Starting empty would forget which threads the guard must check.
+		// Starting empty would forget which threads the guard must check, so
+		// nothing runs in a conversation until the owner repairs the file.
 		amp.logger.log('cp-inbox: not started: cannot read', stateFile, err instanceof Error ? err.message : err)
+		amp.on('tool.call', async (event): Promise<ToolCallResult> => {
+			const labels = await amp.threads
+				.get(event.thread.id)
+				.labels()
+				.catch(() => ['clanker-proxy'])
+			return labels.includes('clanker-proxy')
+				? { action: 'reject-and-continue', message: `cp-inbox cannot read ${stateFile}; nothing runs in clanker-proxy conversations until the owner repairs or removes it.` }
+				: { action: 'allow' }
+		})
 		return
 	}
 	let lastSweep = 0
@@ -230,7 +241,7 @@ export default async function (amp: PluginAPI) {
 				return
 			}
 			const c = state.conversations[n.subject]
-			if (ended.has(n.type)) {
+			if (ended.has(n.type) && endedStates.has(n.state ?? '')) {
 				if (!c) return
 				c.ended = now
 				if (await busy(c)) {
@@ -306,10 +317,11 @@ export default async function (amp: PluginAPI) {
 		}
 		const merged = find()
 		if (merged !== undefined) return merged
+		// A failed read counts as a conversation: the guard errs on refusing.
 		const labels = await amp.threads
 			.get(id)
 			.labels()
-			.catch(() => [] as string[])
+			.catch(() => ['clanker-proxy'])
 		return labels.includes('clanker-proxy') ? '' : undefined
 	}
 
@@ -751,14 +763,10 @@ async function loadState(): Promise<State> {
 		throw err
 	}
 	const s = JSON.parse(raw)
-	return {
-		seen: Array.isArray(s.seen) ? s.seen : [],
-		conversations: s.conversations ?? {},
-		wakes: Array.isArray(s.wakes) ? s.wakes : [],
-		lastPeeringNotice: Number(s.lastPeeringNotice) || 0,
-		heldNotices: s.heldNotices ?? {},
-		known: Array.isArray(s.known) ? s.known : [],
-	}
+	const complete =
+		Array.isArray(s.seen) && Array.isArray(s.wakes) && Array.isArray(s.known) && typeof s.lastPeeringNotice === 'number' && s.conversations && s.heldNotices
+	if (!complete) throw new Error('state file is incomplete')
+	return s as State
 }
 
 async function saveState(state: State): Promise<void> {

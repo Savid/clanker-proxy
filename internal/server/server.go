@@ -51,9 +51,9 @@ type Inbox interface {
 	Peers(ctx context.Context) ([]store.Peer, error)
 	RemovePeer(ctx context.Context, name string) error
 	Threads(ctx context.Context, f store.Filter) ([]store.Summary, error)
-	Thread(ctx context.Context, ref string) (inbox.View, error)
+	Thread(ctx context.Context, ref string, scope []string) (inbox.View, error)
 	Open(ctx context.Context, n inbox.NewThread) (inbox.View, error)
-	Act(ctx context.Context, ref string, action thread.Action, body string) (inbox.View, error)
+	Act(ctx context.Context, ref string, scope []string, action thread.Action, body string) (inbox.View, error)
 	Receive(ctx context.Context, peer string, e thread.Event) (inbox.Receipt, error)
 	Subscribe() (<-chan store.Summary, func())
 	CreateAgentToken(ctx context.Context, name string, peers []string, expires time.Time) (string, store.AgentToken, error)

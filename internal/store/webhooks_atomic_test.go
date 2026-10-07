@@ -1,9 +1,11 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -107,42 +109,82 @@ func floodPeeringRequests(t *testing.T, st *Store, t0 time.Time) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if i < 10 {
-			for j := range 32 {
-				d := historyHead(t, st, fmt.Sprintf("h%d", j))
-				if err = st.FinishWebhook(ctx, d.ID, "delivered", "", t0, t0); err != nil {
-					t.Fatal(err)
-				}
+		for j := range 32 {
+			d := historyHead(t, st, fmt.Sprintf("h%d", j))
+			if err = st.FinishWebhook(ctx, d.ID, "delivered", "", t0, t0); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
 }
 
-// assertBoundedPeering checks that the flood left each endpoint its delivered
-// peering notifications, one pending peering notification for the newest
-// request, and the earlier thread notification.
+// assertBoundedPeering checks that each endpoint keeps only the newest
+// MaxPeeringNotifications peering notifications, and the earlier thread one.
 func assertBoundedPeering(t *testing.T, st *Store) {
 	t.Helper()
 	ctx := t.Context()
 	for i := range 32 {
 		name := fmt.Sprintf("h%d", i)
-		var delivered, pending, threads int
+		var peering, threads int
+		var oldest []byte
 		if err := st.db.QueryRowContext(ctx, `SELECT
- (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='peering.requested' AND status='delivered'),
- (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='peering.requested' AND status='pending'),
- (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='thread.open')`, name).Scan(&delivered, &pending, &threads); err != nil {
+ (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='peering.requested'),
+ (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='thread.open'),
+ (SELECT payload FROM webhook_deliveries WHERE webhook=?1 AND event='peering.requested' ORDER BY seq LIMIT 1)`, name).Scan(&peering, &threads, &oldest); err != nil {
 			t.Fatal(err)
 		}
-		if delivered != 10 || pending != 1 || threads != 1 {
-			t.Fatalf("%s: delivered=%d pending=%d threads=%d", name, delivered, pending, threads)
-		}
-		head := historyHead(t, st, name)
 		var payload webhook.Payload
-		if err := json.Unmarshal(head.Payload, &payload); err != nil {
+		if err := json.Unmarshal(oldest, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if head.Status != "pending" || payload.Subject != fmt.Sprintf("%08x", 149) {
-			t.Fatalf("%s: pending peering notification is %s %s, want the newest request", name, head.Status, payload.Subject)
+		if peering != MaxPeeringNotifications || threads != 1 || payload.Subject != fmt.Sprintf("%08x", 50) {
+			t.Fatalf("%s: peering=%d threads=%d oldest=%s", name, peering, threads, payload.Subject)
 		}
+	}
+}
+
+func TestPendingNotificationsAreReplaced(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err = st.CreateWebhook(ctx, webhook.Config{Type: "generic", Name: "h", URL: "https://runner.example", Origin: "both", Events: []string{"*"}, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	queue := func(event, origin, subject string) {
+		t.Helper()
+		if queueErr := st.tx(ctx, func(tx *sql.Tx) error {
+			return queueWebhooks(ctx, tx, webhook.Payload{Type: event, Origin: origin, At: at, Subject: subject, Peer: "bob"})
+		}); queueErr != nil {
+			t.Fatal(queueErr)
+		}
+	}
+	queue("thread.reply", "incoming", "a")
+	queue("thread.reply", "incoming", "a")
+	queue("thread.reply", "outgoing", "a")
+	queue("thread.open", "incoming", "a")
+	queue("thread.reply", "incoming", "b")
+	queue("thread.reply", "incoming", "c")
+	sending := historyHead(t, st, "h")
+	if err = st.StartWebhook(ctx, sending.ID); err != nil {
+		t.Fatal(err)
+	}
+	queue("thread.reply", "incoming", "c")
+
+	var got []string
+	ds, err := st.WebhookDeliveries(ctx, "h", WebhookFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range ds {
+		got = append(got, d.Event+" "+d.Origin+" "+d.Subject)
+	}
+	want := []string{"thread.reply incoming c", "thread.reply incoming c", "thread.reply incoming b", "thread.open incoming a", "thread.reply outgoing a", "thread.reply incoming a"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("pending after replacement:\n%v\nwant\n%v", got, want)
 	}
 }

@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS threads (
 	opened_at  TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
 	events     INTEGER NOT NULL,
-	last_from  TEXT NOT NULL
+	last_from  TEXT NOT NULL,
+	spent      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
 CREATE TABLE IF NOT EXISTS agent_tokens (
@@ -112,7 +113,8 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 	next_attempt_at TEXT NOT NULL,
 	retry_until     TEXT NOT NULL,
 	finished_at     TEXT,
-	last_error      TEXT NOT NULL DEFAULT ''
+	last_error      TEXT NOT NULL DEFAULT '',
+	sending         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries(webhook, status, next_attempt_at, seq);
 CREATE INDEX IF NOT EXISTS webhook_expiry ON webhook_deliveries(status, retry_until);

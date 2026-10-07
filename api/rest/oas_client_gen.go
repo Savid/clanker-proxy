@@ -25,7 +25,9 @@ type Invoker interface {
 	// ActOnThread invokes actOnThread operation.
 	//
 	// Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-	// they may.
+	// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+	// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+	// those peers, as getThread.
 	//
 	// POST /api/v1/threads/{ref}/events
 	ActOnThread(ctx context.Context, request *ThreadAction, params ActOnThreadParams) (*ThreadSummary, error)
@@ -82,8 +84,9 @@ type Invoker interface {
 	//
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
 	// `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-	// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-	// than ten minutes ahead.
+	// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+	// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+	// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 	//
 	// POST /api/v1/federation/events
 	DeliverEvent(ctx context.Context, request *Event) (*Receipt, error)
@@ -113,7 +116,9 @@ type Invoker interface {
 	GetPeer(ctx context.Context, params GetPeerParams) (*Peer, error)
 	// GetThread invokes getThread operation.
 	//
-	// The thread's summary and every event, in the order both daemons replay them.
+	// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+	// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+	// and any other answers 404 as if it did not exist.
 	//
 	// GET /api/v1/threads/{ref}
 	GetThread(ctx context.Context, params GetThreadParams) (*Thread, error)
@@ -144,7 +149,7 @@ type Invoker interface {
 	ListRequests(ctx context.Context) (*RequestList, error)
 	// ListThreads invokes listThreads operation.
 	//
-	// Newest activity first.
+	// Newest activity first. An agent token limited to peers lists only threads with those peers.
 	//
 	// GET /api/v1/threads
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
@@ -254,7 +259,9 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 // ActOnThread invokes actOnThread operation.
 //
 // Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-// they may.
+// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+// those peers, as getThread.
 //
 // POST /api/v1/threads/{ref}/events
 func (c *Client) ActOnThread(ctx context.Context, request *ThreadAction, params ActOnThreadParams) (*ThreadSummary, error) {
@@ -911,8 +918,9 @@ func (c *Client) sendDeleteWebhook(ctx context.Context, params DeleteWebhookPara
 //
 // The peer's secret says who sent it. Delivering the same event again is harmless and answers
 // `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-// than ten minutes ahead.
+// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 //
 // POST /api/v1/federation/events
 func (c *Client) DeliverEvent(ctx context.Context, request *Event) (*Receipt, error) {
@@ -1316,7 +1324,9 @@ func (c *Client) sendGetPeer(ctx context.Context, params GetPeerParams) (res *Pe
 
 // GetThread invokes getThread operation.
 //
-// The thread's summary and every event, in the order both daemons replay them.
+// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+// and any other answers 404 as if it did not exist.
 //
 // GET /api/v1/threads/{ref}
 func (c *Client) GetThread(ctx context.Context, params GetThreadParams) (*Thread, error) {
@@ -1748,7 +1758,7 @@ func (c *Client) sendListRequests(ctx context.Context) (res *RequestList, err er
 
 // ListThreads invokes listThreads operation.
 //
-// Newest activity first.
+// Newest activity first. An agent token limited to peers lists only threads with those peers.
 //
 // GET /api/v1/threads
 func (c *Client) ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error) {

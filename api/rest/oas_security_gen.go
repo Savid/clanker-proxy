@@ -14,7 +14,7 @@ import (
 // SecurityHandler is handler for security parameters.
 type SecurityHandler interface {
 	// HandleAgentToken handles agentToken security.
-	// An agent token the owner created; limited to existing threads.
+	// An agent token the owner created; limited to working threads, optionally only some peers'.
 	HandleAgentToken(ctx context.Context, operationName OperationName, t AgentToken) (context.Context, error)
 	// HandleOwnerToken handles ownerToken security.
 	// The owner token, from `<dir>/owner.token`.
@@ -196,7 +196,7 @@ func (s *Server) securityPeerSecret(ctx context.Context, operationName Operation
 // SecuritySource is provider of security values (tokens, passwords, etc.).
 type SecuritySource interface {
 	// AgentToken provides agentToken security value.
-	// An agent token the owner created; limited to existing threads.
+	// An agent token the owner created; limited to working threads, optionally only some peers'.
 	AgentToken(ctx context.Context, operationName OperationName) (AgentToken, error)
 	// OwnerToken provides ownerToken security value.
 	// The owner token, from `<dir>/owner.token`.

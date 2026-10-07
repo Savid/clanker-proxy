@@ -134,6 +134,14 @@ func (s *Store) UpdateWebhook(ctx context.Context, name string, change webhook.U
 		if _, err = tx.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, peers=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, peerList(c.Peers), c.Enabled, c.Secret, string(headers), name); err != nil {
 			return err
 		}
+		// What is queued must fit the new peers, or a webhook narrowed to
+		// one peer would still deliver another's notifications.
+		if len(c.Peers) > 0 {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND sending=0
+ AND (event='peering.requested' OR json_extract(payload, '$.peer') NOT IN (SELECT value FROM json_each(?)))`, name, peerList(c.Peers)); err != nil {
+				return err
+			}
+		}
 		c.PausedUntil = time.Time{}
 		c.Failures = 0
 		out = c
@@ -191,10 +199,12 @@ func queueWebhooks(ctx context.Context, tx *sql.Tx, p webhook.Payload) error {
 		// same kind about the same thread, and peering notifications by the
 		// newest one, so a flood of events queues one notification, not one
 		// each. Payloads are metadata; receivers read current state.
-		replaced := `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND event=? AND subject=?`
-		args := []any{name, p.Type, p.Subject}
+		// One being sent is left alone: its outcome still has to be
+		// recorded, and its endpoint's backoff with it.
+		replaced := `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND sending=0 AND event=? AND origin=? AND subject=?`
+		args := []any{name, p.Type, p.Origin, p.Subject}
 		if p.Type == "peering.requested" {
-			replaced = `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND event=?`
+			replaced = `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND sending=0 AND event=?`
 			args = args[:2]
 		}
 		if _, err = tx.ExecContext(ctx, replaced, args...); err != nil {
@@ -299,6 +309,13 @@ func (s *Store) DueWebhooks(ctx context.Context, now time.Time) ([]WebhookDelive
  WHERE w.enabled=1 AND w.retry_after<=? ORDER BY d.next_attempt_at,d.seq`, at, at, at)
 }
 
+// StartWebhook marks a delivery as being sent, so a newer notification
+// does not replace it mid-request.
+func (s *Store) StartWebhook(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE webhook_deliveries SET sending=1 WHERE id=? AND status='pending'`, id)
+	return err
+}
+
 // FinishWebhook records one attempt without overwriting a deleted delivery.
 // A delivered attempt proves the endpoint works and resets its failure count.
 func (s *Store) FinishWebhook(ctx context.Context, id, status, message string, next, now time.Time) error {
@@ -307,7 +324,7 @@ func (s *Store) FinishWebhook(ctx context.Context, id, status, message string, n
 		finished = formatTime(now)
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE webhook_deliveries SET status=?,attempts=attempts+1,last_error=?,next_attempt_at=?,finished_at=? WHERE id=? AND status='pending'`, status, message, formatTime(next), finished, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE webhook_deliveries SET status=?,attempts=attempts+1,last_error=?,next_attempt_at=?,finished_at=?,sending=0 WHERE id=? AND status='pending'`, status, message, formatTime(next), finished, id); err != nil {
 			return err
 		}
 		if status != "delivered" {

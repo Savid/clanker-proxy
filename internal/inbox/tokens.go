@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 
@@ -33,11 +32,14 @@ func (b *Inbox) CreateAgentToken(ctx context.Context, name string, peers []strin
 	}
 	scope := make([]string, 0, len(peers))
 	for _, p := range peers {
-		pn, valid := thread.NormalizeName(p)
-		if !valid || slices.Contains(scope, pn) {
-			return "", store.AgentToken{}, errorf(KindInvalid, "peers must be distinct peer names; %q is not", p)
-		}
+		pn, _ := thread.NormalizeName(p)
 		scope = append(scope, pn)
+	}
+	if err := thread.ValidPeers(scope); err != nil {
+		return "", store.AgentToken{}, errorf(KindInvalid, "%v", err)
+	}
+	if err := b.knownPeers(ctx, scope); err != nil {
+		return "", store.AgentToken{}, err
 	}
 	now := b.now().UTC()
 	if !expires.IsZero() && !expires.After(now) {
@@ -92,4 +94,21 @@ func (b *Inbox) AgentByToken(ctx context.Context, token string) (store.AgentToke
 		}
 	}
 	return t, nil
+}
+
+// knownPeers refuses names that are neither peers nor former peers, so a
+// typo does not quietly scope something to nobody.
+func (b *Inbox) knownPeers(ctx context.Context, names []string) error {
+	for _, n := range names {
+		known, err := b.store.KnownPeer(ctx, n)
+		if err != nil {
+			return err
+		}
+
+		if !known {
+			return errorf(KindInvalid, "no peer is named %s; cpctl peer ls lists them", n)
+		}
+	}
+
+	return nil
 }

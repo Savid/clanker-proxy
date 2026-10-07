@@ -23,7 +23,8 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
   the agent checks the answer against your request and closes or reopens it,
   or asks you.
 - Webhook notifications carry only metadata. What a peer wrote reaches an
-  agent only through `cpctl show`, and agents are told to weigh it as a
+  agent only through `cpctl show`, which marks every body line with `│` and
+  quotes titles and delivery errors, and agents are told to weigh it as a
   request, not follow it as instructions.
 
 ## Before you start
@@ -49,20 +50,36 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
 ## One inbox per peer
 
 Secrets belong to an Amp project, so separate projects can hold separate
-tokens. For a peer whose threads must stay away from everyone else's, give
-them their own inbox: a project, a token that reaches only their threads,
-and a webhook that sends only their events.
+tokens. To keep a peer's threads away from everyone else's, give them their
+own inbox: a project, a token that reaches only their threads, and a webhook
+that sends only their events. cpd enforces the token's peers: it lists and
+streams only their threads, and answers any other thread as if it did not
+exist, so even a conversation talked out of the plugin's guard cannot reach
+them.
 
-| Amp project | `CP_TOKEN` | cpd webhook |
+| Amp project | Token | Webhook |
 | --- | --- | --- |
-| inbox-bob | `cpctl token add amp-bob -o amp-bob.token -peers bob` | `cpctl webhook add amp-bob … -peers bob` |
-| inbox-rest | `cpctl token add amp-rest -o amp-rest.token -peers carol,dave` | `cpctl webhook add amp-rest … -peers carol,dave` |
+| inbox-bob | `cpctl token add amp-bob -o amp-bob.token -peers bob` | `cpctl webhook add amp-bob -url-file amp-bob.url -secret-file bob.key -origin incoming -peers bob` |
+| inbox-rest | `cpctl token add amp-rest -o amp-rest.token -peers carol,dave` | `cpctl webhook add amp-rest -url-file amp-rest.url -secret-file rest.key -origin incoming -peers carol,dave` |
 
-cpd enforces the token's peers: it lists and streams only their threads, and
-answers any other thread as if it did not exist, so even a conversation
-talked out of the plugin's guard cannot reach them. A webhook with peers never
-receives peering requests, whose names the requester picks; keep one webhook
-without peers, such as a chat notification, for those.
+Follow [Setup](#setup) once per project, with that project's names, a key of
+its own, and `-peers` on both the token and the webhook. Then:
+
+- **Scope every inbox.** An inbox without `-peers` still reaches every
+  peer's threads, the separated ones included, and its conversations would
+  work them too.
+- **Keep `CP_TOKEN` out of Settings → Secrets & Env Vars**, which applies to
+  every orb; with one there as well as in the project, which one an orb sees
+  is not documented.
+- **Keep one webhook without peers** for peering requests, such as a chat
+  notification: a webhook with peers never receives them, since a requester
+  picks the name it asks under.
+- **Adding a peer later** means a new token (a token's peers are fixed):
+  `cpctl token add` with the new list, the project's `CP_TOKEN` replaced,
+  `amp orb restart-processes`, `cpctl token rm` for the old one, and
+  `cpctl webhook set <name> -peers <new list>`. Until then, the new peer's
+  threads reach no agent. Narrowing a webhook's peers also drops its queued
+  notifications about the others.
 
 ## Choosing the project
 
@@ -77,7 +94,8 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
 ## Setup
 
 1. **On your machine**, where cpctl uses your owner token, create the agent
-   token and a webhook signing key:
+   token (with `-peers` for an [inbox per peer](#one-inbox-per-peer)) and a
+   webhook signing key:
 
    ```bash
    cpctl token add amp-inbox -o amp.token
@@ -110,7 +128,7 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
 
    ```bash
    (umask 077; cat > amp.url)   # paste the URL, then Ctrl-D
-   cpctl webhook add amp -url-file amp.url -secret-file hook.key -origin incoming
+   cpctl webhook add amp -url-file amp.url -secret-file hook.key -origin incoming   # and -peers, to match the token
    rm amp.url hook.key
    ```
 
@@ -129,8 +147,10 @@ Settings → Triggers, reload the plugin in the right thread, and repeat step 4
 with `cpctl webhook set amp -url-file amp.url`.
 After adding a missing secret, restart the orb's processes and reload the
 plugin. The plugin keeps which conversation handles which thread in
-`cp-inbox/state.json` under `$XDG_STATE_HOME` (`~/.local/state` by default); if
-it cannot read that file, it does not start, since the guard depends on it.
+`cp-inbox/state.json` under `$XDG_STATE_HOME` (`~/.local/state` by default). If
+it cannot read that file, it starts nothing and refuses every command in
+`clanker-proxy` conversations, since the guard depends on it; repair or remove
+the file and reload the plugin.
 
 ## Checking it works
 
@@ -184,6 +204,11 @@ straight away. Beyond that:
 - a peer starts at most 10 new conversations a day;
 - when a peer ends a thread (close, decline, withdraw), a working conversation
   is told to stop; ended conversations are forgotten after 30 days.
+
+cpd bounds what a peer can do on its side: each side has room for 1000 events
+and 4 MiB of bodies in a thread, after which only close, decline or withdraw
+without a body remain, a peer may have at most 200 threads open at once, and
+a move that changes nothing sends no notification.
 
 A held notification labels the conversation `cp-held` and notifies you at
 most once a day per peer. Each time an event arrives, at most every 10 minutes,

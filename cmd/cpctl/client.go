@@ -174,7 +174,7 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent b
 
 	switch p.StatusCode {
 	case http.StatusBadRequest:
-		f.exit, f.hint = exitUsage, badInputHint(name, ref)
+		f.exit, f.hint = exitUsage, badInputHint(name, f.msg)
 	case http.StatusUnauthorized:
 		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp), or to an agent token from cpctl token add"
 		if agent {
@@ -205,10 +205,10 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent b
 
 // badInputHint points at what lists valid input, where cpd's message alone
 // does not.
-func badInputHint(cmd, ref string) string {
+func badInputHint(cmd, msg string) string {
 	switch {
-	case ref != "":
-		return "cpctl ls shows full thread IDs; cpctl help " + cmd
+	case strings.Contains(msg, "matches more than one thread"):
+		return "give more of the thread ID; cpctl ls shows them"
 	case cmd == "approve" || cmd == "deny":
 		return "cpctl requests lists request IDs"
 	case cmd == "webhook retry":

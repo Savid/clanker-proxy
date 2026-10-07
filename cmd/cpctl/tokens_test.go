@@ -185,7 +185,17 @@ func TestPeerScopedAgentToken(t *testing.T) {
 
 func TestPeerScopedWebhookFlags(t *testing.T) {
 	t.Parallel()
-	alice := newPerson(t, "alice")
+	alice, bob, carol := newPerson(t, "alice"), newPerson(t, "bob"), newPerson(t, "carol")
+	peer(t, bob, alice)
+	peer(t, carol, alice)
+	for _, peers := range []string{"", ",", "bbo"} {
+		if _, err := alice.try(t, "webhook", "add", "typo", "https://runner.example/hook", "-peers", peers); exitOf(err) != exitUsage {
+			t.Fatalf("-peers %q: %v", peers, err)
+		}
+		if _, err := alice.try(t, "token", "add", "typo", "-o", filepath.Join(t.TempDir(), "t"), "-peers", peers); exitOf(err) != exitUsage {
+			t.Fatalf("token -peers %q: %v", peers, err)
+		}
+	}
 	if out := alice.cp(t, "webhook", "add", "bob-chat", "https://runner.example/hook", "-peers", "Bob,carol"); !strings.Contains(out, "peers: bob, carol") {
 		t.Fatalf("webhook add -peers: %s", out)
 	}

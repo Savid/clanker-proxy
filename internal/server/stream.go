@@ -72,12 +72,14 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case <-keepalive.C:
 			ok = live() && sse.Ping() == nil
 		case sum := <-changes:
-			if !live() {
-				return
-			}
-
+			// Out-of-scope changes are dropped before the token check, so
+			// another peer's flood costs a scoped stream no lookups.
 			if !inScope(ctx, sum.Peer) {
 				continue
+			}
+
+			if !live() {
+				return
 			}
 
 			out := summary(sum, self)

@@ -38,11 +38,19 @@ func (b *Inbox) CreateWebhook(ctx context.Context, c webhook.Config) (webhook.Co
 	if err := c.Validate(); err != nil {
 		return c, errorf(KindInvalid, "%v", err)
 	}
+	if err := b.knownPeers(ctx, c.Peers); err != nil {
+		return c, err
+	}
 	return c, webhookError(b.store.CreateWebhook(ctx, c))
 }
 
 // UpdateWebhook applies partial settings atomically with validation.
 func (b *Inbox) UpdateWebhook(ctx context.Context, name string, change webhook.Update) (webhook.Config, error) {
+	if change.Peers != nil {
+		if err := b.knownPeers(ctx, *change.Peers); err != nil {
+			return webhook.Config{}, err
+		}
+	}
 	c, err := b.store.UpdateWebhook(ctx, name, change)
 	return c, webhookError(err)
 }

@@ -24,14 +24,14 @@ func webhookCommands() []*command {
 		{
 			name: "webhook add", args: "<name> [<url>] [-type <type>] [-url-file <path>]", minArgs: 1, maxArgs: 2,
 			summary: "send events to a chat service or HTTP receiver",
-			about:   "Use cpctl webhook types to choose a destination format. Defaults: generic JSON, unsigned, all events, every peer, incoming only, enabled. -peers bob,carol sends only those peers' thread events, and never peering requests, whose names the requester picks; use it to give one peer's threads their own channel or agent. Supply the URL as an argument or with -url-file (use - for stdin). Provider URLs contain credentials: prefer a private file. Generic signing is opt-in with -secret-file; generate a key with: umask 077; openssl rand -base64 32 > webhook.key. Share it with your receiver securely. -headers-file reads a JSON object of header names and values for authentication. URLs, keys and header values are never printed. Requires HTTPS, or HTTP on literal loopback. Only future events are queued. Chat messages contain metadata, not thread titles or bodies. Notification retries can produce duplicate chat messages.",
+			about:   "Use cpctl webhook types to choose a destination format. Defaults: generic JSON, unsigned, all events, every peer, incoming only, enabled. -peers bob,carol sends only those peers' thread events (each must be a peer or a former one), and never peering requests, whose names the requester picks; use it to give one peer's threads their own channel or agent. An empty -peers is refused. Supply the URL as an argument or with -url-file (use - for stdin). Provider URLs contain credentials: prefer a private file. Generic signing is opt-in with -secret-file; generate a key with: umask 077; openssl rand -base64 32 > webhook.key. Share it with your receiver securely. -headers-file reads a JSON object of header names and values for authentication. URLs, keys and header values are never printed. Requires HTTPS, or HTTP on literal loopback. Only future events are queued. Chat messages contain metadata, not thread titles or bodies. Notification retries can produce duplicate chat messages.",
 			example: "cpctl webhook add discord -type discord -url-file discord.url -events '*' -origin both", flags: webhookAddFlags,
 		},
 		{name: "webhook ls", summary: "list configured webhooks", example: "cpctl webhook ls", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhooks }},
 		{name: "webhook show", args: "<name>", minArgs: 1, maxArgs: 1, summary: "show a webhook's type, filters and credential status", example: "cpctl webhook show agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookShow }},
 		{
 			name: "webhook set", args: "<name>", minArgs: 1, maxArgs: 1, summary: "change a webhook's settings or pause it",
-			about:   "Unspecified settings stay unchanged. Type is immutable; create a new destination to change formats. -url-file replaces the private URL, -headers-file replaces all custom headers ({} clears them), -secret-file enables or rotates generic signing, -signing=false removes the signing key, and -peers replaces the peer list ('*' for every peer). Pausing stops new notifications and holds queued ones; their seven-day retry window still expires. Pending deliveries use the current URL and credentials. Any change ends the endpoint's failure backoff. A request already in flight may finish after a change. During key rotation, have the receiver accept both keys until in-flight requests finish.",
+			about:   "Unspecified settings stay unchanged. Type is immutable; create a new destination to change formats. -url-file replaces the private URL, -headers-file replaces all custom headers ({} clears them), -secret-file enables or rotates generic signing, -signing=false removes the signing key, and -peers replaces the peer list ('*' for every peer), dropping queued notifications about peers left out. Pausing stops new notifications and holds queued ones; their seven-day retry window still expires. Pending deliveries use the current URL and credentials. Any change ends the endpoint's failure backoff. A request already in flight may finish after a change. During key rotation, have the receiver accept both keys until in-flight requests finish.",
 			example: "cpctl webhook set agent -enabled=false", flags: webhookSetFlags,
 		},
 		{name: "webhook rm", args: "<name>", minArgs: 1, maxArgs: 1, summary: "delete a webhook and its queued deliveries", about: "Deletes delivery history too. A request already in flight may finish.", example: "cpctl webhook rm agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRemove }},
@@ -48,18 +48,22 @@ func webhookCommands() []*command {
 		},
 		{
 			name: "webhook events", summary: "list supported event subscriptions", local: true,
-			about:   "Use '*' alone for all current and future types, or comma-separated types for a fixed subscription. Origin is incoming (peer events), outgoing (owner actions), or both. peering.requested is incoming. Replies notify even when the turn stays the same. An unsent notification is replaced by a newer one of the same type about the same thread, and unsent peering-request notifications by the newest; read the thread for everything that changed. Retries and delivery status changes never produce notifications.",
+			about:   "Use '*' alone for all current and future types, or comma-separated types for a fixed subscription. Origin is incoming (peer events), outgoing (owner actions), or both. peering.requested is incoming. Replies notify even when the turn stays the same. An unsent notification is replaced by a newer one of the same type, direction and thread, and unsent peering-request notifications by the newest; read the thread for everything that changed. A peer's move that changes nothing sends none. Retries and delivery status changes never produce notifications.",
 			example: "cpctl webhook events", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookEvents },
 		},
 	}
 }
 
-type webhookFlags struct{ urlFile, events, origin, peers, secret, enabled, headers, signing string }
+type webhookFlags struct {
+	urlFile, events, origin, secret, enabled, headers, signing string
+	peers                                                      peersFlag
+}
 
 func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 	events := fs.String("events", "*", "comma-separated event `types`, or '*' alone")
 	origin := fs.String("origin", "incoming", "incoming, outgoing or both")
-	peers := fs.String("peers", "", "comma-separated peer `names` (default: every peer)")
+	var peers peersFlag
+	fs.Var(&peers, "peers", "comma-separated peer `names`, or '*' for every peer (the default)")
 	secret := fs.String("secret-file", "", "file containing an optional generic signing key")
 	kind := fs.String("type", "generic", "destination `type`; see webhook types")
 	urlFile := fs.String("url-file", "", "private `file` containing the URL; - reads stdin")
@@ -84,11 +88,15 @@ func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 		if err != nil {
 			return err
 		}
-		cfg := webhook.Config{Name: string(name(pos[0])), Type: *kind, URL: destination, Secret: key, Headers: headers, Events: strings.Split(*events, ","), Origin: *origin, Peers: peerNames(peerList(*peers)), Enabled: true}
+		scope, err := peers.list()
+		if err != nil {
+			return err
+		}
+		cfg := webhook.Config{Name: string(name(pos[0])), Type: *kind, URL: destination, Secret: key, Headers: headers, Events: strings.Split(*events, ","), Origin: *origin, Peers: peerNames(scope), Enabled: true}
 		if err = cfg.Validate(); err != nil {
 			return usageError("%v", err)
 		}
-		hook, err := a.client.CreateWebhook(a.ctx, &rest.WebhookCreate{Name: rest.Name(cfg.Name), Type: rest.WebhookType(cfg.Type), URL: rest.WebhookURL(cfg.URL), Events: wireWebhookEvents(cfg.Events), Origin: rest.WebhookOrigin(cfg.Origin), Peers: peerList(*peers), Enabled: true, Secret: rest.NewOptWebhookSecret(rest.WebhookSecret(key)), Headers: wireWebhookHeaders(headers)})
+		hook, err := a.client.CreateWebhook(a.ctx, &rest.WebhookCreate{Name: rest.Name(cfg.Name), Type: rest.WebhookType(cfg.Type), URL: rest.WebhookURL(cfg.URL), Events: wireWebhookEvents(cfg.Events), Origin: rest.WebhookOrigin(cfg.Origin), Peers: scope, Enabled: true, Secret: rest.NewOptWebhookSecret(rest.WebhookSecret(key)), Headers: wireWebhookHeaders(headers)})
 		if err != nil {
 			return err
 		}
@@ -101,7 +109,7 @@ func webhookSetFlags(fs *flag.FlagSet) func(*app, []string) error {
 	fs.StringVar(&f.urlFile, "url-file", "", "private file containing the new URL; - reads stdin")
 	fs.StringVar(&f.events, "events", "", "comma-separated event types, or '*' alone")
 	fs.StringVar(&f.origin, "origin", "", "incoming, outgoing or both")
-	fs.StringVar(&f.peers, "peers", "", "comma-separated peer names, or '*' for every peer")
+	fs.Var(&f.peers, "peers", "comma-separated peer names, or '*' for every peer")
 	fs.StringVar(&f.secret, "secret-file", "", "enable or rotate generic signing with this key")
 	fs.StringVar(&f.enabled, "enabled", "", "true to enable, false to pause")
 	fs.StringVar(&f.headers, "headers-file", "", "replace headers from a private JSON object; {} clears")
@@ -132,8 +140,8 @@ func runWebhookSet(a *app, webhookName string, f *webhookFlags) error {
 	if f.origin != "" {
 		req.Origin = rest.NewOptWebhookOrigin(rest.WebhookOrigin(f.origin))
 	}
-	if f.peers != "" {
-		req.Peers = peerList(f.peers)
+	if err := f.setPeers(req); err != nil {
+		return err
 	}
 	if f.enabled != "" {
 		enabled, err := strconv.ParseBool(f.enabled)
@@ -257,19 +265,45 @@ func (a *app) readWebhookHeaders(file string) ([]webhook.Header, error) {
 	return out, nil
 }
 
-// peerList reads -peers: comma-separated names, or '*' or nothing for every
-// peer, which is an empty list.
-func peerList(s string) rest.Peers {
-	out := rest.Peers{}
-	if s == "*" {
-		return out
+// setPeers puts -peers, when given, into an update.
+func (f *webhookFlags) setPeers(req *rest.WebhookUpdate) error {
+	if !f.peers.set {
+		return nil
 	}
-	for p := range strings.SplitSeq(s, ",") {
+	scope, err := f.peers.list()
+	req.Peers = scope
+	return err
+}
+
+// peersFlag is -peers: comma-separated names, or '*' for every peer. Given
+// but empty, it is refused, so an unset shell variable cannot widen a scope.
+type peersFlag struct {
+	set bool
+	raw string
+}
+
+func (f *peersFlag) String() string { return f.raw }
+
+func (f *peersFlag) Set(s string) error {
+	f.set, f.raw = true, s
+	return nil
+}
+
+// list is the peers given, empty for every peer.
+func (f *peersFlag) list() (rest.Peers, error) {
+	out := rest.Peers{}
+	if !f.set || strings.TrimSpace(f.raw) == "*" {
+		return out, nil
+	}
+	for p := range strings.SplitSeq(f.raw, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, name(p))
 		}
 	}
-	return out
+	if len(out) == 0 {
+		return nil, usageError("-peers needs peer names, or '*' for every peer")
+	}
+	return out, nil
 }
 
 func peerNames(peers rest.Peers) []string {

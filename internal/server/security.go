@@ -54,7 +54,7 @@ func (s *security) HandleOwnerToken(ctx context.Context, op rest.OperationName, 
 		return ctx, errUnauthorized
 	}
 
-	return ctx, nil
+	return withCaller(ctx, caller{}), nil
 }
 
 // HandleAgentToken admits an agent token and skips any other, which
@@ -69,7 +69,7 @@ func (s *security) HandleAgentToken(ctx context.Context, _ rest.OperationName, t
 		return ctx, err
 	}
 
-	return withScope(ctx, a.Peers), nil
+	return withCaller(ctx, caller{agent: true, peers: a.Peers}), nil
 }
 
 // agent checks an agent token, reporting any caller error as errUnauthorized.
@@ -82,38 +82,47 @@ func (s *security) agent(ctx context.Context, token string) (store.AgentToken, e
 	return a, err
 }
 
-type scopeKey struct{}
+type callerKey struct{}
 
-// withScope records which peers' threads an agent token may reach; none
-// recorded, or an empty list, is every peer.
-func withScope(ctx context.Context, peers []string) context.Context {
-	if len(peers) == 0 {
-		return ctx
-	}
-
-	return context.WithValue(ctx, scopeKey{}, peers)
+// caller is who security admitted to an owner or agent operation: the owner
+// (agent false), or an agent token with the peers it may reach (none: all).
+type caller struct {
+	agent bool
+	peers []string
 }
 
-// scopeOf is the peer list HandleAgentToken admitted the caller with, or
-// nil for every peer.
-func scopeOf(ctx context.Context) []string {
-	peers, _ := ctx.Value(scopeKey{}).([]string)
+func withCaller(ctx context.Context, c caller) context.Context {
+	return context.WithValue(ctx, callerKey{}, c)
+}
 
-	return peers
+// scopeOf is the peers the caller may reach, nil for every peer. It fails
+// when security recorded no caller, so a handler reached some other way
+// gets nothing rather than everything.
+func scopeOf(ctx context.Context) ([]string, error) {
+	c, ok := ctx.Value(callerKey{}).(caller)
+	if !ok {
+		return nil, errUnauthorized
+	}
+
+	if !c.agent || len(c.peers) == 0 {
+		return nil, nil
+	}
+
+	return c.peers, nil
 }
 
 // inScope reports whether the caller may reach threads with peer.
 func inScope(ctx context.Context, peer string) bool {
-	scope := scopeOf(ctx)
+	scope, err := scopeOf(ctx)
 
-	return scope == nil || slices.Contains(scope, peer)
+	return err == nil && (scope == nil || slices.Contains(scope, peer))
 }
 
 // ownerOrAgent admits the owner or an agent, for hand-routed operations
 // whose security lists both, and returns ctx with an agent's scope.
 func (s *security) ownerOrAgent(ctx context.Context, token string) (context.Context, bool, error) {
 	if s.isOwner(token) {
-		return ctx, true, nil
+		return withCaller(ctx, caller{}), true, nil
 	}
 
 	if !strings.HasPrefix(token, inbox.AgentPrefix) {
@@ -125,7 +134,7 @@ func (s *security) ownerOrAgent(ctx context.Context, token string) (context.Cont
 		return ctx, false, nil
 	}
 
-	return withScope(ctx, a.Peers), err == nil, err
+	return withCaller(ctx, caller{agent: true, peers: a.Peers}), err == nil, err
 }
 
 // HandlePeerSecret admits a peer and records which one in the context.

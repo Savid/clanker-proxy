@@ -69,6 +69,9 @@ Threads:
             everything they need in the body.
   reply     works in any state and adds a message; it never ends or reopens a
             thread. The sender's reply to needs-input hands the thread back.
+  room      each side may add 1000 events and 4 MiB of bodies to a thread;
+            past that only close, decline or withdraw without a body remain,
+            and a thread's actions say so.
   queued    "(1 event queued for delivery)": the peer's daemon has not stored
             that event yet; cpd retries on its own, for up to a week.
 

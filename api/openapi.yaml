@@ -32,7 +32,7 @@ tags:
   - name: webhooks
     description: Signed notifications to owner-configured endpoints.
   - name: tokens
-    description: Agent tokens, limited to existing threads.
+    description: Agent tokens, limited to working threads, optionally only some peers'.
 paths:
   /api/v1/webhooks:
     get:
@@ -456,7 +456,9 @@ paths:
         - ownerToken: []
         - agentToken: []
       summary: List threads
-      description: Newest activity first.
+      description: >-
+        Newest activity first. An agent token limited to peers lists only
+        threads with those peers.
       parameters:
         - name: turn
           in: query
@@ -531,7 +533,10 @@ paths:
         - agentToken: []
       summary: Read a thread and its events
       description: >-
-        The thread's summary and every event, in the order both daemons replay them.
+        The thread's summary and every event, in the order both daemons replay
+        them. The ref is a thread ID or a unique prefix of one; for an agent
+        token limited to peers, only threads with those peers count, and any
+        other answers 404 as if it did not exist.
       responses:
         '200':
           description: The thread.
@@ -553,7 +558,10 @@ paths:
       summary: Reply to a thread or move it on
       description: >-
         Fails with 409 when the owner may not take the action now; the
-        thread's `actions` lists the ones they may.
+        thread's `actions` lists the ones they may. Each side has room for
+        1000 events and 4 MiB of bodies in a thread; past that, only close,
+        decline or withdraw without a body remain. An agent token limited to
+        peers reaches only threads with those peers, as getThread.
       requestBody:
         description: The action, with an optional body.
         required: true
@@ -582,7 +590,9 @@ paths:
         Server-sent events. `thread`: a `ThreadSummary`, sent whenever a thread
         changes: an event sent or received, or a delivery that succeeded or
         failed. A `: ping` comment keeps idle connections open. Nothing is
-        replayed on connect; list threads first, then follow the stream.
+        replayed on connect; list threads first, then follow the stream. An
+        agent token limited to peers gets only those peers' threads, and its
+        stream ends once the token is revoked or expires.
       responses:
         '200':
           description: Server-sent `thread` events.
@@ -601,8 +611,10 @@ paths:
         The peer's secret says who sent it. Delivering the same event again is
         harmless and answers `duplicate`. Fails with 422 when its thread is
         unknown or not shared with this peer, or its clock is not after the
-        peer's earlier events in the thread; with 503, to retry later, when
-        it is dated more than ten minutes ahead.
+        peer's earlier events in the thread, or the peer has used its room in
+        the thread (1000 events, 4 MiB of bodies; then only close, decline or
+        withdraw without a body), or already has 200 threads open here; with
+        503, to retry later, when it is dated more than ten minutes ahead.
       security:
         - peerSecret: []
       requestBody:
@@ -701,7 +713,7 @@ components:
     agentToken:
       type: http
       scheme: bearer
-      description: An agent token the owner created; limited to existing threads.
+      description: An agent token the owner created; limited to working threads, optionally only some peers'.
   parameters:
     WebhookName:
       name: name
@@ -759,8 +771,8 @@ components:
     Peers:
       type: array
       description: >-
-        The peers this applies to, by name. Empty: every peer, including
-        peers added later.
+        The peers this applies to, by name; each must be a peer or a former
+        one. Empty: every peer, including peers added later.
       maxItems: 50
       uniqueItems: true
       items:
@@ -1025,15 +1037,15 @@ components:
       maxLength: 36
     Title:
       type: string
-      description: A thread's one-line title, at most 200 characters, without control characters.
+      description: A thread's one-line title, at most 200 characters, without control characters, line separators or bidirectional controls.
       minLength: 1
       maxLength: 200
-      pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
+      pattern: '^[^\x00-\x1F\x7F-\x9F\u200E\u200F\u2028-\u202E\u2066-\u2069]+$'
     Body:
       type: string
-      description: Markdown, at most 65536 characters, without control characters but tab and line breaks.
+      description: Markdown, at most 65536 characters, without control characters but tab and line breaks, and without line separators or bidirectional controls.
       maxLength: 65536
-      pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]*$'
+      pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u200E\u200F\u2028-\u202E\u2066-\u2069]*$'
     Note:
       type: string
       description: A message for the other owner.
@@ -1092,6 +1104,9 @@ components:
           $ref: '#/components/schemas/DaemonURL'
         version:
           type: string
+        peers:
+          $ref: '#/components/schemas/Peers'
+          description: For an agent token limited to peers, those peers; absent otherwise.
     PeeringRequest:
       description: >-
         One daemon asking another to become peers.
@@ -1382,8 +1397,8 @@ components:
         lastFrom:
           $ref: '#/components/schemas/Name'
           description: >-
-            Who wrote the last event in replay order. With myTurn, the peer
-            here means the owner has not answered their latest move.
+            Who made the latest move to arrive that changed something. With
+            myTurn, the peer here means the owner has not answered it.
         actions:
           type: array
           description: >-

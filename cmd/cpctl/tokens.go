@@ -19,11 +19,12 @@ func tokenCommands() []*command {
 	return []*command{
 		{
 			name: "token add", args: "<name> -o <file> [-peers <names>] [-expires <duration>]", minArgs: 1, maxArgs: 1,
-			summary: "create an agent token: works every thread, but cannot send, peer or configure",
+			summary: "create an agent token that works threads (all, or -peers' only) and nothing else",
 			about: "An agent token can list, read and act on every thread, current and future, wait on them and " +
 				"read your name. Opening threads, peering, webhooks and tokens refuse it with 403 (exit 5). Give it to an agent as CP_TOKEN " +
-				"instead of the owner token. -peers bob,carol limits it to threads with those peers: it lists and " +
-				"follows only theirs, and any other thread answers as if it did not exist. The token is shown only now: -o writes it to a new file readable only " +
+				"instead of the owner token. -peers bob,carol limits it to threads with those peers, which must be " +
+				"peers or former peers: it lists and follows only theirs, and any other thread answers as if it " +
+				"did not exist. -peers '*', or no -peers, is every peer; an empty -peers is refused. The token is shown only now: -o writes it to a new file readable only " +
 				"by you; -o - writes it to stdout, for piping into a secret store. -expires takes a duration such as " +
 				"90d or 12h; without it, the token works until cpctl token rm.",
 			example: "cpctl token add amp-inbox -o amp.token -expires 90d",
@@ -48,19 +49,25 @@ func tokenCommands() []*command {
 func tokenAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 	out := fs.String("o", "", "new `file` for the token, or - for stdout")
 	expires := fs.String("expires", "", "lifetime such as 90d or 12h (default: until revoked)")
-	peers := fs.String("peers", "", "comma-separated peer `names` it may reach (default: every peer)")
+	var peers peersFlag
+	fs.Var(&peers, "peers", "comma-separated peer `names` it may reach, or '*' for every peer (the default)")
 
 	return func(a *app, pos []string) error {
 		if *out == "" {
 			return usageError("-o is required: the token is shown only once")
 		}
 
-		req := &rest.AgentTokenInput{Name: name(pos[0]), Peers: peerList(*peers)}
+		scope, err := peers.list()
+		if err != nil {
+			return err
+		}
+
+		req := &rest.AgentTokenInput{Name: name(pos[0]), Peers: scope}
 
 		if *expires != "" {
-			d, err := parseLifetime(*expires)
-			if err != nil {
-				return err
+			d, lifeErr := parseLifetime(*expires)
+			if lifeErr != nil {
+				return lifeErr
 			}
 
 			req.ExpiresAt = rest.NewOptDateTime(a.now().Add(d).UTC())

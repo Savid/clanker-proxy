@@ -169,7 +169,7 @@ func TestRequestLimits(t *testing.T) {
 	}
 
 	// Requests are rate-limited, so a flood is refused rather than queued.
-	// The requests above that passed validation count too.
+	// Every request above failed validation, so none of them counted.
 	accepted := 0
 	for i := range inbox.RequestsPerMinute + 1 {
 		rec := post(`{"name":"x` + string(rune('a'+i)) + `","url":"http://x.test","secret":"` + inbox.NewSecret(inbox.PeerPrefix) + `"}`)

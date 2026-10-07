@@ -253,3 +253,25 @@ func TestWebhookPeerFilter(t *testing.T) {
 		t.Fatalf("peers did not persist: %v %v", got.Peers, err)
 	}
 }
+
+func TestNarrowingPeersDropsTheirQueue(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	if err := st.CreateWebhook(ctx, hook("chat", "incoming", "*")); err != nil {
+		t.Fatal(err)
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000002", "carol", "me", nil, t0)
+	if _, err := st.AddRequest(ctx, store.Request{ID: "12345678", Name: "dave", URL: "http://dave", Secret: "private", At: t0}, 20, t0.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	deliveries(t, st, "chat", 3)
+	bob := []string{"bob"}
+	if _, err := st.UpdateWebhook(ctx, "chat", webhook.Update{Peers: &bob}); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, st, "chat", 1)[0]; got.Subject != "aaaa0000-0000-4000-8000-000000000001" {
+		t.Fatalf("kept %s %s", got.Event, got.Subject)
+	}
+}

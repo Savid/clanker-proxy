@@ -160,6 +160,9 @@ func (d *Webhooks) deliverWebhook(ctx context.Context, job store.WebhookDelivery
 	if !hook.Enabled {
 		return nil
 	}
+	if err = d.store.StartWebhook(ctx, job.ID); err != nil {
+		return err
+	}
 	status, message, retryAfter := d.postWebhook(ctx, hook, job)
 	if ctx.Err() != nil {
 		return ctx.Err()

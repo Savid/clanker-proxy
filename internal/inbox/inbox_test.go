@@ -89,11 +89,11 @@ func TestOwnerActions(t *testing.T) {
 	}
 
 	// The sender may not do the recipient's part.
-	if _, err = ib.Act(t.Context(), v.Summary.ID[:8], thread.ActionResolve, "done"); status(t, err) != http.StatusConflict {
+	if _, err = ib.Act(t.Context(), v.Summary.ID[:8], nil, thread.ActionResolve, "done"); status(t, err) != http.StatusConflict {
 		t.Errorf("sender resolve: %v", err)
 	}
 
-	v, err = ib.Act(t.Context(), v.Summary.ID, thread.ActionComment, "more")
+	v, err = ib.Act(t.Context(), v.Summary.ID, nil, thread.ActionComment, "more")
 	if err != nil || v.Events[1].Clock != 2 {
 		t.Fatalf("comment = %+v, %v", v.Events, err)
 	}
@@ -103,7 +103,7 @@ func TestOwnerActions(t *testing.T) {
 	}
 
 	// Nothing is queued for a peer that is gone.
-	if _, err = ib.Act(t.Context(), v.Summary.ID, thread.ActionComment, "anyone?"); status(t, err) != http.StatusNotFound {
+	if _, err = ib.Act(t.Context(), v.Summary.ID, nil, thread.ActionComment, "anyone?"); status(t, err) != http.StatusNotFound {
 		t.Errorf("act after the peer left: %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestReceiveClocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err = ib.Act(t.Context(), id, thread.ActionClose, ""); err != nil {
+	if _, err = ib.Act(t.Context(), id, nil, thread.ActionClose, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,11 +163,11 @@ func TestReceiveClocks(t *testing.T) {
 		t.Errorf("comment at the maximum clock: %v", err)
 	}
 
-	if v, err = ib.Thread(t.Context(), id); err != nil || v.Summary.State != thread.StateClosed {
+	if v, err = ib.Thread(t.Context(), id, nil); err != nil || v.Summary.State != thread.StateClosed {
 		t.Fatalf("thread after refused events = %+v, %v", v.Summary, err)
 	}
 
-	if _, err = ib.Act(t.Context(), id, thread.ActionReopen, "one more thing"); err != nil {
+	if _, err = ib.Act(t.Context(), id, nil, thread.ActionReopen, "one more thing"); err != nil {
 		t.Errorf("owner act after refused events: %v", err)
 	}
 }
@@ -281,7 +281,7 @@ func TestActOnUndeliveredThread(t *testing.T) {
 
 	ib.ActivePeer(t, "bob")
 
-	if _, err = ib.Act(t.Context(), v.Summary.ID, thread.ActionComment, "still there?"); status(t, err) != http.StatusConflict {
+	if _, err = ib.Act(t.Context(), v.Summary.ID, nil, thread.ActionComment, "still there?"); status(t, err) != http.StatusConflict {
 		t.Errorf("act on an undelivered thread: %v", err)
 	}
 }

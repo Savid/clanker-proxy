@@ -248,6 +248,10 @@ func TestControlCharacters(t *testing.T) {
 		{"Bell\a", "", false},
 		{"Clean", "escape \x1b[8mhidden", false},
 		{"Clean", "c1 \u009b31m", false},
+		{"Right\u202eto left", "", false},
+		{"Clean", "a\u2028line separator", false},
+		{"Clean", "isolate \u2066x\u2069", false},
+		{"Clean", "emoji 👨\u200d👩\u200d👧 joins", true},
 	} {
 		open := b.open(thread.KindRequest)
 		open.Title, open.Body = tc.title, tc.body
@@ -411,4 +415,64 @@ func TestNormalizeName(t *testing.T) {
 			t.Errorf("NormalizeName(%q) ok = %v, want %v", in, ok, want)
 		}
 	}
+}
+
+func TestRoom(t *testing.T) {
+	t.Parallel()
+
+	// spent builds a thread in which bob has added n comments carrying size
+	// bytes of body between them, and alice only the open.
+	spent := func(n, size int) thread.Thread {
+		var b builder
+
+		events := []thread.Event{b.open(thread.KindRequest)}
+		for i := range n {
+			e := b.ev(bob, thread.ActionComment)
+			if i == 0 {
+				e.Body = strings.Repeat("x", size)
+			}
+
+			events = append(events, e)
+		}
+
+		th, err := thread.Replay(events)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return th
+	}
+
+	var b builder
+
+	for _, tc := range []struct {
+		name   string
+		th     thread.Thread
+		e      thread.Event
+		ok     bool
+		bobAll bool // bob may still take every action allowed by the workflow
+	}{
+		{"room left", spent(10, 0), with(b.ev(bob, thread.ActionComment), "more"), true, true},
+		{"events used", spent(thread.MaxEvents, 0), with(b.ev(bob, thread.ActionComment), "more"), false, false},
+		{"events used, ending", spent(thread.MaxEvents, 0), b.ev(bob, thread.ActionDecline), true, false},
+		{"events used, ending with a body", spent(thread.MaxEvents, 0), with(b.ev(bob, thread.ActionDecline), "why"), false, false},
+		{"slack used", spent(thread.MaxEvents+thread.EndingSlack, 0), b.ev(bob, thread.ActionDecline), false, false},
+		{"bytes used", spent(1, thread.MaxThreadBody), with(b.ev(bob, thread.ActionComment), "x"), false, false},
+		{"the other side's room is its own", spent(thread.MaxEvents, 0), with(b.ev(alice, thread.ActionComment), "hi"), true, false},
+	} {
+		if err := tc.th.Room(tc.e); (err == nil) != tc.ok {
+			t.Errorf("%s: Room = %v, want ok=%t", tc.name, err, tc.ok)
+		}
+
+		got := tc.th.Allowed(bob)
+		if all := slices.Equal(got, thread.Thread{ID: tc.th.ID, Sender: alice, Recipient: bob, State: tc.th.State}.Allowed(bob)); all != tc.bobAll {
+			t.Errorf("%s: bob may %v", tc.name, got)
+		}
+	}
+}
+
+func with(e thread.Event, body string) thread.Event {
+	e.Body = body
+
+	return e
 }

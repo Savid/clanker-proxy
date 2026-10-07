@@ -181,7 +181,7 @@ func (s Body) Validate() error {
 		MaxLengthSet:  true,
 		Email:         false,
 		Hostname:      false,
-		Regex:         regexMap["^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]*$"],
+		Regex:         regexMap["^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F\\u200E\\u200F\\u2028-\\u202E\\u2066-\\u2069]*$"],
 		MinNumeric:    0,
 		MinNumericSet: false,
 		MaxNumeric:    0,
@@ -556,6 +556,17 @@ func (s *Me) Validate() error {
 	}(); err != nil {
 		failures = append(failures, validate.FieldError{
 			Name:  "name",
+			Error: err,
+		})
+	}
+	if err := func() error {
+		if err := s.Peers.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "peers",
 			Error: err,
 		})
 	}
@@ -1857,7 +1868,7 @@ func (s Title) Validate() error {
 		MaxLengthSet:  true,
 		Email:         false,
 		Hostname:      false,
-		Regex:         regexMap["^[^\\x00-\\x1F\\x7F-\\x9F]+$"],
+		Regex:         regexMap["^[^\\x00-\\x1F\\x7F-\\x9F\\u200E\\u200F\\u2028-\\u202E\\u2066-\\u2069]+$"],
 		MinNumeric:    0,
 		MinNumericSet: false,
 		MaxNumeric:    0,

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/netip"
 	"net/textproto"
 	"net/url"
@@ -137,17 +138,9 @@ func validateURL(raw string) error {
 	return nil
 }
 
-// MaxPeers bounds a webhook's peer list.
-const MaxPeers = 50
-
 func (c Config) validatePeers() error {
-	if len(c.Peers) > MaxPeers {
-		return errors.New("at most 50 webhook peers are allowed")
-	}
-	for i, p := range c.Peers {
-		if n, ok := thread.NormalizeName(p); !ok || n != p || slices.Contains(c.Peers[:i], p) {
-			return errors.New("webhook peers must be distinct peer names")
-		}
+	if err := thread.ValidPeers(c.Peers); err != nil {
+		return fmt.Errorf("webhook %w", err)
 	}
 	// A requester chooses the name a peering request carries, so a filtered
 	// webhook never gets one.

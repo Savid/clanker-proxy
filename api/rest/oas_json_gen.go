@@ -1421,12 +1421,19 @@ func (s *Me) encodeFields(e *jx.Encoder) {
 		e.FieldStart("version")
 		e.Str(s.Version)
 	}
+	{
+		if s.Peers != nil {
+			e.FieldStart("peers")
+			s.Peers.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfMe = [3]string{
+var jsonFieldsNameOfMe = [4]string{
 	0: "name",
 	1: "url",
 	2: "version",
+	3: "peers",
 }
 
 // Decode decodes Me from json.
@@ -1469,6 +1476,15 @@ func (s *Me) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"version\"")
+			}
+		case "peers":
+			if err := func() error {
+				if err := s.Peers.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"peers\"")
 			}
 		default:
 			return d.Skip()

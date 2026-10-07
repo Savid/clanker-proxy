@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -277,7 +278,7 @@ func printable(s string, multiline bool) string {
 		switch {
 		case multiline && (r == '\n' || r == '\t'):
 			return r
-		case unicode.IsControl(r):
+		case unicode.IsControl(r), thread.Hidden(r):
 			return -1
 		default:
 			return r
@@ -306,7 +307,8 @@ func turn(t rest.ThreadSummary) string {
 }
 
 func title(t rest.ThreadSummary) string {
-	s := printable(string(t.Title), false)
+	// Quoted, so a peer's title cannot pass for cpctl's own words.
+	s := strconv.Quote(printable(string(t.Title), false))
 	if t.Kind == rest.ThreadKindFyi {
 		s = "[fyi] " + s
 	}
@@ -330,12 +332,12 @@ func deliveryNote(e rest.ThreadEvent) string {
 	case rest.DeliveryStatusPending:
 		s := fmt.Sprintf(" · queued for delivery (%d attempts)", d.Attempts)
 		if d.LastError.Set {
-			s += ": " + d.LastError.Value
+			s += ": " + strconv.Quote(printable(d.LastError.Value, false))
 		}
 
 		return s
 	case rest.DeliveryStatusFailed:
-		return " · NOT DELIVERED: " + d.LastError.Or("refused")
+		return " · NOT DELIVERED: " + strconv.Quote(printable(d.LastError.Or("refused"), false))
 	case rest.DeliveryStatusDelivered:
 		return ""
 	default:

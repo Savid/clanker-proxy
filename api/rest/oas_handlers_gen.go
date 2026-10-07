@@ -31,7 +31,9 @@ func recordError(string, error) {}
 // handleActOnThreadRequest handles actOnThread operation.
 //
 // Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-// they may.
+// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+// those peers, as getThread.
 //
 // POST /api/v1/threads/{ref}/events
 func (s *Server) handleActOnThreadRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -1082,8 +1084,9 @@ func (s *Server) handleDeleteWebhookRequest(args [1]string, argsEscaped bool, w 
 //
 // The peer's secret says who sent it. Delivering the same event again is harmless and answers
 // `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-// than ten minutes ahead.
+// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 //
 // POST /api/v1/federation/events
 func (s *Server) handleDeliverEventRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -1727,7 +1730,9 @@ func (s *Server) handleGetPeerRequest(args [1]string, argsEscaped bool, w http.R
 
 // handleGetThreadRequest handles getThread operation.
 //
-// The thread's summary and every event, in the order both daemons replay them.
+// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+// and any other answers 404 as if it did not exist.
 //
 // GET /api/v1/threads/{ref}
 func (s *Server) handleGetThreadRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -2407,7 +2412,7 @@ func (s *Server) handleListRequestsRequest(args [0]string, argsEscaped bool, w h
 
 // handleListThreadsRequest handles listThreads operation.
 //
-// Newest activity first.
+// Newest activity first. An agent token limited to peers lists only threads with those peers.
 //
 // GET /api/v1/threads
 func (s *Server) handleListThreadsRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

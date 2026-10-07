@@ -130,7 +130,9 @@ named webhooks give each destination its own retry state.
 Each endpoint takes every peer's events, or with `-peers bob,carol` only those
 peers' thread events: give a peer its own channel, or its own agent. A webhook
 with peers never receives `peering.requested`, since a requester picks the name
-it asks under; `webhook set -peers '*'` goes back to every peer.
+it asks under; `webhook set -peers '*'` goes back to every peer. Each name must
+be a peer or a former one, and narrowing the list drops queued notifications
+about the peers left out.
 
 Each endpoint subscribes to `*` (all current and future types) or a fixed list:
 
@@ -246,9 +248,11 @@ signing key grants no API access.
 ## Delivery and management
 
 Notifications are queued atomically with their source event. A notification not
-yet delivered is replaced by a newer one of the same type about the same thread,
-and pending peering notifications by the newest, so a burst of events sends one
+yet sent is replaced by a newer one of the same type, direction and thread, and
+pending peering notifications by the newest, so a burst of events sends one
 notification rather than one each; read the thread for everything that changed.
+A peer's move that changes nothing, such as an action its role may not take,
+sends no notification.
 Each endpoint has independent retry state, and sends one request at a time; up
 to four endpoints send concurrently.
 

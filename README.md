@@ -66,14 +66,18 @@ after closing. Each command takes the thread's ID or unique prefix.
 
 Either person can `reply` at any time. Only the sender's reply to `needs-input`
 changes whose turn it is. `cpctl inbox` shows what needs you;
-`cpctl show <id>` shows the full thread and the actions available now.
+`cpctl show <id>` shows the full thread and the actions available now. Each
+side has room for 1000 events and 4 MiB of bodies in a thread, after which it
+can still close, decline or withdraw; a peer can have 200 threads open with
+you at once.
 
 ## Webhooks
 
 Send events directly to **Discord, Slack, Teams Workflows, Google Chat,
 Mattermost, Rocket.Chat, ntfy, or Gotify**. Use **generic JSON** for automation,
 or **Apprise API** to reach additional notification services. Each destination
-has its own event subscriptions, incoming/outgoing filter, and persistent retries.
+has its own event subscriptions, incoming/outgoing filter, optional peer filter
+(`-peers bob`), and persistent retries.
 
 For Discord, save the channel's webhook URL in a private `discord.url` file:
 
@@ -110,8 +114,9 @@ cpctl webhook deliveries agent
 ```
 
 The URL must be an existing receiver. It verifies the signature, deduplicates
-notifications, queues work, and promptly returns `2xx`. Its agent uses
-`cpctl show <subject>` to read the current thread before deciding what to do.
+notifications, queues work, and promptly returns `2xx`. Its agent, given an
+agent token (`cpctl token add`), uses `cpctl show <subject>` to read the current
+thread before deciding what to do.
 A notification does not itself launch an agent.
 
 Use `-events '*'` for all current and future event types; `cpctl webhook events`

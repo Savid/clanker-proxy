@@ -92,7 +92,11 @@ func TestAgentTokenPeers(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	b := New(slog.New(slog.DiscardHandler), st, nil, Config{Self: "me"})
 
-	for _, peers := range [][]string{{"not a name"}, {"bob", "Bob"}} {
+	if err = st.AddPeer(ctx, store.Peer{Name: "bob", URL: "http://bob", Secret: "cpp_bob", Status: store.PeerActive, AddedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, peers := range [][]string{{"not a name"}, {"bob", "Bob"}, {"carol"}} {
 		if _, _, err = b.CreateAgentToken(ctx, "scoped", peers, time.Time{}); err == nil {
 			t.Fatalf("peers %v accepted", peers)
 		}
@@ -100,5 +104,26 @@ func TestAgentTokenPeers(t *testing.T) {
 	_, scoped, err := b.CreateAgentToken(ctx, "bob-agent", []string{"Bob"}, time.Time{})
 	if err != nil || len(scoped.Peers) != 1 || scoped.Peers[0] != "bob" {
 		t.Fatalf("scoped token: %+v %v", scoped, err)
+	}
+}
+
+func TestPeeringRateWindow(t *testing.T) {
+	t.Parallel()
+	b := &Inbox{}
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for i := range RequestsPerMinute {
+		if !b.allowRequest(now.Add(time.Duration(i) * time.Second)) {
+			t.Fatalf("request %d refused", i)
+		}
+	}
+	if b.allowRequest(now.Add(30 * time.Second)) {
+		t.Fatal("request past the limit allowed")
+	}
+	// A minute after the first request, its slot is free again.
+	if !b.allowRequest(now.Add(time.Minute)) {
+		t.Fatal("request after the window refused")
+	}
+	if b.allowRequest(now.Add(time.Minute)) {
+		t.Fatal("second slot freed too early")
 	}
 }

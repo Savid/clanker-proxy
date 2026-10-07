@@ -3,6 +3,8 @@ package inbox_test
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -28,7 +30,7 @@ func TestWebhookReceiveDeduplicatesAndFiltersOrigin(t *testing.T) {
 		}
 	}
 	ib.Notify(t.Context(), e.Thread)
-	if _, err := ib.Act(t.Context(), e.Thread, thread.ActionAck, ""); err != nil {
+	if _, err := ib.Act(t.Context(), e.Thread, nil, thread.ActionAck, ""); err != nil {
 		t.Fatal(err)
 	}
 	ds, _, err := ib.WebhookDeliveries(t.Context(), "agent", "", 100, "")
@@ -129,5 +131,62 @@ func TestConcurrentWebhookReplacementKeepsProviderCredentials(t *testing.T) {
 		if err = ib.DeleteWebhook(t.Context(), old.Name); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMovesWithoutEffectAreQuiet(t *testing.T) {
+	t.Parallel()
+	ib := inboxtest.New(t)
+	ib.ActivePeer(t, "bob")
+	c := webhook.Config{Type: "generic", Name: "agent", URL: "https://runner.example", Events: []string{"*"}, Origin: "incoming", Enabled: true}
+	if _, err := ib.CreateWebhook(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	id := "aaaa0000-0000-4000-8000-000000000001"
+	open := thread.Event{ID: id, Thread: id, Clock: 1, At: time.Now().UTC(), Action: thread.ActionOpen, Title: "test", Kind: thread.KindRequest}
+	if _, err := ib.Receive(t.Context(), "bob", open); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ib.Act(t.Context(), id, nil, thread.ActionAck, ""); err != nil {
+		t.Fatal(err)
+	}
+	// bob sent the thread, so bob's decline, a recipient's move, has no effect.
+	decline := thread.Event{ID: "aaaa0000-0000-4000-8000-000000000002", Thread: id, Clock: 3, At: time.Now().UTC(), Action: thread.ActionDecline}
+	if _, err := ib.Receive(t.Context(), "bob", decline); err != nil {
+		t.Fatal(err)
+	}
+	ds, _, err := ib.WebhookDeliveries(t.Context(), "agent", "", 100, "")
+	if err != nil || len(ds) != 1 || ds[0].Event != "thread.open" {
+		t.Fatalf("notifications: %d %v", len(ds), err)
+	}
+	v, err := ib.Thread(t.Context(), id, nil)
+	if err != nil || v.Summary.LastFrom != "owner" {
+		t.Fatalf("lastFrom = %q after a move with no effect: %v", v.Summary.LastFrom, err)
+	}
+}
+
+func TestOpenThreadsFromAPeerAreCapped(t *testing.T) {
+	t.Parallel()
+	ib := inboxtest.New(t)
+	ib.ActivePeer(t, "bob")
+	open := func(i int) error {
+		id := fmt.Sprintf("aaaa0000-0000-4000-8000-%012d", i)
+		_, err := ib.Receive(t.Context(), "bob", thread.Event{ID: id, Thread: id, Clock: 1, At: time.Now().UTC(), Action: thread.ActionOpen, Title: "t", Kind: thread.KindRequest})
+		return err
+	}
+	for i := range inbox.MaxOpenThreadsFromPeer {
+		if err := open(i); err != nil {
+			t.Fatalf("thread %d: %v", i, err)
+		}
+	}
+	err := open(inbox.MaxOpenThreadsFromPeer)
+	if code, _ := inbox.HTTPStatus(err); code != http.StatusUnprocessableEntity {
+		t.Fatalf("thread past the cap: %v", err)
+	}
+	if _, err = ib.Act(t.Context(), fmt.Sprintf("aaaa0000-0000-4000-8000-%012d", 0), nil, thread.ActionDecline, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = open(inbox.MaxOpenThreadsFromPeer + 1); err != nil {
+		t.Fatalf("thread after one ended: %v", err)
 	}
 }

@@ -48,8 +48,9 @@ CP_DIR=/tmp/a CP_URL=http://127.0.0.1:18471 build/bin/cpctl peer add bob http://
   generated tables; `TestAccessLevels` checks every operation. Never check
   credentials in a handler; only the hand-routed stream checks its tokens
   itself. Security records who called in the context: the peer for a peer
-  secret, the peer scope for an agent token, which thread operations apply
-  with `inScope`.
+  secret, the owner or an agent token with its peers otherwise. Thread
+  operations take the scope from `scopeOf`, which fails when no caller was
+  recorded, and pass it down, so out-of-scope threads never match.
 - ogen cannot serve `text/event-stream`, so the stream is hand-routed in
   `internal/server/stream.go` and read in `cmd/cpctl/stream.go`.
 - Paths under `/api/v1/`, camelCase JSON, UTC times. Every operation's only
