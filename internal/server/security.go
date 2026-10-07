@@ -3,11 +3,9 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/go-faster/yaml"
 	"github.com/ogen-go/ogen/ogenerrors"
 
 	"github.com/savid/clanker-proxy/api/rest"
@@ -19,15 +17,13 @@ import (
 var errUnauthorized = errors.New("missing or invalid bearer token")
 
 // errAgentForbidden refuses a valid agent token where only the owner may act.
-var errAgentForbidden = errors.New("an agent token can only list, read and act on threads, follow the stream and read the owner's name; this needs the owner token")
+var errAgentForbidden = errors.New("this needs the owner token; an agent token is limited to the operations the API grants it")
 
 // security implements the spec's security schemes for the generated server,
 // which calls it before decoding the request.
 type security struct {
 	inbox      Inbox
 	ownerToken string
-	// agentOps are the operations whose security admits agentToken.
-	agentOps map[rest.OperationName]bool
 }
 
 var _ rest.SecurityHandler = (*security)(nil)
@@ -39,7 +35,9 @@ type peerKey struct{}
 // operation admits agents, and refuses valid ones with 403 elsewhere.
 func (s *security) HandleOwnerToken(ctx context.Context, op rest.OperationName, t rest.OwnerToken) (context.Context, error) {
 	if strings.HasPrefix(t.Token, inbox.AgentPrefix) {
-		if s.agentOps[op] {
+		// ogen lists exactly the operations whose spec security admits
+		// agentToken, with a non-nil set of roles.
+		if rest.GetRolesForAgentToken(op) != nil {
 			return ctx, ogenerrors.ErrSkipServerSecurity
 		}
 
@@ -57,8 +55,8 @@ func (s *security) HandleOwnerToken(ctx context.Context, op rest.OperationName, 
 	return ctx, nil
 }
 
-// HandleAgentToken admits an agent token. HandleOwnerToken has already
-// decided on any other token.
+// HandleAgentToken admits an agent token and skips any other, which
+// HandleOwnerToken decides on.
 func (s *security) HandleAgentToken(ctx context.Context, _ rest.OperationName, t rest.AgentToken) (context.Context, error) {
 	if !strings.HasPrefix(t.Token, inbox.AgentPrefix) {
 		return ctx, ogenerrors.ErrSkipServerSecurity
@@ -98,40 +96,6 @@ func (s *security) ownerOrAgent(ctx context.Context, token string) (bool, error)
 	}
 
 	return err == nil, err
-}
-
-// agentOperations reads, from the spec, which operations admit agentToken,
-// so the spec stays the access policy. Operation names follow ogen's: the
-// operationId with its first letter upper-cased.
-func agentOperations(spec []byte) (map[rest.OperationName]bool, error) {
-	var doc struct {
-		Paths map[string]map[string]any `yaml:"paths"`
-	}
-	if err := yaml.Unmarshal(spec, &doc); err != nil {
-		return nil, fmt.Errorf("read spec: %w", err)
-	}
-
-	ops := map[rest.OperationName]bool{}
-
-	for _, item := range doc.Paths {
-		for _, raw := range item {
-			op, isOp := raw.(map[string]any)
-			if !isOp {
-				continue
-			}
-
-			id, _ := op["operationId"].(string)
-			requirements, _ := op["security"].([]any)
-
-			for _, r := range requirements {
-				if schemes, _ := r.(map[string]any); schemes != nil && schemes["agentToken"] != nil && id != "" {
-					ops[strings.ToUpper(id[:1])+id[1:]] = true
-				}
-			}
-		}
-	}
-
-	return ops, nil
 }
 
 // HandlePeerSecret admits a peer and records which one in the context.

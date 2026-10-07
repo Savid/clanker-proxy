@@ -85,16 +85,11 @@ func New(log *slog.Logger, ib Inbox, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("owner token: want %s and at least 28 more characters", inbox.OwnerPrefix)
 	}
 
-	agentOps, err := agentOperations(api.Spec)
-	if err != nil {
-		return nil, err
-	}
-
 	log = httpserve.Logger(log)
 	s := &Server{
 		log:      log,
 		ops:      &operations{log: log, inbox: ib, version: cfg.Version, now: time.Now},
-		sec:      &security{inbox: ib, ownerToken: cfg.OwnerToken, agentOps: agentOps},
+		sec:      &security{inbox: ib, ownerToken: cfg.OwnerToken},
 		shutdown: make(chan struct{}),
 	}
 

@@ -37,8 +37,14 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
   by anything running there, including code an agent runs for a peer. An
   agent token (`cpctl token add`) can only list, read and act on threads; cpd
   refuses it for peering, opening threads, webhooks and tokens. If it leaks,
-  someone can read and answer your threads until you run `cpctl token rm`, but
-  cannot add peers, redirect notifications or lock you out.
+  someone can read and answer your threads until you run `cpctl token rm`,
+  which also ends their open streams, but cannot add peers, redirect
+  notifications or lock you out.
+- **One token for the whole inbox.** Every conversation shares it, so each
+  can reach every thread the inbox handles, not only its own. The plugin
+  keeps a conversation to its thread, but a peer who talks its agent into
+  working around that could read or answer your threads with other peers.
+  Peer only with people you would trust that far.
 
 ## Choosing the project
 
@@ -78,13 +84,10 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
      workspace root (the repository root in a project) and load it, or run
      `plugins: reload` from the command palette.
 
-   The plugin keeps its webhook URL in `cp-inbox/webhook.url` under
-   `$XDG_STATE_HOME` (`~/.local/state` by default), mode 0600. If the file
-   already exists, it is kept.
-
 4. **Point cpd at it.** In that thread, run **cp-inbox: Show webhook URL**
-   from the command palette. The URL appears in a dialog, outside every
-   thread, since anyone with it can post events. Copy it into a private file
+   from the command palette. The URL appears in a secret dialog, which no
+   thread or transcript records, since anyone with it can post events; the
+   plugin does not store it. Copy it into a private file
    on your machine and add the webhook there:
 
    ```bash
@@ -104,8 +107,8 @@ the project. That is safe: only the inbox owns the webhook, guardrails apply
 to conversations, and the other threads only gain the `cp_ask_owner` tool.
 
 If the wrong thread became the inbox, delete the `cp-inbox` trigger in
-Settings → Triggers and the `webhook.url` file, reload the plugin in the
-right thread, and repeat step 4 with `cpctl webhook set amp -url-file amp.url`.
+Settings → Triggers, reload the plugin in the right thread, and repeat step 4
+with `cpctl webhook set amp -url-file amp.url`.
 After adding a missing secret, restart the orb's processes and reload the
 plugin.
 
@@ -137,12 +140,13 @@ conversation runs, and the files other tools name:
 | Commands | Result |
 | --- | --- |
 | `cpctl` on any other thread, `ls`, `inbox`, `requests`, `approve`, `deny`, `peer …`, `webhook …`, `token …`, `update`; `-url`, `-token`, `CP_URL`, `CP_TOKEN` or `CP_DIR` overrides | Refused. cpd itself refuses the agent token for everything but threads. |
-| Anything naming `CP_TOKEN`, `CP_WEBHOOK_SECRET`, `owner.token`, `/proc/*/environ` or the plugin's state; printing the environment; `gh auth` | Refused. |
-| `git push` (however git's options are placed), GitHub changes (everything but `gh pr`/`issue`/`run`/`repo` reads and `gh search`), uploads with `curl`/`wget`, `ssh`/`nc`, copying to other machines, publishing | Asks you to approve that exact command; refused if too long to show. |
+| Anything naming `CP_TOKEN`, `CP_URL`, `CP_DIR`, `CP_WEBHOOK_SECRET`, `owner.token`, `/proc/*/environ` or `~/.local/state`; printing the environment (`env`, `ps e`, indirect `${!…}`); `gh auth`; an unclosed quote | Refused. |
+| `git push` (however git's options, wrappers such as `timeout` or `if … then` place it), git aliases, GitHub changes (everything but `gh pr`/`issue`/`run`/`repo` reads and `gh search`), uploads with `curl`/`wget`, `ssh`/`nc`, copying to other machines, publishing | Asks you to approve that exact command; refused if too long to show. |
 | Everything else | Runs. |
 
-Commands inside `bash -c`, `eval` and `$(…)` are checked too. A script the
-agent writes and runs is not: this is a guardrail against an agent talked
+Commands inside `bash -c`, `eval`, `$(…)` and here-documents that expand are
+checked too; here-document text is not. A script the agent writes and runs,
+or a renamed copy of a program, is not: this is a guardrail against an agent talked
 into something, not a sandbox. When an agent needs a decision, it calls the
 `cp_ask_owner` tool, which labels its thread `needs-owner` and sends you a
 fixed notification; answer in that thread.
@@ -155,14 +159,14 @@ minutes have passed since the last one, and at most 3 times until the peer
 changes the thread's state; a conversation that is already working gets them
 straight away. Beyond that:
 
-- a conversation wakes at most 30 times a day, and all conversations together
-  200 times;
+- a conversation wakes at most 30 times a day, one peer's conversations 60
+  times, and all conversations together 200 times;
 - a peer starts at most 10 new conversations a day;
 - when a peer ends a thread (close, decline, withdraw), a working conversation
   is told to stop; ended conversations are forgotten after 30 days.
 
-A held notification labels the conversation `cp-held` and notifies you once
-a day per conversation. Each time an event arrives, at most every 10 minutes,
+A held notification labels the conversation `cp-held` and notifies you at
+most once a day per peer. Each time an event arrives, at most every 10 minutes,
 the plugin wakes up to 5 threads that are your turn but have no conversation
 or were held, such as ones whose notifications were lost while the inbox was
 archived.

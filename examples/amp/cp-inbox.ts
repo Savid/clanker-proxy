@@ -22,7 +22,6 @@ const cpctl = process.env.CP_INBOX_CPCTL || 'cpctl'
 
 // Owner-only state outside the repository: the capability URL is a credential.
 const stateDir = join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'cp-inbox')
-const urlFile = join(stateDir, 'webhook.url')
 const stateFile = join(stateDir, 'state.json')
 // Conversations share the orb, so each one does code work in its own git
 // worktree here; otherwise they would edit the same checkout.
@@ -42,6 +41,7 @@ const replyMax = 3
 const replyGap = 10 * 60 * 1000
 const wakesPerConversation = 30
 const wakesPerDay = 200
+const wakesPerPeer = 60
 const conversationsPerPeer = 10
 const noticeGap = 10 * 60 * 1000
 const sweepEvery = 10 * 60 * 1000
@@ -77,7 +77,6 @@ interface Conversation {
 	replies: number
 	lastReply: number
 	held: boolean
-	lastHeldNotice: number
 	ended: number
 }
 
@@ -86,6 +85,8 @@ interface State {
 	conversations: Record<string, Conversation>
 	wakes: number[]
 	lastPeeringNotice: number
+	// heldNotices is when each peer's held notifications were last reported.
+	heldNotices: Record<string, number>
 }
 
 export default async function (amp: PluginAPI) {
@@ -129,10 +130,14 @@ export default async function (amp: PluginAPI) {
 			const now = Date.now()
 			state.wakes = state.wakes.filter((t) => now - t < day)
 			let c: Conversation | undefined = state.conversations[subject]
-			if (state.wakes.length >= wakesPerDay) return inbox.hold(ctx, subject, c, `woke ${wakesPerDay} conversations today`)
+			if (state.wakes.length >= wakesPerDay) return inbox.hold(ctx, subject, peer, c, `woke ${wakesPerDay} conversations today`)
+			const peerWakes = Object.values(state.conversations)
+				.filter((x) => x.peer === peer)
+				.reduce((n, x) => n + x.wakes.filter((t) => now - t < day).length, 0)
+			if (peerWakes >= wakesPerPeer) return inbox.hold(ctx, subject, peer, c, `${peer}'s conversations woke ${wakesPerPeer} times today`)
 			if (c) {
 				c.wakes = c.wakes.filter((t) => now - t < day)
-				if (c.wakes.length >= wakesPerConversation) return inbox.hold(ctx, subject, c, `woke ${wakesPerConversation} times today`)
+				if (c.wakes.length >= wakesPerConversation) return inbox.hold(ctx, subject, peer, c, `woke ${wakesPerConversation} times today`)
 			}
 			if (c?.briefed) {
 				try {
@@ -147,9 +152,9 @@ export default async function (amp: PluginAPI) {
 			}
 			if (!c) {
 				const started = Object.values(state.conversations).filter((x) => x.peer === peer && now - x.created < day).length
-				if (started >= conversationsPerPeer) return inbox.hold(ctx, subject, undefined, `${peer} started ${conversationsPerPeer} conversations today`)
+				if (started >= conversationsPerPeer) return inbox.hold(ctx, subject, peer, undefined, `${peer} started ${conversationsPerPeer} conversations today`)
 				const thread = await (await ctx.thread.agent()).createThread({ parentThreadID: ctx.thread.id })
-				c = { amp: thread.id, peer, created: now, briefed: false, wakes: [], replies: 0, lastReply: 0, held: false, lastHeldNotice: 0, ended: 0 }
+				c = { amp: thread.id, peer, created: now, briefed: false, wakes: [], replies: 0, lastReply: 0, held: false, ended: 0 }
 				state.conversations[subject] = c
 				// Saved before the first message, so the tool guard sees the
 				// conversation as soon as it can run anything.
@@ -181,9 +186,9 @@ export default async function (amp: PluginAPI) {
 		},
 
 		// hold leaves a notification undelivered and tells the owner, at most
-		// once a day per conversation. The sweep wakes held conversations once
-		// the limits allow.
-		async hold(ctx: WebhookHandlerContext, subject: string, c: Conversation | undefined, why: string): Promise<boolean> {
+		// once a day per peer. The sweep wakes held conversations, and threads
+		// waiting without one, once the limits allow.
+		async hold(ctx: WebhookHandlerContext, subject: string, peer: string, c: Conversation | undefined, why: string): Promise<boolean> {
 			ctx.logger.log(`cp-inbox: held ${subject}: ${why}`)
 			const now = Date.now()
 			if (c) {
@@ -192,10 +197,10 @@ export default async function (amp: PluginAPI) {
 					.get(c.amp)
 					.addLabels(['cp-held'])
 					.catch(() => undefined)
-				if (now - c.lastHeldNotice < day) return false
-				c.lastHeldNotice = now
 			}
-			await notify(ctx, `clanker-proxy: held a notification (${why}). Check cpctl inbox.`)
+			if (now - (state.heldNotices[peer] ?? 0) < day) return false
+			state.heldNotices[peer] = now
+			await notify(ctx, `clanker-proxy: held a notification from ${peer} (${why}). Check cpctl inbox.`)
 			return false
 		},
 
@@ -222,7 +227,7 @@ export default async function (amp: PluginAPI) {
 			}
 			if (n.type === 'thread.reply') {
 				if (c && !(await busy(c)) && (c.replies >= replyMax || now - c.lastReply < replyGap)) {
-					await inbox.hold(ctx, n.subject, c, `replies from ${n.peer} arrive faster than the loop limits allow`)
+					await inbox.hold(ctx, n.subject, n.peer, c, `replies from ${n.peer} arrive faster than the loop limits allow`)
 					return
 				}
 				const message = n.myTurn
@@ -277,8 +282,9 @@ export default async function (amp: PluginAPI) {
 		const find = () => Object.entries(state.conversations).find(([, c]) => c.amp === id)?.[0]
 		const found = find()
 		if (found) return found
-		const saved = await loadState()
-		state = { ...saved, conversations: { ...saved.conversations, ...state.conversations } }
+		// Only conversations are merged: replacing the rest would drop counts
+		// a running handler is adding to.
+		state.conversations = { ...(await loadState()).conversations, ...state.conversations }
 		return find()
 	}
 
@@ -346,29 +352,19 @@ export default async function (amp: PluginAPI) {
 				}
 			}),
 	})
-	// The owner copies the URL from a dialog, which stays out of every
-	// thread, to configure cpd where they hold the owner token.
+	// The owner copies the URL from a secret dialog, which no thread or
+	// transcript records, to configure cpd where they hold the owner token.
+	// It is not stored, so no agent can read or replace it.
 	amp.registerCommand('cp-inbox-webhook-url', { title: 'Show webhook URL', category: 'cp-inbox', description: 'The URL to give cpctl webhook add' }, async (ctx) => {
-		const saved = (await readFile(urlFile, 'utf8').catch(() => '')).trim()
 		await ctx.ui.input({
 			title: 'cp-inbox webhook URL',
 			helpText:
 				'Copy it into a private file where you run cpctl as the owner, then run cpctl webhook add with -url-file. Anyone with it can post events: never paste it into a thread.',
-			initialValue: saved || url,
+			initialValue: url,
+			secret: true,
 			requireHuman: true,
 		})
 	})
-
-	await mkdir(stateDir, { recursive: true, mode: 0o700 })
-	// Only the inbox's URL belongs here. Without a project, every thread that
-	// loads the plugin gets its own URL, which must not replace it.
-	const existing = await readFile(urlFile, 'utf8').catch(() => '')
-	if (!existing.trim()) {
-		await writeFile(urlFile, url + '\n', { mode: 0o600 })
-		amp.logger.log('cp-inbox: webhook URL written to', urlFile)
-	} else if (existing.trim() !== url) {
-		amp.logger.log('cp-inbox: kept the existing webhook URL in', urlFile, '(delete it to replace it with this thread\'s)')
-	}
 }
 
 // verify checks the Standard Webhooks signature cpd sends for generic
@@ -426,13 +422,18 @@ const allow: Verdict = { kind: 'allow' }
 const forbid = (why: string): Verdict => ({ kind: 'forbid', why })
 const ask = (why: string): Verdict => ({ kind: 'ask', why })
 
-// Paths that hold the owner's credentials or the inbox's webhook URL.
-const secretPath = /owner\.token|\/environ\b|cp-inbox\//
+// Paths that hold credentials or the inbox's state, which decides what the
+// guard checks.
+const secretPath = /owner\.token|\/environ\b|cp-inbox\/|\.local\/state|XDG_STATE_HOME/
 
-// checkPaths guards tools other than the shell, which name files in their input.
-function checkPaths(input: Record<string, unknown>): Verdict {
-	for (const [k, v] of Object.entries(input)) {
-		if (/path|file|uri|target/i.test(k) && typeof v === 'string' && secretPath.test(v)) return forbid('owner credentials stay with the owner')
+// checkPaths guards tools other than the shell, which name files in their
+// input, at any depth.
+function checkPaths(input: unknown, key = ''): Verdict {
+	if (typeof input === 'string') return /path|file|uri|target|dir/i.test(key) && secretPath.test(input) ? forbid('owner credentials stay with the owner') : allow
+	const entries: [string, unknown][] = Array.isArray(input) ? input.map((v) => [key, v]) : input && typeof input === 'object' ? Object.entries(input) : []
+	for (const [k, v] of entries) {
+		const verdict = checkPaths(v, k)
+		if (verdict.kind !== 'allow') return verdict
 	}
 	return allow
 }
@@ -441,26 +442,57 @@ function checkPaths(input: Record<string, unknown>): Verdict {
 // guardrail against an agent talked into something, not a sandbox: a script
 // the agent writes and runs is not inspected.
 function checkShell(command: string, subject: string, depth = 0): Verdict {
-	if (/CP_TOKEN|CP_WEBHOOK_SECRET/.test(command) || secretPath.test(command)) return forbid('owner credentials stay with the owner')
+	const plain = command.replace(/\\(.)/g, '$1')
+	if (/CP_TOKEN|CP_WEBHOOK_SECRET/.test(plain) || secretPath.test(plain)) return forbid('owner credentials stay with the owner')
+	if (/CP_(URL|DIR)/.test(plain)) return forbid('cpctl must reach your daemon with your settings')
+	if (plain.includes('${!')) return forbid('indirect variable reads can expose credentials')
 	if (depth > 3) return forbid('the command nests too deeply to check')
+	const { shell, expanded } = heredocs(command)
+	const commands = simpleCommands(shell)
+	if (!commands) return forbid('a quote is not closed, so the command cannot be checked')
 	let verdict = allow
 	const consider = (v: Verdict) => {
 		if (v.kind === 'forbid' || verdict.kind === 'allow') verdict = v
 	}
 	// Substitutions run even inside double quotes, where the word splitting
 	// below does not look.
-	for (const m of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) consider(checkShell(m[1] ?? m[2] ?? '', subject, depth + 1))
-	for (const words of simpleCommands(command)) {
+	for (const m of (shell + '\n' + expanded).matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) consider(checkShell(m[1] ?? m[2] ?? '', subject, depth + 1))
+	for (const words of commands) {
 		if (verdict.kind === 'forbid') break
 		consider(checkWords(words, subject, depth))
 	}
 	return verdict
 }
 
+// heredocs separates here-document bodies from the command line. A body is
+// data for its command, but the shell expands substitutions in it unless
+// the delimiter is quoted.
+function heredocs(command: string): { shell: string; expanded: string } {
+	const lines = command.split('\n')
+	const shell: string[] = []
+	let expanded = ''
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!
+		shell.push(line)
+		for (const m of line.matchAll(/<<(-?)\s*(['"]?)(\w+)\2/g)) {
+			// A << inside quotes is text, not a here-document.
+			if ((line.slice(0, m.index).match(/['"]/g) ?? []).length % 2 === 1) continue
+			const [, strip, quote, end] = m
+			while (++i < lines.length) {
+				const body = lines[i]!
+				if ((strip ? body.replace(/^\t+/, '') : body) === end) break
+				if (!quote) expanded += body + '\n'
+			}
+		}
+	}
+	return { shell: shell.join('\n'), expanded }
+}
+
 // simpleCommands splits a command line into the words of each simple
 // command, removing quotes and escapes as the shell would, so quoting or a
-// line continuation cannot disguise a word.
-function simpleCommands(command: string): string[][] {
+// line continuation cannot disguise a word. It returns undefined when a
+// quote is left open.
+function simpleCommands(command: string): string[][] | undefined {
 	const out: string[][] = []
 	let words: string[] = []
 	let word = ''
@@ -504,10 +536,24 @@ function simpleCommands(command: string): string[][] {
 		}
 	}
 	endCommand()
-	return out
+	return quote ? undefined : out
 }
 
-const wrappers = new Set(['sudo', 'command', 'exec', 'nohup', 'time', 'nice', 'env', 'xargs'])
+// Words before the program: shell keywords, and wrappers that run the rest
+// of the line, with the options of theirs that take a value.
+const keywords = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', 'time'])
+const wrappers: Record<string, Set<string>> = {
+	sudo: new Set(['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U']),
+	command: new Set(),
+	exec: new Set(['-a']),
+	nohup: new Set(),
+	nice: new Set(['-n']),
+	env: new Set(['-u', '-C', '-S']),
+	xargs: new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s']),
+	timeout: new Set(['-k', '-s']),
+	stdbuf: new Set(['-i', '-o', '-e']),
+	ionice: new Set(['-c', '-n', '-p']),
+}
 const shells = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 const threadCommands = new Set(['show', 'wait', 'reply', 'ack', 'needs-input', 'resolve', 'decline', 'close', 'reopen', 'withdraw'])
 // cpctl flags that take a value, so the value is not mistaken for an operand.
@@ -524,10 +570,21 @@ const readOnlyGitHub: Record<string, Set<string> | true> = {
 function checkWords(all: string[], subject: string, depth: number): Verdict {
 	let i = 0
 	const assigned: string[] = []
-	for (; i < all.length; i++) {
+	while (i < all.length) {
 		const w = all[i]!
-		if (/^[A-Za-z_]\w*=/.test(w)) assigned.push(w.split('=')[0]!)
-		else if (!wrappers.has(w) || i === all.length - 1) break
+		if (/^[A-Za-z_]\w*=/.test(w)) {
+			assigned.push(w.split('=')[0]!)
+			i++
+		} else if (keywords.has(w)) {
+			i++
+		} else if (wrappers[w] && i < all.length - 1) {
+			const valued = wrappers[w]!
+			for (i++; i < all.length && all[i]!.startsWith('-'); i++) {
+				if (valued.has(all[i]!)) i++
+			}
+			// timeout's first operand is the duration.
+			if (w === 'timeout') i++
+		} else break
 	}
 	if (assigned.some((a) => /^CP_(URL|TOKEN|DIR)$/.test(a))) return forbid('cpctl must reach your daemon with your settings')
 	const program = basename(all[i] ?? '')
@@ -539,6 +596,9 @@ function checkWords(all: string[], subject: string, depth: number): Verdict {
 		return c >= 0 ? checkShell(args[c + 1] ?? '', subject, depth + 1) : allow
 	}
 	switch (program) {
+		case 'ps':
+			// BSD-style options with e print each process's environment.
+			return args.some((a) => /^[a-zA-Z]*e[a-zA-Z]*$/.test(a)) ? forbid('the environment holds owner credentials') : allow
 		case 'eval':
 			return checkShell(args.join(' '), subject, depth + 1)
 		case 'env':
@@ -571,7 +631,12 @@ function checkWords(all: string[], subject: string, depth: number): Verdict {
 			return allowed === true || (allowed && verb && allowed.has(verb)) ? allow : ask('change something on GitHub')
 		}
 		case 'curl':
-			return args.some((a, j) => /^(-d|--data.*|-F|--form.*|-T|--upload-file|--json)$|^-[dFT]./.test(a) || (/^(-X|--request)$/.test(a) && !/^(GET|HEAD)$/i.test(args[j + 1] ?? '')))
+			return args.some(
+				(a, j) =>
+					/^(-d|--data.*|-F|--form.*|-T|--upload-file|--json)$|^-[dFT]./.test(a) ||
+					(/^(-X|--request)$/.test(a) && !/^(GET|HEAD)$/i.test(args[j + 1] ?? '')) ||
+					/^(-X|--request=)(?!(GET|HEAD)$)\S+$/i.test(a),
+			)
 				? ask('send data to another server')
 				: allow
 		case 'wget':
@@ -624,13 +689,17 @@ function checkCpctl(args: string[], subject: string): Verdict {
 	return forbid(`cpctl ${command} is for the owner, not a conversation`)
 }
 
-// checkGit asks before a push, wherever git's own options put the subcommand.
+// checkGit asks before a push, wherever git's own options put the
+// subcommand, and before an alias, which could rename one.
 function checkGit(args: string[]): Verdict {
 	let i = 0
 	for (; i < args.length && args[i]!.startsWith('-'); i++) {
 		if (/^(-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/.test(args[i]!)) i++
+		if (/^-c$/.test(args[i - 1] ?? '') && /^alias\./i.test(args[i] ?? '')) return ask('define a git alias')
 	}
-	return args[i] === 'push' || args[i] === 'send-email' || args[i] === 'request-pull' ? ask('push to a remote') : allow
+	const sub = args[i]
+	if (sub === 'config' && args.slice(i + 1).some((a) => /^alias\./i.test(a))) return ask('define a git alias')
+	return sub === 'push' || sub === 'send-email' || sub === 'request-pull' ? ask('push to a remote') : allow
 }
 
 async function notify(ctx: WebhookHandlerContext, message: string): Promise<void> {
@@ -651,9 +720,10 @@ async function loadState(): Promise<State> {
 			conversations: s.conversations ?? {},
 			wakes: Array.isArray(s.wakes) ? s.wakes : [],
 			lastPeeringNotice: Number(s.lastPeeringNotice) || 0,
+			heldNotices: s.heldNotices ?? {},
 		}
 	} catch {
-		return { seen: [], conversations: {}, wakes: [], lastPeeringNotice: 0 }
+		return { seen: [], conversations: {}, wakes: [], lastPeeringNotice: 0, heldNotices: {} }
 	}
 }
 

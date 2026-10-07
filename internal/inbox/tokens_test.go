@@ -60,8 +60,14 @@ func TestAgentTokens(t *testing.T) {
 	if _, err = b.AgentByToken(ctx, brief); status(err) != http.StatusUnauthorized {
 		t.Fatalf("expired token admitted: %v", err)
 	}
+	if _, _, err = b.CreateAgentToken(ctx, "brief", time.Time{}); err != nil {
+		t.Fatalf("an expired token kept its name: %v", err)
+	}
+	if _, err = b.AgentByToken(ctx, brief); status(err) != http.StatusUnauthorized {
+		t.Fatalf("replaced token admitted: %v", err)
+	}
 	tokens, err := b.AgentTokens(ctx)
-	if err != nil || len(tokens) != 2 || tokens[0].Name != "amp" || !tokens[0].UsedAt.Equal(now.Add(-time.Hour)) || !tokens[1].UsedAt.IsZero() {
+	if err != nil || len(tokens) != 2 || tokens[0].Name != "amp" || !tokens[0].UsedAt.Equal(now.Add(-time.Hour)) || tokens[1].Name != "brief" || !tokens[1].UsedAt.IsZero() {
 		t.Fatalf("list: %+v %v", tokens, err)
 	}
 

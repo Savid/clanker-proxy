@@ -35,6 +35,9 @@ func TestAgentToken(t *testing.T) {
 	}
 
 	agent := &person{name: "alice's agent", url: alice.url, token: token}
+	if out = agent.cp(t, "me"); strings.Contains(out, "cpctl requests") {
+		t.Fatalf("agent pointed at an owner command: %s", out)
+	}
 	agent.cp(t, "show", th.ID)
 	agent.cp(t, "reply", th.ID, "-m", "looking")
 	for _, args := range [][]string{{"peer", "ls"}, {"send", "bob", "hi"}, {"token", "ls"}, {"webhook", "ls"}} {
@@ -47,7 +50,12 @@ func TestAgentToken(t *testing.T) {
 		t.Fatalf("token ls: %s", out)
 	}
 	alice.cp(t, "token", "rm", "helper")
-	if _, err = agent.try(t, "show", th.ID); exitOf(err) != exitAuth {
-		t.Fatalf("revoked token: %v", err)
+	if out, err = agent.try(t, "show", th.ID); exitOf(err) != exitAuth || !strings.Contains(out, "ask the owner for a new one") || strings.Contains(out, "owner.token") {
+		t.Fatalf("revoked token: %v %s", err, out)
+	}
+	for _, lifetime := range []string{"0", "30s", "3651d", "213504d", "soon"} {
+		if _, err = alice.try(t, "token", "add", "bad", "-o", filepath.Join(t.TempDir(), "t"), "-expires", lifetime); exitOf(err) != exitUsage {
+			t.Fatalf("-expires %s: %v", lifetime, err)
+		}
 	}
 }

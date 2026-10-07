@@ -372,6 +372,12 @@ func runMe(a *app, _ []string) error {
 		u := urlString(me.URL.Value)
 		fmt.Fprintf(w, "%s at %s\n", me.Name, u)
 		fmt.Fprintf(w, "For someone to connect, their agent runs: cpctl peer add %s %s\n", me.Name, u)
+		if a.agent() {
+			next(w, step{"cpctl inbox", "see what is waiting on you"})
+
+			return
+		}
+
 		next(w, step{"cpctl requests", "see who has asked to connect"})
 	})
 }

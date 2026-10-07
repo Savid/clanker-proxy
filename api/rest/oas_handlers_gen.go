@@ -796,7 +796,7 @@ func (s *Server) handleCreateWebhookRequest(args [0]string, argsEscaped bool, w 
 
 // handleDeleteAgentTokenRequest handles deleteAgentToken operation.
 //
-// The token stops working at once.
+// The token stops working at once, including in open streams.
 //
 // DELETE /api/v1/agent-tokens/{name}
 func (s *Server) handleDeleteAgentTokenRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

@@ -35,6 +35,14 @@ func (tokenSource) PeerSecret(context.Context, rest.OperationName) (rest.PeerSec
 	return rest.PeerSecret{}, ogenerrors.ErrSkipClientSecurity
 }
 
+// agentPrefix marks agent tokens, which cpd limits to threads.
+const agentPrefix = "cpa_"
+
+// agent reports whether cpctl holds an agent token rather than the owner's.
+func (a *app) agent() bool {
+	return strings.HasPrefix(a.token, agentPrefix)
+}
+
 // defaultToken is $CP_TOKEN, else the owner token cpd wrote on its first run
 // into $CP_DIR or ~/.cp.
 func defaultToken() string {
@@ -114,7 +122,7 @@ func checkTransport(baseURL string) error {
 			return nil
 		}
 
-		return fmt.Errorf("-url %s: the owner token would cross the network unencrypted; use https", baseURL)
+		return fmt.Errorf("-url %s: the token would cross the network unencrypted; use https", baseURL)
 	default:
 		return fmt.Errorf("-url %s: want http(s)://host[:port]", baseURL)
 	}
@@ -143,7 +151,7 @@ func (a *app) classify(err error, cmd *command) *failure {
 	}
 
 	if p, ok := errors.AsType[*rest.ProblemStatusCode](err); ok {
-		return problemFailure(p, cmd, a.ref)
+		return problemFailure(p, cmd, a.ref, a.agent())
 	}
 
 	if errors.Is(err, syscall.ECONNREFUSED) || isDialError(err) {
@@ -156,7 +164,7 @@ func (a *app) classify(err error, cmd *command) *failure {
 	return &failure{exit: exitError, msg: err.Error()}
 }
 
-func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failure {
+func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent bool) *failure {
 	f := &failure{exit: exitError, status: p.StatusCode, msg: p.Response.Detail.Or(p.Response.Title)}
 
 	name := ""
@@ -169,8 +177,11 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 		f.exit, f.hint = exitUsage, "cpctl help "+name
 	case http.StatusUnauthorized:
 		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp), or to an agent token from cpctl token add"
+		if agent {
+			f.hint = "this agent token was revoked, has expired or is unknown; ask the owner for a new one"
+		}
 	case http.StatusForbidden:
-		f.exit, f.hint = exitRefused, "CP_TOKEN is an agent token: it lists, reads and acts on threads; ask the owner to run this"
+		f.exit, f.hint = exitRefused, "CP_TOKEN is an agent token, which cannot do this; ask the owner to run it"
 	case http.StatusNotFound:
 		f.exit, f.hint = exitNotFound, notFoundHint(name)
 	case http.StatusConflict, http.StatusUnprocessableEntity:

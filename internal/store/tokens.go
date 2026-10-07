@@ -51,17 +51,23 @@ func formatOptional(t time.Time) string {
 	return formatTime(t)
 }
 
-// AddAgentToken stores a new agent token, refusing a name in use.
+// AddAgentToken stores a new agent token, refusing a name in use. A token
+// that expired by t.CreatedAt gives up its name.
 func (s *Store) AddAgentToken(ctx context.Context, t AgentToken) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_tokens (`+agentColumns+`) VALUES (?, ?, ?, ?, '')`,
-		t.Name, t.Hash, formatTime(t.CreatedAt), formatOptional(t.ExpiresAt))
-	if isConstraint(err) {
-		return ErrExists
-	}
-	if err != nil {
-		return fmt.Errorf("add agent token: %w", err)
-	}
-	return nil
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM agent_tokens WHERE name = ? AND expires_at != '' AND expires_at <= ?`, t.Name, formatTime(t.CreatedAt)); err != nil {
+			return fmt.Errorf("add agent token: %w", err)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO agent_tokens (`+agentColumns+`) VALUES (?, ?, ?, ?, '')`,
+			t.Name, t.Hash, formatTime(t.CreatedAt), formatOptional(t.ExpiresAt))
+		if isConstraint(err) {
+			return ErrExists
+		}
+		if err != nil {
+			return fmt.Errorf("add agent token: %w", err)
+		}
+		return nil
+	})
 }
 
 // AgentTokens lists agent tokens by name.
@@ -91,11 +97,9 @@ func (s *Store) AgentTokenByHash(ctx context.Context, hash string) (AgentToken, 
 	return t, err
 }
 
-// TouchAgentToken records a use. It writes at most once per interval, so
-// a busy agent does not write on every request.
-func (s *Store) TouchAgentToken(ctx context.Context, name string, now time.Time, interval time.Duration) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE agent_tokens SET used_at = ? WHERE name = ? AND used_at < ?`,
-		formatTime(now), name, formatTime(now.Add(-interval)))
+// TouchAgentToken records a use.
+func (s *Store) TouchAgentToken(ctx context.Context, name string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE agent_tokens SET used_at = ? WHERE name = ?`, formatTime(now), name)
 	if err != nil {
 		return fmt.Errorf("touch agent token: %w", err)
 	}

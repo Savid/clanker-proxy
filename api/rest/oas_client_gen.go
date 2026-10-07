@@ -66,7 +66,7 @@ type Invoker interface {
 	CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error)
 	// DeleteAgentToken invokes deleteAgentToken operation.
 	//
-	// The token stops working at once.
+	// The token stops working at once, including in open streams.
 	//
 	// DELETE /api/v1/agent-tokens/{name}
 	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error
@@ -712,7 +712,7 @@ func (c *Client) sendCreateWebhook(ctx context.Context, request *WebhookCreate) 
 
 // DeleteAgentToken invokes deleteAgentToken operation.
 //
-// The token stops working at once.
+// The token stops working at once, including in open streams.
 //
 // DELETE /api/v1/agent-tokens/{name}
 func (c *Client) DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error {

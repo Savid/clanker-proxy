@@ -52,7 +52,7 @@ type Handler interface {
 	CreateWebhook(ctx context.Context, req *WebhookCreate) (*Webhook, error)
 	// DeleteAgentToken implements deleteAgentToken operation.
 	//
-	// The token stops working at once.
+	// The token stops working at once, including in open streams.
 	//
 	// DELETE /api/v1/agent-tokens/{name}
 	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error

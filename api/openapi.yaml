@@ -240,7 +240,7 @@ paths:
       operationId: deleteAgentToken
       tags: [tokens]
       summary: Revoke an agent token
-      description: The token stops working at once.
+      description: The token stops working at once, including in open streams.
       responses:
         '204':
           description: Revoked.

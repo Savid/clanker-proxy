@@ -77,8 +77,10 @@ func (b *Inbox) AgentByToken(ctx context.Context, token string) (store.AgentToke
 	if !t.ExpiresAt.IsZero() && !now.Before(t.ExpiresAt) {
 		return t, errorf(KindUnauthorized, "agent token expired")
 	}
-	if err = b.store.TouchAgentToken(ctx, t.Name, now, agentTouchEvery); err != nil {
-		b.log.WarnContext(ctx, "agent token use not recorded", "token", t.Name, "error", err)
+	if now.Sub(t.UsedAt) >= agentTouchEvery {
+		if err = b.store.TouchAgentToken(ctx, t.Name, now); err != nil {
+			b.log.WarnContext(ctx, "agent token use not recorded", "name", t.Name, "error", err)
+		}
 	}
 	return t, nil
 }

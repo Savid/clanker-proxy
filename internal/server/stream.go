@@ -2,9 +2,11 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/savid/clanker-proxy/internal/httpserve"
+	"github.com/savid/clanker-proxy/internal/inbox"
 )
 
 const (
@@ -20,7 +22,9 @@ const (
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	admitted, err := s.sec.ownerOrAgent(ctx, bearer(r))
+	token := bearer(r)
+
+	admitted, err := s.sec.ownerOrAgent(ctx, token)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stream security failed", "error", err)
 		httpserve.WriteProblem(w, http.StatusInternalServerError, "")
@@ -47,6 +51,12 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 
 	self := s.ops.inbox.Self()
 
+	// An agent token is checked again before each event and ping, so a
+	// revoked or expired token gets nothing more.
+	live := func() bool {
+		return !strings.HasPrefix(token, inbox.AgentPrefix) || s.sec.agent(ctx, token) == nil
+	}
+
 	for ok := true; ok; {
 		select {
 		case <-ctx.Done():
@@ -54,8 +64,12 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case <-s.shutdown:
 			return
 		case <-keepalive.C:
-			ok = sse.Ping() == nil
+			ok = live() && sse.Ping() == nil
 		case sum := <-changes:
+			if !live() {
+				return
+			}
+
 			out := summary(sum, self)
 
 			data, encodeErr := out.MarshalJSON()

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-faster/yaml"
 )
@@ -140,7 +141,8 @@ func successContentType(t *testing.T, id string, op map[string]any) string {
 func Do(t *testing.T, h http.Handler, op Operation, token string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(t.Context())
+	// The deadline ends a stream that never starts its response.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	rec := httptest.NewRecorder()

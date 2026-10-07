@@ -44,9 +44,8 @@ CP_DIR=/tmp/a CP_URL=http://127.0.0.1:18471 build/bin/cpctl peer add bob http://
 - Access is declared in the spec: owner token by default,
   `security: [ownerToken: [], agentToken: []]` where agent tokens may act
   too, `security: [peerSecret: []]` for peers, `security: []` for public.
-  `internal/server/security.go` enforces it before handlers and reads which
-  operations admit agents from the spec; `TestAccessLevels` checks every
-  operation. Never check credentials in a handler; only the hand-routed
+  `internal/server/security.go` enforces it before handlers, using ogen's
+  generated tables; `TestAccessLevels` checks every operation. Never check credentials in a handler; only the hand-routed
   stream checks its tokens itself.
 - ogen cannot serve `text/event-stream`, so the stream is hand-routed in
   `internal/server/stream.go` and read in `cmd/cpctl/stream.go`.

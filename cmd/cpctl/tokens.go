@@ -36,7 +36,7 @@ func tokenCommands() []*command {
 		{
 			name: "token rm", args: "<name>", minArgs: 1, maxArgs: 1,
 			summary: "revoke an agent token",
-			about:   "It stops working at once.",
+			about:   "It stops working at once, including in open streams.",
 			example: "cpctl token rm amp-inbox",
 			flags:   func(*flag.FlagSet) func(*app, []string) error { return runTokenRemove },
 		},
@@ -72,20 +72,18 @@ func tokenAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 
 		t, err := a.client.CreateAgentToken(a.ctx, req)
 		if err != nil {
-			closeOut(false)
+			_ = closeOut(false)
 
 			return err
 		}
 
-		if _, err = fmt.Fprintln(w, t.Token); err != nil {
-			closeOut(false)
+		_, err = fmt.Fprintln(w, t.Token)
+		if err = errors.Join(err, closeOut(err == nil)); err != nil {
 			// A token nobody holds is only a risk.
 			_ = a.client.DeleteAgentToken(a.ctx, rest.DeleteAgentTokenParams{Name: t.Name})
 
 			return fmt.Errorf("write token: %w", err)
 		}
-
-		closeOut(true)
 
 		// Stdout holds only the token, so it can be piped.
 		if *out == "-" {
@@ -95,7 +93,7 @@ func tokenAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 		created := &rest.AgentTokenSummary{Name: t.Name, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt}
 
 		return a.print(created, func(w io.Writer) {
-			fmt.Fprintf(w, "created agent token %s, %s\nwrote it to %s\n", t.Name, expiry(t.ExpiresAt), *out)
+			fmt.Fprintf(w, "created agent token %s, %s\nwrote it to %s\n", t.Name, expiry(t.ExpiresAt, a.now()), *out)
 			next(w, step{"CP_TOKEN=\"$(cat " + *out + ")\" cpctl inbox", "what the agent can run with it"},
 				step{"cpctl token rm " + string(t.Name), "revoke it"})
 		})
@@ -103,10 +101,11 @@ func tokenAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 }
 
 // tokenOutput opens where the token goes. A file must be new, so an
-// existing secret is never overwritten; done(false) removes it again.
-func tokenOutput(a *app, path string) (io.Writer, func(ok bool), error) {
+// existing secret is never overwritten. done(true) syncs and closes it and
+// reports any failure; done(false), or a failure, removes it.
+func tokenOutput(a *app, path string) (io.Writer, func(ok bool) error, error) {
 	if path == "-" {
-		return a.stdout, func(bool) {}, nil
+		return a.stdout, func(bool) error { return nil }, nil
 	}
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -117,34 +116,52 @@ func tokenOutput(a *app, path string) (io.Writer, func(ok bool), error) {
 		return nil, nil, usageError("cannot create %s: %v", path, err)
 	}
 
-	return f, func(ok bool) {
-		_ = f.Close()
-		if !ok {
+	return f, func(ok bool) error {
+		var syncErr error
+		if ok {
+			syncErr = f.Sync()
+		}
+
+		closeErr := errors.Join(syncErr, f.Close())
+		if !ok || closeErr != nil {
 			_ = os.Remove(path)
 		}
+
+		return closeErr
 	}, nil
 }
 
+// maxLifetime bounds -expires well inside time.Duration.
+const maxLifetime = 10 * 365 * 24 * time.Hour
+
 // parseLifetime reads a Go duration, or whole days as "<n>d".
 func parseLifetime(s string) (time.Duration, error) {
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(days)
-		if err == nil && n > 0 {
-			return time.Duration(n) * 24 * time.Hour, nil
+	d, err := time.ParseDuration(s)
+	if days, isDays := strings.CutSuffix(s, "d"); isDays {
+		n, atoiErr := strconv.Atoi(days)
+		d, err = time.Duration(n)*24*time.Hour, atoiErr
+		if n > int(maxLifetime/(24*time.Hour)) {
+			d = maxLifetime + 1
 		}
-	} else if d, err := time.ParseDuration(s); err == nil && d > 0 {
-		return d, nil
 	}
 
-	return 0, usageError("-expires must be a positive duration such as 90d or 12h")
+	if err != nil || d < time.Minute || d > maxLifetime {
+		return 0, usageError("-expires must be between 1m and 3650d, such as 90d or 12h")
+	}
+
+	return d, nil
 }
 
-func expiry(t rest.OptDateTime) string {
-	if at, ok := t.Get(); ok {
+func expiry(t rest.OptDateTime, now time.Time) string {
+	at, ok := t.Get()
+	switch {
+	case !ok:
+		return "never expires"
+	case !at.After(now):
+		return "expired " + at.UTC().Format(time.RFC3339)
+	default:
 		return "expires " + at.UTC().Format(time.RFC3339)
 	}
-
-	return "never expires"
 }
 
 func runTokens(a *app, _ []string) error {
@@ -165,7 +182,7 @@ func runTokens(a *app, _ []string) error {
 				used = "used " + at.UTC().Format(time.RFC3339)
 			}
 
-			fmt.Fprintf(tw, "%s\tcreated %s\t%s\t%s\n", t.Name, t.CreatedAt.UTC().Format(time.RFC3339), expiry(t.ExpiresAt), used)
+			fmt.Fprintf(tw, "%s\tcreated %s\t%s\t%s\n", t.Name, t.CreatedAt.UTC().Format(time.RFC3339), expiry(t.ExpiresAt, a.now()), used)
 		}
 
 		_ = tw.Flush()
