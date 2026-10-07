@@ -1,0 +1,29 @@
+# Spec lint (make lint-api): vacuum's recommended OpenAPI rules and the
+# OWASP API security rules. Rules turned off, and why:
+extends:
+  - [vacuum:oas, recommended]
+  - [vacuum:owasp, all]
+rules:
+  # Examples belong where they teach something; the shared schemas carry
+  # them.
+  oas3-missing-example: off
+  # Every operation's errors are its `default` RFC 9457 Problem, which ogen
+  # needs for convenient errors (one NewError for every operation); listing
+  # 400, 401, 422, 429 and 500 per operation would replace that with
+  # per-operation error types. Descriptions name the statuses that matter.
+  owasp-define-error-responses-401: off
+  owasp-define-error-responses-429: off
+  owasp-define-error-responses-500: off
+  owasp-define-error-validation: off
+  # No rate limiting, so no quota headers to declare.
+  owasp-rate-limit: off
+  # Inputs use the bounded, patterned shared schemas. What remains is
+  # free-text output (error details, versions), which has nothing to match.
+  owasp-string-restricted: off
+  # Each owner hosts their own daemon behind their own TLS, so the spec's
+  # server is relative; cpctl refuses plain http to anything but loopback.
+  owasp-security-hosts-https-oas3: off
+  # peering-requests is public on purpose: it is how a stranger asks to
+  # connect. It is capped, expires, and grants nothing until
+  # the owner approves and the requester's daemon proves its URL.
+  owasp-protection-global-unsafe: off

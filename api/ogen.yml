@@ -1,0 +1,18 @@
+# ogen generates the server and the client: routing, request decoding,
+# response encoding and validation. There is no Unimplemented stub, so a new
+# operation fails to compile until internal/server implements it.
+generator:
+  features:
+    disable_all: true
+    enable:
+      - paths/server
+      - paths/client
+  # Every operation's errors are its `default` Problem, answered by
+  # NewError; fail generation rather than fall back to per-operation error
+  # types if an operation ever differs.
+  convenient_errors: "on"
+  # ogen cannot generate an SSE server. The stream is hand-routed in
+  # internal/server and read by hand in cmd/cpctl; a contract test checks
+  # every operation is served.
+  ignore_not_implemented:
+    - sse server response encoding
