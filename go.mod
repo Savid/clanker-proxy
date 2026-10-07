@@ -13,6 +13,7 @@ require (
 	github.com/go-faster/yaml v0.4.6
 	github.com/google/uuid v1.6.0
 	github.com/ogen-go/ogen v1.24.0
+	golang.org/x/mod v0.41.0
 	golang.org/x/sync v0.23.0
 	modernc.org/sqlite v1.60.1
 )
@@ -35,7 +36,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090 // indirect
-	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260908163034-4bcc4b2ee518 // indirect

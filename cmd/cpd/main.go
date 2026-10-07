@@ -44,13 +44,15 @@ func main() {
 }
 
 type options struct {
-	name      string
-	url       string
-	dir       string
-	listen    string
-	logFormat string
-	logLevel  slog.Level
-	version   bool
+	name        string
+	url         string
+	dir         string
+	listen      string
+	logFormat   string
+	logLevel    slog.Level
+	version     bool
+	update      bool
+	checkUpdate bool
 }
 
 // errHelp is returned when -h or -help was given; usage has been printed.
@@ -83,6 +85,8 @@ func parse(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.logFormat, "log-format", "text", "log format: text or json")
 	fs.TextVar(&o.logLevel, "log-level", o.logLevel, "log level: DEBUG, INFO, WARN or ERROR")
 	fs.BoolVar(&o.version, "version", false, "print the version and exit")
+	fs.BoolVar(&o.update, "update", false, "install the latest stable cpd and cpctl, then exit; restart cpd afterward")
+	fs.BoolVar(&o.checkUpdate, "check-update", false, "check GitHub for a newer stable release, then exit")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -94,6 +98,10 @@ func parse(args []string, stderr io.Writer) (options, error) {
 
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+
+	if (o.update && o.checkUpdate) || (o.version && (o.update || o.checkUpdate)) {
+		return o, errors.New("use only one of -version, -update or -check-update")
 	}
 
 	if o.logFormat != "text" && o.logFormat != "json" {
@@ -136,6 +144,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if o.update || o.checkUpdate {
+		return runUpdate(ctx, stdout, o.checkUpdate)
+	}
 
 	log := newLogger(stderr, o).With("version", version)
 
@@ -187,6 +199,7 @@ func serve(ctx context.Context, log *slog.Logger, o options) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return httpserve.Serve(ctx, log, ln, api, api.Shutdown) })
 	g.Go(func() error { return deliverer.Run(ctx) })
+	g.Go(func() error { return watchUpdates(ctx, log) })
 
 	if err = g.Wait(); err != nil {
 		return err

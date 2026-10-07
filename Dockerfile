@@ -6,6 +6,7 @@ COPY go.mod go.sum ./
 RUN GOWORK=off go mod download
 COPY api/ api/
 COPY cmd/ cmd/
+COPY cli/ cli/
 COPY internal/ internal/
 COPY pkg/ pkg/
 ARG VERSION=dev
@@ -23,4 +24,5 @@ COPY --from=go --chown=65532:65532 /out/data /data
 VOLUME /data
 EXPOSE 8080
 ENV CP_DIR=/data
+ENV CP_NO_UPDATE_CHECK=1
 ENTRYPOINT ["/usr/local/bin/cpd", "-listen", "0.0.0.0:8080"]

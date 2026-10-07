@@ -25,12 +25,13 @@ type command struct {
 	example string
 	minArgs int
 	maxArgs int
+	local   bool
 	flags   func(fs *flag.FlagSet) func(a *app, pos []string) error
 }
 
 // commands is every command, in the order help lists them.
 func commands() []*command {
-	return slices.Concat(peerCommands(), threadCommands(), actionCommands())
+	return slices.Concat(peerCommands(), threadCommands(), actionCommands(), updateCommands())
 }
 
 func peerCommands() []*command {
@@ -240,8 +241,10 @@ func (c *command) exec(a *app, args []string) error {
 		return usageError("usage: cpctl %s", c.usage())
 	}
 
-	if a.client, err = newClient(a.url, a.token); err != nil {
-		return err
+	if !c.local {
+		if a.client, err = newClient(a.url, a.token); err != nil {
+			return err
+		}
 	}
 
 	return runCmd(a, pos)
@@ -251,7 +254,7 @@ func (c *command) exec(a *app, args []string) error {
 func (c *command) flagSet(a *app) *flag.FlagSet {
 	fs := flag.NewFlagSet(c.name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.BoolVar(&a.json, "json", a.json, "print cpd's JSON response instead of text")
+	fs.BoolVar(&a.json, "json", a.json, "print JSON instead of text")
 
 	return fs
 }

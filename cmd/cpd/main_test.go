@@ -33,13 +33,15 @@ func TestParse(t *testing.T) {
 				logFormat: "json", logLevel: slog.LevelDebug, version: true,
 			},
 		},
-		"bad name":       {args: []string{"-name", "not a name"}, wantErr: "-name"},
-		"bad url":        {args: []string{"-url", "cp.example.com"}, wantErr: "-url"},
-		"bad format":     {args: []string{"-log-format", "yaml"}, wantErr: `-log-format "yaml": text or json`},
-		"bad level":      {args: []string{"-log-level", "loud"}, wantErr: "flags: "},
-		"unknown":        {args: []string{"-nope"}, wantErr: "flags: "},
-		"stray argument": {args: []string{"serve"}, wantErr: "unexpected arguments"},
-		"help wanted":    {args: []string{"-h"}, wantErr: errHelp.Error()},
+		"bad name":           {args: []string{"-name", "not a name"}, wantErr: "-name"},
+		"bad url":            {args: []string{"-url", "cp.example.com"}, wantErr: "-url"},
+		"bad format":         {args: []string{"-log-format", "yaml"}, wantErr: `-log-format "yaml": text or json`},
+		"bad level":          {args: []string{"-log-level", "loud"}, wantErr: "flags: "},
+		"unknown":            {args: []string{"-nope"}, wantErr: "flags: "},
+		"stray argument":     {args: []string{"serve"}, wantErr: "unexpected arguments"},
+		"update and check":   {args: []string{"-update", "-check-update"}, wantErr: "use only one"},
+		"update and version": {args: []string{"-update", "-version"}, wantErr: "use only one"},
+		"help wanted":        {args: []string{"-h"}, wantErr: errHelp.Error()},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

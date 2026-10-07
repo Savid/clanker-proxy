@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build image run check lint lint-go lint-api generate generate-check vuln tidy-check fmt test clean
+.PHONY: help build image run check lint lint-go lint-api lint-install generate generate-check vuln tidy-check fmt test test-install release-check clean
 
 BIN_DIR ?= build/bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -30,14 +30,17 @@ run: build
 ## check: lint, generated-code check, tests, govulncheck and tidy check
 check: lint generate-check test vuln tidy-check
 
-## lint: golangci-lint on Go; vacuum (recommended and OWASP rules) on the spec
-lint: lint-go lint-api
+## lint: golangci-lint on Go, vacuum on the spec, shellcheck on the installer
+lint: lint-go lint-api lint-install
 
 lint-go:
 	GOWORK=off golangci-lint run ./...
 
 lint-api:
 	$(GO) run $(VACUUM) lint -d -r .vacuum.yaml api/openapi.yaml
+
+lint-install:
+	shellcheck scripts/*.sh
 
 ## generate: regenerate api/rest (ogen) from api/openapi.yaml
 generate:
@@ -61,9 +64,18 @@ tidy-check:
 fmt:
 	GOWORK=off golangci-lint fmt ./...
 
-## test: Go tests with the race detector
-test:
+## test: Go race tests and offline installer tests
+test: test-install
 	$(GO) test -race ./...
+
+## test-install: exercise the installer without network access
+test-install:
+	sh scripts/install_test.sh
+
+## release-check: build release archives locally without publishing (requires GoReleaser)
+release-check:
+	GOWORK=off goreleaser check
+	GOWORK=off goreleaser release --snapshot --clean
 
 ## clean: remove build output
 clean:
