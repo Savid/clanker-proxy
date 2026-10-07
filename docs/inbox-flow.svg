@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="968" viewBox="0 0 1000 968" role="img" aria-labelledby="title description">
-  <title id="title">The clanker-proxy inbox lifecycle</title>
-  <desc id="description">A sender opens a request with send. The recipient may ack, then resolve when done. The sender reviews and closes it. For questions, the recipient uses needs-input and the sender replies, returning the turn to the recipient. The sender can reopen resolved or closed requests. Before resolution, the recipient can decline or the sender can withdraw. An FYI closes when the recipient acknowledges it. Either participant can reply at any time.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1312" viewBox="0 0 1000 1312" role="img" aria-labelledby="title description">
+  <title id="title">The clanker-proxy inbox lifecycle and webhooks</title>
+  <desc id="description">A sender opens a request with send. The recipient may ack, then resolve when done. The sender reviews and closes it. For questions, the recipient uses needs-input and the sender replies, returning the turn to the recipient. The sender can reopen resolved or closed requests. Before resolution, the recipient can decline or the sender can withdraw. An FYI closes when the recipient acknowledges it. Either participant can reply at any time. Optional webhooks filter thread events and incoming peering requests, then send signed JSON to a receiver with persistent retries. The receiver verifies, deduplicates, and queues work before returning 2xx. An agent runner reads the current thread with cpctl show before acting; a webhook alone does not launch an agent.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -23,7 +23,7 @@
     </style>
   </defs>
 
-  <rect x="1" y="1" width="998" height="966" rx="24" fill="#ffffff" stroke="#e2e8f0"/>
+  <rect x="1" y="1" width="998" height="1310" rx="24" fill="#ffffff" stroke="#e2e8f0"/>
   <text class="heading" x="48" y="65">One thread. Two inboxes.</text>
   <text x="48" y="98" font-size="20" class="muted">Your inbox holds the threads waiting on you.</text>
 
@@ -123,4 +123,41 @@
   <text class="code done" x="794" y="851">closed</text>
 
   <text class="body muted" x="48" y="934">Either person can reply at any time—even after a thread ends.</text>
+
+  <text class="section" x="48" y="987">OPTIONAL WEBHOOKS</text>
+  <text class="body muted" x="48" y="1017">Notify your agent runner or another service when events happen.</text>
+
+  <g transform="translate(48 1040)">
+    <rect width="264" height="158" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text class="role sender" x="20" y="31">CHOOSE EVENTS</text>
+    <text class="card-title" x="20" y="66">1. Match</text>
+    <text class="body muted" x="20" y="98">Thread events + incoming</text>
+    <text class="body muted" x="20" y="122">peering requests.</text>
+    <text class="small sender" x="20" y="145">Filter by event type and origin.</text>
+  </g>
+
+  <path class="edge" d="M 324 1119 H 354"/>
+
+  <g transform="translate(368 1040)">
+    <rect width="264" height="158" rx="16" fill="#f5f3ff" stroke="#ddd6fe"/>
+    <text class="role recipient" x="20" y="31">DAEMON SENDS</text>
+    <text class="card-title" x="20" y="66">2. Notify</text>
+    <text class="body muted" x="20" y="98">Signed JSON POST.</text>
+    <text class="body muted" x="20" y="122">Queue survives restarts.</text>
+    <text class="small recipient" x="20" y="145">Independent retries per endpoint.</text>
+  </g>
+
+  <path class="edge" d="M 644 1119 H 674"/>
+
+  <g transform="translate(688 1040)">
+    <rect width="264" height="158" rx="16" fill="#f0fdf4" stroke="#bbf7d0"/>
+    <text class="role done" x="20" y="31">YOUR RECEIVER</text>
+    <text class="card-title" x="20" y="66">3. Queue work</text>
+    <text class="body muted" x="20" y="98">Verify + deduplicate.</text>
+    <text class="body muted" x="20" y="122">Queue, then return 2xx.</text>
+    <text class="small done" x="20" y="145">Run agent work asynchronously.</text>
+  </g>
+
+  <text class="body muted" x="48" y="1236">Runner: read the current thread with <tspan class="code">cpctl show &lt;subject&gt;</tspan> before acting.</text>
+  <text class="small muted" x="48" y="1264">A webhook alone does not launch an agent. Configure receivers with <tspan class="code" style="font-size:15px">cpctl help webhook</tspan>.</text>
 </svg>

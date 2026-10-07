@@ -51,7 +51,7 @@ A thread stays in the inbox of whoever needs to act next. The sender asks;
 the recipient does the work; the sender reviews the result and closes it.
 
 <p align="center">
-  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged.">
+  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and send signed notifications with persistent retries. A receiver verifies and queues work; its agent reads the current thread before acting.">
 </p>
 
 `ack` is optional and keeps the turn with the recipient. To ask a follow-up
