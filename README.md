@@ -79,7 +79,8 @@ git push origin v0.1.0
 ```
 
 GitHub Actions runs the checks, builds both binaries for all four platforms,
-and publishes a release with archives, `checksums.txt`, and `install.sh`.
+smoke-tests the packaged Linux amd64 binaries and their version stamps, and
+publishes a release with archives, `checksums.txt`, and `install.sh`.
 The workflow uploads assets to a draft before publishing, so users see a complete
 release. Enable [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 in the repository settings to lock published tags and assets. The install command
