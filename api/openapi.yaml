@@ -1,0 +1,873 @@
+openapi: 3.1.0
+info:
+  title: clanker-proxy API
+  version: 1.0.0
+  license:
+    name: MIT
+    identifier: MIT
+  description: >-
+    One API with three access levels, declared per operation and checked
+    before any handler runs. **owner** (the default): the daemon's owner,
+    with the token in `<dir>/owner.token`; cpctl uses it. **peer**: another
+    daemon, with the secret it shares with this one; it identifies which peer
+    is calling. **public**: no token; only `getHealth` and `requestPeering`.
+    This spec is the source of truth for `api/rest` (server and client).
+servers:
+  - url: /
+    description: The daemon
+security:
+  - ownerToken: []
+tags:
+  - name: system
+    description: Health and the owner.
+  - name: peering
+    description: Becoming and managing peers.
+  - name: threads
+    description: Conversations with peers.
+  - name: federation
+    description: What peers call.
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      tags: [system]
+      summary: Report daemon health
+      description: >-
+        Answers while the daemon is serving; for load balancers and uptime checks.
+      security: []
+      responses:
+        '200':
+          description: The daemon is serving.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/me:
+    get:
+      operationId: getMe
+      tags: [system]
+      summary: Read the owner's name and public URL
+      description: >-
+        The name this daemon offers peers, and the URL it gives them to call back on.
+      responses:
+        '200':
+          description: The owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/peering-requests:
+    post:
+      operationId: requestPeering
+      tags: [peering]
+      summary: Ask to become a peer
+      description: >-
+        Another daemon asks this one's owner to accept it as a peer, offering
+        the secret both will use. Nothing is accepted from it until the owner
+        approves. Requests expire after a week; at most 20 wait, and a new
+        one drops the oldest.
+      security: []
+      requestBody:
+        description: The requester and the secret it offers.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PeeringRequest'
+      responses:
+        '202':
+          description: The request waits for the owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestReceipt'
+        default:
+          $ref: '#/components/responses/Problem'
+    get:
+      operationId: listRequests
+      tags: [peering]
+      summary: List pending peering requests
+      description: >-
+        Requests not yet approved or denied, from the last week. Compare each code with the requester before approving.
+      responses:
+        '200':
+          description: Pending requests, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/peering-requests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/RequestID'
+    delete:
+      operationId: denyRequest
+      tags: [peering]
+      summary: Deny a peering request
+      description: >-
+        Drops the request; nothing is sent to the requester.
+      responses:
+        '204':
+          description: The request is gone.
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/peering-requests/{id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/RequestID'
+    post:
+      operationId: approveRequest
+      tags: [peering]
+      summary: Approve a peering request
+      description: >-
+        First calls the requester's daemon, at the URL it gave, with the
+        secret it offered: only if that daemon confirms does the requester
+        become a peer, under the name given or the one they asked for. So a
+        request cannot claim someone else's URL. Fails with 502 when their
+        daemon does not confirm; the request stays. If confirmation is
+        interrupted, the request and any previous peer are restored.
+      requestBody:
+        description: What to call the new peer.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Approval'
+      responses:
+        '201':
+          description: The new peer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Peer'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/peers:
+    get:
+      operationId: listPeers
+      tags: [peering]
+      summary: List peers
+      description: >-
+        Every peer, requested or active.
+      responses:
+        '200':
+          description: Every peer, by name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PeerList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: addPeer
+      tags: [peering]
+      summary: Ask another daemon to become peers
+      description: >-
+        Makes a secret, sends it with a peering request to the daemon at
+        `url`, and saves the peer as `requested`. Events to them queue until
+        their owner approves; then they deliver. Fails with 502 when their
+        daemon cannot be reached, and saves nothing. Fails with 409 when
+        the name or URL already belongs to a peer; each daemon has one name
+        here. Trailing slashes on daemon URLs are removed.
+      requestBody:
+        description: Who to ask, and where.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PeerInput'
+      responses:
+        '201':
+          description: The requested peer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Peer'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/peers/{name}:
+    parameters:
+      - $ref: '#/components/parameters/PeerName'
+    get:
+      operationId: getPeer
+      tags: [peering]
+      summary: Read a peer
+      description: >-
+        One peer, with the short code of the secret you share.
+      responses:
+        '200':
+          description: The peer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Peer'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: removePeer
+      tags: [peering]
+      summary: Remove a peer
+      description: >-
+        Their secret stops working and undelivered events to them fail.
+        Threads are kept, so their name can later go only to a peer at the
+        same URL.
+      responses:
+        '204':
+          description: The peer is gone.
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/threads:
+    get:
+      operationId: listThreads
+      tags: [threads]
+      summary: List threads
+      description: Newest activity first.
+      parameters:
+        - name: turn
+          in: query
+          description: >-
+            Whose move it is. `mine`: waiting on the owner. `theirs`: waiting
+            on the peer. `none`: ended.
+          schema:
+            type: string
+            enum: [mine, theirs, none]
+        - name: state
+          in: query
+          description: Only threads in this state.
+          schema:
+            $ref: '#/components/schemas/ThreadState'
+        - name: peer
+          in: query
+          description: Only threads with this peer.
+          schema:
+            $ref: '#/components/schemas/Name'
+        - name: label
+          in: query
+          description: Only threads with this label.
+          schema:
+            $ref: '#/components/schemas/Label'
+        - name: limit
+          in: query
+          description: At most this many threads.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: Matching threads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: openThread
+      tags: [threads]
+      summary: Open a thread with a peer
+      description: The thread is stored and queued for delivery to the peer.
+      requestBody:
+        description: The thread to open.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewThread'
+      responses:
+        '201':
+          description: The new thread, without its events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadSummary'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/threads/{ref}:
+    parameters:
+      - $ref: '#/components/parameters/ThreadRef'
+    get:
+      operationId: getThread
+      tags: [threads]
+      summary: Read a thread and its events
+      description: >-
+        The thread's summary and every event, in the order both daemons replay them.
+      responses:
+        '200':
+          description: The thread.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thread'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/threads/{ref}/events:
+    parameters:
+      - $ref: '#/components/parameters/ThreadRef'
+    post:
+      operationId: actOnThread
+      tags: [threads]
+      summary: Reply to a thread or move it on
+      description: >-
+        Fails with 409 when the owner may not take the action now; the
+        thread's `actions` lists the ones they may.
+      requestBody:
+        description: The action, with an optional body.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThreadAction'
+      responses:
+        '200':
+          description: The thread with the event applied, without its events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadSummary'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/stream:
+    get:
+      operationId: streamEvents
+      tags: [threads]
+      summary: Stream thread changes
+      description: >-
+        Server-sent events. `thread`: a `ThreadSummary`, sent whenever a thread
+        changes: an event sent or received, or a delivery that succeeded or
+        failed. A `: ping` comment keeps idle connections open. Nothing is
+        replayed on connect; list threads first, then follow the stream.
+      responses:
+        '200':
+          description: Server-sent `thread` events.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ThreadSummary'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/federation/events:
+    post:
+      operationId: deliverEvent
+      tags: [federation]
+      summary: Deliver an event from a peer
+      description: >-
+        The peer's secret says who sent it. Delivering the same event again is
+        harmless and answers `duplicate`. Fails with 422 when its thread is
+        unknown or not shared with this peer, or its clock is not after the
+        peer's earlier events in the thread; with 503, to retry later, when
+        it is dated more than ten minutes ahead.
+      security:
+        - peerSecret: []
+      requestBody:
+        description: The event, without sender or recipient; the secret says who sent it.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Event'
+      responses:
+        '200':
+          description: The event is stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Receipt'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/federation/accepted:
+    post:
+      operationId: notifyPeeringAccepted
+      tags: [federation]
+      summary: Say a peering request was approved
+      description: >-
+        The approving daemon calls this with the shared secret, so the
+        requester starts delivering at once instead of at its next retry.
+      security:
+        - peerSecret: []
+      responses:
+        '204':
+          description: Noted.
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  securitySchemes:
+    ownerToken:
+      type: http
+      scheme: bearer
+      description: The owner token, from `<dir>/owner.token`.
+    peerSecret:
+      type: http
+      scheme: bearer
+      description: The secret shared with one peer.
+  parameters:
+    RequestID:
+      name: id
+      in: path
+      required: true
+      description: The request's short ID, from listRequests.
+      schema:
+        $ref: '#/components/schemas/RequestRef'
+    PeerName:
+      name: name
+      in: path
+      required: true
+      description: The peer's name.
+      schema:
+        $ref: '#/components/schemas/Name'
+    ThreadRef:
+      name: ref
+      in: path
+      required: true
+      description: The thread's ID or a unique prefix of at least 4 characters.
+      schema:
+        type: string
+        minLength: 4
+        maxLength: 36
+  responses:
+    Problem:
+      description: An error, as an RFC 9457 problem.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Name:
+      type: string
+      description: >-
+        A participant's name: lower-case letters,
+        digits and single inner hyphens, at most 39 characters.
+      minLength: 1
+      maxLength: 39
+      pattern: '^[a-z0-9](-?[a-z0-9])*$'
+      examples: [savid]
+    Label:
+      type: string
+      description: A tag on a thread, such as a project or repository.
+      minLength: 1
+      maxLength: 40
+      pattern: '^[a-z0-9][a-z0-9._/-]*$'
+      examples: [infra]
+    Labels:
+      type: array
+      description: A thread's labels, unique and sorted.
+      maxItems: 10
+      uniqueItems: true
+      items:
+        $ref: '#/components/schemas/Label'
+    ID:
+      type: string
+      description: A lower-case UUID.
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      maxLength: 36
+    Title:
+      type: string
+      description: A thread's one-line title, at most 200 characters.
+      minLength: 1
+      maxLength: 200
+    Body:
+      type: string
+      description: Markdown, at most 65536 characters.
+      maxLength: 65536
+    Note:
+      type: string
+      description: A message for the other owner.
+      maxLength: 500
+    Code:
+      type: string
+      description: >-
+        A shared secret's short code: the first 8 hex digits of its SHA-256.
+        Both owners see the same code; comparing them over chat confirms a
+        peering request came from who it says.
+      pattern: '^[0-9a-f]{4}-[0-9a-f]{4}$'
+      maxLength: 9
+      examples: ['4f2a-91c3']
+    RequestRef:
+      type: string
+      description: A pending peering request's short ID.
+      pattern: '^[0-9a-f]{8}$'
+      maxLength: 8
+      examples: ['3e7b10c2']
+    Count:
+      type: integer
+      description: A count.
+      format: int32
+      minimum: 0
+      maximum: 1000000
+    DaemonURL:
+      type: string
+      format: uri
+      description: >-
+        A daemon's base URL: absolute http or https with a host, at most 512
+        characters (checked by the server; ogen cannot bound a URI).
+      maxLength: 512
+      examples: ['https://cp.example.com']
+    Health:
+      description: >-
+        The daemon is up.
+      type: object
+      required: [status, at]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        at:
+          type: string
+          format: date-time
+          description: The daemon's clock when it answered.
+    Me:
+      description: >-
+        The daemon's owner, as peers see them.
+      type: object
+      required: [name, version]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/DaemonURL'
+        version:
+          type: string
+    PeeringRequest:
+      description: >-
+        One daemon asking another to become peers.
+      type: object
+      required: [name, url, secret]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/DaemonURL'
+        secret:
+          type: string
+          description: The secret both daemons will use, as `cpp_` and 43 base64url characters.
+          pattern: '^cpp_[A-Za-z0-9_-]{43}$'
+          writeOnly: true
+        note:
+          $ref: '#/components/schemas/Note'
+    RequestReceipt:
+      description: >-
+        A peering request was received and waits for the owner.
+      type: object
+      required: [status, code]
+      properties:
+        status:
+          type: string
+          enum: [pending]
+        code:
+          $ref: '#/components/schemas/Code'
+    Request:
+      description: >-
+        A peering request waiting for the owner.
+      type: object
+      required: [id, name, url, code, at]
+      properties:
+        id:
+          $ref: '#/components/schemas/RequestRef'
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/DaemonURL'
+        note:
+          $ref: '#/components/schemas/Note'
+        code:
+          $ref: '#/components/schemas/Code'
+        at:
+          type: string
+          format: date-time
+    RequestList:
+      description: >-
+        Pending peering requests.
+      type: object
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/Request'
+    Approval:
+      description: >-
+        How to approve a peering request.
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+    PeerInput:
+      description: >-
+        Who to ask to become peers.
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/DaemonURL'
+        note:
+          $ref: '#/components/schemas/Note'
+    Peer:
+      description: >-
+        A daemon this one exchanges threads with.
+      type: object
+      required: [name, url, status, code, addedAt]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/DaemonURL'
+        status:
+          type: string
+          description: >-
+            `requested`: waiting for their owner to approve. `active`: both
+            sides accept the secret.
+          enum: [requested, active]
+        code:
+          $ref: '#/components/schemas/Code'
+        addedAt:
+          type: string
+          format: date-time
+    PeerList:
+      description: >-
+        Peers, by name.
+      type: object
+      required: [peers]
+      properties:
+        peers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Peer'
+    ThreadState:
+      description: >-
+        Where a thread is in its workflow. `closed`, `declined` and `withdrawn` end it; a closed thread can be reopened.
+      type: string
+      enum: [open, acked, needs-input, resolved, closed, declined, withdrawn]
+    ThreadKind:
+      description: >-
+        `request`: a resolution is expected. `fyi`: none is; acknowledging it closes it.
+      type: string
+      enum: [request, fyi]
+    Action:
+      description: >-
+        What an event does. The recipient acks, asks (`needs-input`), resolves and declines; the sender closes, reopens and withdraws; either comments.
+      type: string
+      enum: [open, comment, ack, needs-input, resolve, close, reopen, decline, withdraw]
+    NewThread:
+      description: >-
+        A thread to open with a peer.
+      type: object
+      required: [to, title]
+      properties:
+        to:
+          $ref: '#/components/schemas/Name'
+        title:
+          $ref: '#/components/schemas/Title'
+        kind:
+          $ref: '#/components/schemas/ThreadKind'
+        labels:
+          $ref: '#/components/schemas/Labels'
+        body:
+          $ref: '#/components/schemas/Body'
+    ThreadAction:
+      description: >-
+        A reply or a move on a thread.
+      type: object
+      required: [action]
+      properties:
+        action:
+          $ref: '#/components/schemas/Action'
+        body:
+          $ref: '#/components/schemas/Body'
+    Event:
+      type: object
+      description: >-
+        One step in a thread, as daemons exchange it. Who sent it is the peer
+        whose secret delivered it; it is for the receiving daemon's owner.
+      required: [id, thread, at, clock, action]
+      properties:
+        id:
+          $ref: '#/components/schemas/ID'
+        thread:
+          $ref: '#/components/schemas/ID'
+        at:
+          type: string
+          format: date-time
+          description: When it was written, by its author's clock; for display only.
+        clock:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1000000000
+          description: >-
+            Orders the thread: 1 for the open, then one more than the highest
+            clock its author had seen in the thread.
+        action:
+          $ref: '#/components/schemas/Action'
+        title:
+          $ref: '#/components/schemas/Title'
+        kind:
+          $ref: '#/components/schemas/ThreadKind'
+        labels:
+          $ref: '#/components/schemas/Labels'
+        body:
+          $ref: '#/components/schemas/Body'
+    Receipt:
+      description: >-
+        An event was stored, or already had been.
+      type: object
+      required: [id, duplicate]
+      properties:
+        id:
+          $ref: '#/components/schemas/ID'
+        duplicate:
+          type: boolean
+          description: The event was already stored.
+    ThreadSummary:
+      description: >-
+        A thread without its events.
+      type: object
+      required: [id, title, kind, labels, sender, recipient, peer, role, state, myTurn, actions, openedAt, updatedAt, events, undelivered, failed]
+      properties:
+        id:
+          $ref: '#/components/schemas/ID'
+        title:
+          $ref: '#/components/schemas/Title'
+        kind:
+          $ref: '#/components/schemas/ThreadKind'
+        labels:
+          $ref: '#/components/schemas/Labels'
+        sender:
+          $ref: '#/components/schemas/Name'
+        recipient:
+          $ref: '#/components/schemas/Name'
+        peer:
+          $ref: '#/components/schemas/Name'
+        role:
+          type: string
+          description: >-
+            The owner's part. `sender`: they opened it and close, reopen or
+            withdraw it. `recipient`: they were asked and ack, ask, resolve
+            or decline it.
+          enum: [sender, recipient]
+        state:
+          $ref: '#/components/schemas/ThreadState'
+        turn:
+          $ref: '#/components/schemas/Name'
+        myTurn:
+          type: boolean
+          description: The thread is waiting on the owner.
+        actions:
+          type: array
+          description: >-
+            What the owner may do now, for actOnThread. `comment` is always
+            among them.
+          items:
+            $ref: '#/components/schemas/Action'
+        openedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        events:
+          $ref: '#/components/schemas/Count'
+        undelivered:
+          $ref: '#/components/schemas/Count'
+        failed:
+          $ref: '#/components/schemas/Count'
+    Thread:
+      description: >-
+        A thread and its events.
+      allOf:
+        - $ref: '#/components/schemas/ThreadSummary'
+        - type: object
+          required: [log]
+          properties:
+            log:
+              type: array
+              description: The thread's events in replay order.
+              items:
+                $ref: '#/components/schemas/ThreadEvent'
+    ThreadEvent:
+      description: >-
+        One event in a thread, as this daemon holds it.
+      type: object
+      required: [id, from, at, action]
+      properties:
+        id:
+          $ref: '#/components/schemas/ID'
+        from:
+          $ref: '#/components/schemas/Name'
+        at:
+          type: string
+          format: date-time
+        action:
+          $ref: '#/components/schemas/Action'
+        body:
+          $ref: '#/components/schemas/Body'
+        ignored:
+          type: string
+          description: >-
+            Why the event did not change the thread: the other side's action
+            came first, or it was not its author's to take. Its body still
+            stands.
+        delivery:
+          $ref: '#/components/schemas/Delivery'
+    Delivery:
+      description: >-
+        How the owner's event is getting to the peer; absent on the peer's
+        events.
+      type: object
+      required: [status, attempts]
+      properties:
+        status:
+          type: string
+          description: >-
+            `pending`: not yet delivered; retried with backoff for a week.
+            `delivered`: the peer stored it. `failed`: never to be delivered:
+            the peer refused it, retries ran out, or the peer was removed.
+          enum: [pending, delivered, failed]
+        attempts:
+          $ref: '#/components/schemas/Count'
+        lastError:
+          type: string
+        nextAttemptAt:
+          type: string
+          format: date-time
+        deliveredAt:
+          type: string
+          format: date-time
+    ThreadList:
+      description: >-
+        Threads, newest activity first.
+      type: object
+      required: [threads]
+      properties:
+        threads:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThreadSummary'
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
