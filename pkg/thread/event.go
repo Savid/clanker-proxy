@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -24,6 +25,12 @@ const (
 	MaxLabels = 10
 	MaxLabel  = 40
 	MaxClock  = 1_000_000_000
+)
+
+// Limits on a whole thread, so neither side can grow one without bound.
+const (
+	MaxEvents     = 1000
+	MaxThreadBody = 4 << 20
 )
 
 // Action is what an event does to its thread.
@@ -173,8 +180,8 @@ func (e Event) Validate() error {
 		add("action %q: want one of %v", e.Action, Actions())
 	}
 
-	if !utf8.ValidString(e.Body) || utf8.RuneCountInString(e.Body) > MaxBody {
-		add("body: want UTF-8 of at most %d characters", MaxBody)
+	if !utf8.ValidString(e.Body) || utf8.RuneCountInString(e.Body) > MaxBody || strings.ContainsFunc(e.Body, control) {
+		add("body: want UTF-8 of at most %d characters, without control characters but tab and line breaks", MaxBody)
 	}
 
 	if e.Action == ActionOpen {
@@ -194,7 +201,7 @@ func (e Event) validateOpen() []error {
 	}
 
 	if t := strings.TrimSpace(e.Title); t == "" || t != e.Title || !utf8.ValidString(e.Title) ||
-		utf8.RuneCountInString(e.Title) > MaxTitle || strings.ContainsAny(e.Title, "\r\n") {
+		utf8.RuneCountInString(e.Title) > MaxTitle || strings.ContainsFunc(e.Title, unicode.IsControl) {
 		errs = append(errs, fmt.Errorf("open: title must be one trimmed line of 1 to %d characters", MaxTitle))
 	}
 
@@ -217,4 +224,10 @@ func (e Event) validateOpen() []error {
 	}
 
 	return errs
+}
+
+// control reports a control character other than tab and line breaks,
+// which a body may hold. The rest can rewrite a reader's terminal.
+func control(r rune) bool {
+	return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
 }

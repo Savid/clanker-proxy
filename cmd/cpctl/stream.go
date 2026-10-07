@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/savid/clanker-proxy/api/rest"
@@ -187,10 +188,14 @@ func runWait(a *app, pos []string, timeout time.Duration) error {
 }
 
 // wait retries waitOnce across dropped connections until it succeeds, the
-// daemon refuses, or ctx ends.
+// daemon refuses, or ctx ends. A daemon that was never reached is reported,
+// not retried: waiting on it would only hide that it is down.
 func (a *app) wait(ctx context.Context, ref string) (rest.ThreadSummary, error) {
+	reached := false
+
 	for {
-		t, err := a.waitOnce(ctx, ref)
+		t, opened, err := a.waitOnce(ctx, ref)
+		reached = reached || opened
 
 		switch {
 		case err == nil:
@@ -199,7 +204,7 @@ func (a *app) wait(ctx context.Context, ref string) (rest.ThreadSummary, error) 
 			return t, errTimeout
 		case ctx.Err() != nil:
 			return t, ctx.Err()
-		case isStreamRefusal(err):
+		case isStreamRefusal(err), !reached && isUnreachable(err):
 			return t, err
 		}
 
@@ -211,45 +216,57 @@ func (a *app) wait(ctx context.Context, ref string) (rest.ThreadSummary, error) 
 }
 
 // waitOnce subscribes, then checks the current state, so no change between
-// the two is missed; then follows the stream until the wait is over.
-func (a *app) waitOnce(ctx context.Context, ref string) (rest.ThreadSummary, error) {
+// the two is missed; then follows the stream until the wait is over. It
+// reports whether the stream opened.
+func (a *app) waitOnce(ctx context.Context, ref string) (rest.ThreadSummary, bool, error) {
 	s, err := a.openStream(ctx)
 	if err != nil {
-		return rest.ThreadSummary{}, err
+		return rest.ThreadSummary{}, false, err
 	}
 	defer s.close()
 
 	if ref == "" {
-		return a.waitAny(ctx, s)
+		t, anyErr := a.waitAny(ctx, s)
+
+		return t, true, anyErr
 	}
 
 	th, err := a.client.GetThread(ctx, rest.GetThreadParams{Ref: ref})
 	if err != nil {
-		return rest.ThreadSummary{}, err
+		return rest.ThreadSummary{}, true, err
 	}
 
 	if sum := summaryOf(th); ready(sum) {
-		return sum, nil
+		return sum, true, nil
 	}
 
-	return s.until(func(t rest.ThreadSummary) bool { return t.ID == th.ID && ready(t) })
+	t, err := s.until(func(t rest.ThreadSummary) bool { return t.ID == th.ID && ready(t) })
+
+	return t, true, err
 }
 
-// waitAny returns the newest thread waiting on the owner, waiting for one
-// if there is none.
+// waitAny returns the newest unanswered thread, waiting for one if there is
+// none. A thread the owner has acked or replied to does not count until
+// the peer moves again, so a wait right after acting does not end at once.
 func (a *app) waitAny(ctx context.Context, s *stream) (rest.ThreadSummary, error) {
 	l, err := a.client.ListThreads(ctx, rest.ListThreadsParams{
-		Turn: rest.NewOptListThreadsTurn(rest.ListThreadsTurnMine), Limit: rest.NewOptInt32(1),
+		Turn: rest.NewOptListThreadsTurn(rest.ListThreadsTurnMine), Limit: rest.NewOptInt32(500),
 	})
 	if err != nil {
 		return rest.ThreadSummary{}, err
 	}
 
-	if len(l.Threads) > 0 {
-		return l.Threads[0], nil
+	for _, t := range l.Threads {
+		if unanswered(t) {
+			return t, nil
+		}
 	}
 
-	return s.until(func(t rest.ThreadSummary) bool { return t.MyTurn })
+	return s.until(unanswered)
+}
+
+func isUnreachable(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || isDialError(err)
 }
 
 func isStreamRefusal(err error) bool {

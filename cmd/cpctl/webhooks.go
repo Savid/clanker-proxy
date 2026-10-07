@@ -54,7 +54,7 @@ func webhookCommands() []*command {
 	}
 }
 
-type webhookFlags struct{ url, urlFile, events, origin, secret, enabled, headers, signing string }
+type webhookFlags struct{ urlFile, events, origin, secret, enabled, headers, signing string }
 
 func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 	events := fs.String("events", "*", "comma-separated event `types`, or '*' alone")
@@ -83,7 +83,7 @@ func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 		if err != nil {
 			return err
 		}
-		cfg := webhook.Config{Name: pos[0], Type: *kind, URL: destination, Secret: key, Headers: headers, Events: strings.Split(*events, ","), Origin: *origin, Enabled: true}
+		cfg := webhook.Config{Name: string(name(pos[0])), Type: *kind, URL: destination, Secret: key, Headers: headers, Events: strings.Split(*events, ","), Origin: *origin, Enabled: true}
 		if err = cfg.Validate(); err != nil {
 			return usageError("%v", err)
 		}
@@ -97,7 +97,6 @@ func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 
 func webhookSetFlags(fs *flag.FlagSet) func(*app, []string) error {
 	f := &webhookFlags{}
-	fs.StringVar(&f.url, "url", "", "new destination URL")
 	fs.StringVar(&f.urlFile, "url-file", "", "private file containing the new URL; - reads stdin")
 	fs.StringVar(&f.events, "events", "", "comma-separated event types, or '*' alone")
 	fs.StringVar(&f.origin, "origin", "", "incoming, outgoing or both")
@@ -112,14 +111,14 @@ func webhookSetFlags(fs *flag.FlagSet) func(*app, []string) error {
 		if err := oneStdin(f.urlFile, f.secret, f.headers); err != nil {
 			return err
 		}
-		return runWebhookSet(a, pos[0], f)
+		return runWebhookSet(a, string(name(pos[0])), f)
 	}
 }
 
-func runWebhookSet(a *app, name string, f *webhookFlags) error {
+func runWebhookSet(a *app, webhookName string, f *webhookFlags) error {
 	req := &rest.WebhookUpdate{}
-	if f.url != "" || f.urlFile != "" {
-		u, err := a.webhookDestination(f.url, f.urlFile)
+	if f.urlFile != "" {
+		u, err := a.webhookDestination("", f.urlFile)
 		if err != nil {
 			return err
 		}
@@ -158,7 +157,7 @@ func runWebhookSet(a *app, name string, f *webhookFlags) error {
 		}
 		req.Headers = wireWebhookHeaders(headers)
 	}
-	hook, err := a.client.UpdateWebhook(a.ctx, req, rest.UpdateWebhookParams{Name: rest.Name(name)})
+	hook, err := a.client.UpdateWebhook(a.ctx, req, rest.UpdateWebhookParams{Name: rest.Name(webhookName)})
 	if err != nil {
 		return err
 	}
@@ -276,9 +275,13 @@ func printWebhook(a *app, h *rest.Webhook) error {
 			fmt.Fprintf(w, "headers: %v (values hidden)\n", h.HeaderNames)
 		}
 		steps := []step{{"cpctl webhook deliveries " + string(h.Name), "inspect delivery status"}}
-		if until, ok := h.PausedUntil.Get(); ok {
-			fmt.Fprintf(w, "paused until %s after failed attempts\n", until.UTC().Format(time.RFC3339))
-			steps = append(steps, step{"cpctl webhook set " + string(h.Name) + " -enabled=true", "resume now, once the receiver is fixed"})
+		switch until, backingOff := h.PausedUntil.Get(); {
+		case !h.Enabled:
+			fmt.Fprintln(w, "disabled: no new notifications are queued, and queued ones wait")
+			steps = append(steps, step{"cpctl webhook set " + string(h.Name) + " -enabled=true", "enable it again"})
+		case backingOff:
+			fmt.Fprintf(w, "backing off until %s after failed attempts\n", until.UTC().Format(time.RFC3339))
+			steps = append(steps, step{"cpctl webhook set " + string(h.Name) + " -enabled=true", "retry now, once the receiver is fixed"})
 		}
 		next(w, steps...)
 	})
@@ -311,7 +314,7 @@ func runWebhooks(a *app, _ []string) error {
 }
 
 func runWebhookShow(a *app, pos []string) error {
-	h, err := a.client.GetWebhook(a.ctx, rest.GetWebhookParams{Name: rest.Name(pos[0])})
+	h, err := a.client.GetWebhook(a.ctx, rest.GetWebhookParams{Name: name(pos[0])})
 	if err != nil {
 		return err
 	}
@@ -319,13 +322,10 @@ func runWebhookShow(a *app, pos []string) error {
 }
 
 func runWebhookRemove(a *app, pos []string) error {
-	if err := a.client.DeleteWebhook(a.ctx, rest.DeleteWebhookParams{Name: rest.Name(pos[0])}); err != nil {
+	if err := a.client.DeleteWebhook(a.ctx, rest.DeleteWebhookParams{Name: name(pos[0])}); err != nil {
 		return err
 	}
-	if !a.json {
-		fmt.Fprintf(a.stdout, "deleted webhook %s and its delivery history\n", pos[0])
-		next(a.stdout, step{"cpctl webhook ls", "see remaining webhooks"})
-	}
+	a.done(fmt.Sprintf("deleted webhook %s and its delivery history", name(pos[0])), step{"cpctl webhook ls", "see remaining webhooks"})
 	return nil
 }
 
@@ -337,7 +337,7 @@ func webhookDeliveryFlags(fs *flag.FlagSet) func(*app, []string) error {
 		if *limit < 1 || *limit > 100 {
 			return usageError("-limit must be between 1 and 100")
 		}
-		p := rest.ListWebhookDeliveriesParams{Name: rest.Name(pos[0]), Limit: rest.NewOptInt32(int32(*limit))}
+		p := rest.ListWebhookDeliveriesParams{Name: name(pos[0]), Limit: rest.NewOptInt32(int32(*limit))}
 		if *cursor != "" {
 			p.Cursor = rest.NewOptString(*cursor)
 		}
@@ -388,13 +388,10 @@ func runWebhookDeliveries(a *app, p rest.ListWebhookDeliveriesParams) error {
 }
 
 func runWebhookRetry(a *app, pos []string) error {
-	if err := a.client.RetryWebhookDelivery(a.ctx, rest.RetryWebhookDeliveryParams{Name: rest.Name(pos[0]), ID: rest.ID(pos[1])}); err != nil {
+	if err := a.client.RetryWebhookDelivery(a.ctx, rest.RetryWebhookDeliveryParams{Name: name(pos[0]), ID: rest.ID(pos[1])}); err != nil {
 		return err
 	}
-	if !a.json {
-		fmt.Fprintf(a.stdout, "delivery %s queued\n", pos[1])
-		next(a.stdout, step{"cpctl webhook deliveries " + pos[0], "check the next attempt"})
-	}
+	a.done("delivery "+pos[1]+" queued", step{"cpctl webhook deliveries " + string(name(pos[0])), "check the next attempt"})
 	return nil
 }
 

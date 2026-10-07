@@ -100,9 +100,9 @@ cpctl webhook add phone https://gotify.example.com/message \
 
 Headers also support custom receivers and reverse proxies. There can be at most
 16, with case-insensitively unique names (up to 64 bytes) and single-line values
-(up to 4096 bytes). Transport, `Content-Type`, `User-Agent`, `Proxy-*`, and
-`Webhook-*` and `Idempotency-Key` headers are managed by `cpd` and cannot be overridden. For ntfy,
-a `Title` header replaces the generated title. Header files and URLs are stored in the daemon's
+(up to 4096 bytes). Transport, `Content-Type`, `User-Agent`, `Idempotency-Key`,
+`Proxy-*` and `Webhook-*` headers are managed by `cpd` and cannot be overridden.
+For ntfy, a `Title` header replaces the generated title. Header files and URLs are stored in the daemon's
 private database; they are not reread from the CLI machine on delivery.
 
 ### Apprise for additional services
@@ -234,14 +234,18 @@ signature. Each webhook receives its own delivery ID for the same source event.
 Return `2xx` promptly after durably queuing the notification. Do agent work
 asynchronously; the HTTP request has a ten-second timeout. A runner should
 serialize work per thread and reread its current state, since notifications
-can arrive late, more than once, or out of order. The runner uses its separately
-configured owner credential for `cpctl`; the webhook signing key grants no API access.
+can arrive late, more than once, or out of order. Give the runner an agent token
+for `cpctl` (`cpctl token add`), which can only act on threads; the webhook
+signing key grants no API access.
 
 ## Delivery and management
 
-Notifications are queued atomically with their source event. Each endpoint has
-independent retry state, and sends one request at a time; up to four endpoints
-send concurrently.
+Notifications are queued atomically with their source event. A notification not
+yet delivered is replaced by a newer one of the same type about the same thread,
+and pending peering notifications by the newest, so a burst of events sends one
+notification rather than one each; read the thread for everything that changed.
+Each endpoint has independent retry state, and sends one request at a time; up
+to four endpoints send concurrently.
 
 - `2xx`: delivered.
 - Connection failures, `408`, `429`, and `5xx`: retry, starting with a 15-second delay

@@ -118,29 +118,31 @@ func floodPeeringRequests(t *testing.T, st *Store, t0 time.Time) {
 	}
 }
 
+// assertBoundedPeering checks that the flood left each endpoint its delivered
+// peering notifications, one pending peering notification for the newest
+// request, and the earlier thread notification.
 func assertBoundedPeering(t *testing.T, st *Store) {
 	t.Helper()
 	ctx := t.Context()
-	var err error
 	for i := range 32 {
 		name := fmt.Sprintf("h%d", i)
-		ds, readErr := st.WebhookDeliveries(ctx, name, WebhookFilter{})
-		if readErr != nil || len(ds) != 100 {
-			t.Fatal("incorrect history size")
-		}
-		var peeringCount, threadCount int
-		if err = st.db.QueryRowContext(ctx, `SELECT count(*) FROM webhook_deliveries WHERE webhook=? AND event='peering.requested'`, name).Scan(&peeringCount); err != nil || peeringCount != MaxPeeringNotifications {
-			t.Fatalf("peering count=%d error=%v", peeringCount, err)
-		}
-		if err = st.db.QueryRowContext(ctx, `SELECT count(*) FROM webhook_deliveries WHERE webhook=? AND event='thread.open'`, name).Scan(&threadCount); err != nil || threadCount != 1 {
-			t.Fatal("thread notification was trimmed")
-		}
-		var payload webhook.Payload
-		if err = json.Unmarshal(ds[99].Payload, &payload); err != nil {
+		var delivered, pending, threads int
+		if err := st.db.QueryRowContext(ctx, `SELECT
+ (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='peering.requested' AND status='delivered'),
+ (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='peering.requested' AND status='pending'),
+ (SELECT count(*) FROM webhook_deliveries WHERE webhook=?1 AND event='thread.open')`, name).Scan(&delivered, &pending, &threads); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Subject != fmt.Sprintf("%08x", 50) {
-			t.Fatalf("retained wrong oldest peering subject: %s", payload.Subject)
+		if delivered != 10 || pending != 1 || threads != 1 {
+			t.Fatalf("%s: delivered=%d pending=%d threads=%d", name, delivered, pending, threads)
+		}
+		head := historyHead(t, st, name)
+		var payload webhook.Payload
+		if err := json.Unmarshal(head.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if head.Status != "pending" || payload.Subject != fmt.Sprintf("%08x", 149) {
+			t.Fatalf("%s: pending peering notification is %s %s, want the newest request", name, head.Status, payload.Subject)
 		}
 	}
 }

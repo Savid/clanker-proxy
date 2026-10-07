@@ -796,7 +796,8 @@ func (s *Server) handleCreateWebhookRequest(args [0]string, argsEscaped bool, w 
 
 // handleDeleteAgentTokenRequest handles deleteAgentToken operation.
 //
-// The token stops working at once, including in open streams.
+// The token stops working at once. A stream it opened sends nothing more and closes at its next event
+// or keepalive.
 //
 // DELETE /api/v1/agent-tokens/{name}
 func (s *Server) handleDeleteAgentTokenRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -3275,7 +3276,7 @@ func (s *Server) handleRemovePeerRequest(args [1]string, argsEscaped bool, w htt
 //
 // Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
 // Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
-// and a new one drops the oldest.
+// and a new one drops the oldest. Past 10 requests a minute it answers 503.
 //
 // POST /api/v1/peering-requests
 func (s *Server) handleRequestPeeringRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

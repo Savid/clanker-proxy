@@ -41,18 +41,20 @@ type Delivery struct {
 // Summary is a thread's listing row: its replayed state and its outbox
 // counts.
 type Summary struct {
-	ID          string
-	Title       string
-	Kind        thread.Kind
-	Labels      []string
-	Sender      string
-	Recipient   string
-	Peer        string
-	State       thread.State
-	Turn        string
-	OpenedAt    time.Time
-	UpdatedAt   time.Time
-	Events      int
+	ID        string
+	Title     string
+	Kind      thread.Kind
+	Labels    []string
+	Sender    string
+	Recipient string
+	Peer      string
+	State     thread.State
+	Turn      string
+	OpenedAt  time.Time
+	UpdatedAt time.Time
+	Events    int
+	// LastFrom wrote the thread's last event in replay order.
+	LastFrom    string
 	Undelivered int
 	Failed      int
 }
@@ -63,7 +65,7 @@ func Projection(t thread.Thread, self string) Summary {
 		ID: t.ID, Title: t.Title, Kind: t.Kind, Labels: t.Labels,
 		Sender: t.Sender, Recipient: t.Recipient, Peer: t.Peer(self),
 		State: t.State, Turn: t.Turn(), OpenedAt: t.OpenedAt, UpdatedAt: t.UpdatedAt,
-		Events: len(t.Events),
+		Events: len(t.Events), LastFrom: t.Events[len(t.Events)-1].From,
 	}
 }
 
@@ -118,12 +120,12 @@ func (s *Store) AddEvent(ctx context.Context, e Event, outbox bool, projection S
 
 		p := projection
 		if _, err = tx.ExecContext(ctx, `INSERT INTO threads
-			(id, title, kind, labels, sender, recipient, peer, state, turn, opened_at, updated_at, events)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, title, kind, labels, sender, recipient, peer, state, turn, opened_at, updated_at, events, last_from)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (id) DO UPDATE SET state = excluded.state, turn = excluded.turn,
-				updated_at = excluded.updated_at, events = excluded.events`,
+				updated_at = excluded.updated_at, events = excluded.events, last_from = excluded.last_from`,
 			p.ID, p.Title, p.Kind, string(labels), p.Sender, p.Recipient, p.Peer, p.State, p.Turn,
-			formatTime(p.OpenedAt), formatTime(p.UpdatedAt), p.Events); err != nil {
+			formatTime(p.OpenedAt), formatTime(p.UpdatedAt), p.Events, p.LastFrom); err != nil {
 			return fmt.Errorf("write thread: %w", err)
 		}
 
@@ -236,7 +238,7 @@ type Filter struct {
 }
 
 const summaryColumns = `t.id, t.title, t.kind, t.labels, t.sender, t.recipient, t.peer, t.state, t.turn,
-	t.opened_at, t.updated_at, t.events,
+	t.opened_at, t.updated_at, t.events, t.last_from,
 	(SELECT count(*) FROM outbox o JOIN events e ON e.id = o.event_id WHERE e.thread = t.id AND o.status = 'pending'),
 	(SELECT count(*) FROM outbox o JOIN events e ON e.id = o.event_id WHERE e.thread = t.id AND o.status = 'failed')`
 
@@ -334,7 +336,7 @@ func scanSummary(rows *sql.Rows) (Summary, error) {
 	)
 
 	if err := rows.Scan(&s.ID, &s.Title, &s.Kind, &labels, &s.Sender, &s.Recipient, &s.Peer, &s.State, &s.Turn,
-		&opened, &updated, &s.Events, &s.Undelivered, &s.Failed); err != nil {
+		&opened, &updated, &s.Events, &s.LastFrom, &s.Undelivered, &s.Failed); err != nil {
 		return s, fmt.Errorf("read thread: %w", err)
 	}
 

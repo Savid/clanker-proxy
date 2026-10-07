@@ -28,10 +28,13 @@ const (
 	AgentPrefix = "cpa_"
 )
 
-// Peering limits.
+// Peering limits. Requests are public, so they are also rate-limited: the
+// pending cap alone would let a flood push out genuine requests and queue
+// a notification for each one.
 const (
 	MaxPendingRequests = 20
 	RequestTTL         = 7 * 24 * time.Hour
+	RequestsPerMinute  = 10
 	maxURL             = 512
 )
 
@@ -219,6 +222,28 @@ func (b *Inbox) newPeerName(ctx context.Context, name string) (string, error) {
 	return n, nil
 }
 
+// allowRequest counts a peering request against the rate limit.
+func (b *Inbox) allowRequest(now time.Time) bool {
+	b.requestMu.Lock()
+	defer b.requestMu.Unlock()
+
+	recent := b.requestTimes[:0]
+	for _, t := range b.requestTimes {
+		if now.Sub(t) < time.Minute {
+			recent = append(recent, t)
+		}
+	}
+
+	b.requestTimes = recent
+	if len(recent) >= RequestsPerMinute {
+		return false
+	}
+
+	b.requestTimes = append(b.requestTimes, now)
+
+	return true
+}
+
 // RequestReceived stores a peering request from another daemon for the
 // owner to approve, and returns its code.
 func (b *Inbox) RequestReceived(ctx context.Context, req PeeringRequest) (string, error) {
@@ -238,6 +263,10 @@ func (b *Inbox) RequestReceived(ctx context.Context, req PeeringRequest) (string
 	}
 
 	now := b.now().UTC()
+	if !b.allowRequest(now) {
+		return "", errorf(KindUnavailable, "too many peering requests; retry in a minute")
+	}
+
 	r := store.Request{ID: uuid.NewString()[:8], Name: name, URL: req.URL, Secret: req.Secret, Note: req.Note, At: now}
 
 	dropped, err := b.store.AddRequest(ctx, r, MaxPendingRequests, now.Add(-RequestTTL))

@@ -19,6 +19,8 @@ var regexMap = map[string]ogenregex.Regexp{
 	"^[0-9a-f]{8}$":             ogenregex.MustCompile("^[0-9a-f]{8}$"),
 	"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$": ogenregex.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
 	"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$":                                  ogenregex.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"),
+	"^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]*$":              ogenregex.MustCompile("^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]*$"),
+	"^[^\\x00-\\x1F\\x7F-\\x9F]+$":                                   ogenregex.MustCompile("^[^\\x00-\\x1F\\x7F-\\x9F]+$"),
 	"^[a-z0-9](-?[a-z0-9])*$":                                        ogenregex.MustCompile("^[a-z0-9](-?[a-z0-9])*$"),
 	"^[a-z0-9][a-z0-9._/-]*$":                                        ogenregex.MustCompile("^[a-z0-9][a-z0-9._/-]*$"),
 	"^cpp_[A-Za-z0-9_-]{43}$":                                        ogenregex.MustCompile("^cpp_[A-Za-z0-9_-]{43}$"),

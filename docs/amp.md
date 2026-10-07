@@ -110,7 +110,9 @@ If the wrong thread became the inbox, delete the `cp-inbox` trigger in
 Settings → Triggers, reload the plugin in the right thread, and repeat step 4
 with `cpctl webhook set amp -url-file amp.url`.
 After adding a missing secret, restart the orb's processes and reload the
-plugin.
+plugin. The plugin keeps which conversation handles which thread in
+`cp-inbox/state.json` under `$XDG_STATE_HOME` (`~/.local/state` by default); if
+it cannot read that file, it does not start, since the guard depends on it.
 
 ## Checking it works
 

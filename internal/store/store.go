@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS threads (
 	turn       TEXT NOT NULL,
 	opened_at  TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
-	events     INTEGER NOT NULL
+	events     INTEGER NOT NULL,
+	last_from  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
 CREATE TABLE IF NOT EXISTS agent_tokens (

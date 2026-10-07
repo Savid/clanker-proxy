@@ -19,9 +19,9 @@ func tokenCommands() []*command {
 	return []*command{
 		{
 			name: "token add", args: "<name> -o <file> [-expires <duration>]", minArgs: 1, maxArgs: 1,
-			summary: "create an agent token, limited to existing threads",
-			about: "An agent token can list, read and act on threads, wait on them and read your name. Peering, " +
-				"opening threads, webhooks and tokens refuse it with 403 (exit 5). Give it to an agent as CP_TOKEN " +
+			summary: "create an agent token: works every thread, but cannot send, peer or configure",
+			about: "An agent token can list, read and act on every thread, current and future, wait on them and " +
+				"read your name. Opening threads, peering, webhooks and tokens refuse it with 403 (exit 5). Give it to an agent as CP_TOKEN " +
 				"instead of the owner token. The token is shown only now: -o writes it to a new file readable only " +
 				"by you; -o - writes it to stdout, for piping into a secret store. -expires takes a duration such as " +
 				"90d or 12h; without it, the token works until cpctl token rm.",
@@ -30,13 +30,14 @@ func tokenCommands() []*command {
 		},
 		{
 			name: "token ls", summary: "list agent tokens and when they were last used",
+			about:   "Expired tokens stay listed, refused, until removed or until a new token takes their name.",
 			example: "cpctl token ls",
 			flags:   func(*flag.FlagSet) func(*app, []string) error { return runTokens },
 		},
 		{
 			name: "token rm", args: "<name>", minArgs: 1, maxArgs: 1,
 			summary: "revoke an agent token",
-			about:   "It stops working at once, including in open streams.",
+			about:   "It stops working at once; an open wait or watch with it ends at its next update or within 15s.",
 			example: "cpctl token rm amp-inbox",
 			flags:   func(*flag.FlagSet) func(*app, []string) error { return runTokenRemove },
 		},
@@ -187,7 +188,7 @@ func runTokens(a *app, _ []string) error {
 
 		_ = tw.Flush()
 
-		next(w, step{"cpctl token add <name> -o <file>", "create one for an agent"}, step{"cpctl token rm <name>", "revoke one"})
+		next(w, step{"cpctl token add <name> -o <file>", "create one for an agent"}, step{"cpctl token rm <name>", "revoke one, or remove an expired one"})
 	})
 }
 
@@ -196,10 +197,7 @@ func runTokenRemove(a *app, pos []string) error {
 		return err
 	}
 
-	if !a.json {
-		fmt.Fprintf(a.stdout, "revoked agent token %s\n", pos[0])
-		next(a.stdout, step{"cpctl token ls", "see the remaining tokens"})
-	}
+	a.done(fmt.Sprintf("revoked agent token %s", name(pos[0])), step{"cpctl token ls", "see the remaining tokens"})
 
 	return nil
 }

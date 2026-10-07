@@ -3716,6 +3716,10 @@ func (s *Thread) encodeFields(e *jx.Encoder) {
 		e.Bool(s.MyTurn)
 	}
 	{
+		e.FieldStart("lastFrom")
+		s.LastFrom.Encode(e)
+	}
+	{
 		e.FieldStart("actions")
 		e.ArrStart()
 		for _, elem := range s.Actions {
@@ -3753,7 +3757,7 @@ func (s *Thread) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfThread = [18]string{
+var jsonFieldsNameOfThread = [19]string{
 	0:  "id",
 	1:  "title",
 	2:  "kind",
@@ -3765,13 +3769,14 @@ var jsonFieldsNameOfThread = [18]string{
 	8:  "state",
 	9:  "turn",
 	10: "myTurn",
-	11: "actions",
-	12: "openedAt",
-	13: "updatedAt",
-	14: "events",
-	15: "undelivered",
-	16: "failed",
-	17: "log",
+	11: "lastFrom",
+	12: "actions",
+	13: "openedAt",
+	14: "updatedAt",
+	15: "events",
+	16: "undelivered",
+	17: "failed",
+	18: "log",
 }
 
 // Decode decodes Thread from json.
@@ -3895,8 +3900,18 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"myTurn\"")
 			}
-		case "actions":
+		case "lastFrom":
 			requiredBitSet[1] |= 1 << 3
+			if err := func() error {
+				if err := s.LastFrom.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"lastFrom\"")
+			}
+		case "actions":
+			requiredBitSet[1] |= 1 << 4
 			if err := func() error {
 				s.Actions = make([]Action, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -3914,7 +3929,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"actions\"")
 			}
 		case "openedAt":
-			requiredBitSet[1] |= 1 << 4
+			requiredBitSet[1] |= 1 << 5
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.OpenedAt = v
@@ -3926,7 +3941,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"openedAt\"")
 			}
 		case "updatedAt":
-			requiredBitSet[1] |= 1 << 5
+			requiredBitSet[1] |= 1 << 6
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -3938,7 +3953,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"updatedAt\"")
 			}
 		case "events":
-			requiredBitSet[1] |= 1 << 6
+			requiredBitSet[1] |= 1 << 7
 			if err := func() error {
 				if err := s.Events.Decode(d); err != nil {
 					return err
@@ -3948,7 +3963,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"events\"")
 			}
 		case "undelivered":
-			requiredBitSet[1] |= 1 << 7
+			requiredBitSet[2] |= 1 << 0
 			if err := func() error {
 				if err := s.Undelivered.Decode(d); err != nil {
 					return err
@@ -3958,7 +3973,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"undelivered\"")
 			}
 		case "failed":
-			requiredBitSet[2] |= 1 << 0
+			requiredBitSet[2] |= 1 << 1
 			if err := func() error {
 				if err := s.Failed.Decode(d); err != nil {
 					return err
@@ -3968,7 +3983,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"failed\"")
 			}
 		case "log":
-			requiredBitSet[2] |= 1 << 1
+			requiredBitSet[2] |= 1 << 2
 			if err := func() error {
 				s.Log = make([]ThreadEvent, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -3997,7 +4012,7 @@ func (s *Thread) Decode(d *jx.Decoder) error {
 	for i, mask := range [3]uint8{
 		0b11111111,
 		0b11111101,
-		0b00000011,
+		0b00000111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -4640,6 +4655,10 @@ func (s *ThreadSummary) encodeFields(e *jx.Encoder) {
 		e.Bool(s.MyTurn)
 	}
 	{
+		e.FieldStart("lastFrom")
+		s.LastFrom.Encode(e)
+	}
+	{
 		e.FieldStart("actions")
 		e.ArrStart()
 		for _, elem := range s.Actions {
@@ -4669,7 +4688,7 @@ func (s *ThreadSummary) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfThreadSummary = [17]string{
+var jsonFieldsNameOfThreadSummary = [18]string{
 	0:  "id",
 	1:  "title",
 	2:  "kind",
@@ -4681,12 +4700,13 @@ var jsonFieldsNameOfThreadSummary = [17]string{
 	8:  "state",
 	9:  "turn",
 	10: "myTurn",
-	11: "actions",
-	12: "openedAt",
-	13: "updatedAt",
-	14: "events",
-	15: "undelivered",
-	16: "failed",
+	11: "lastFrom",
+	12: "actions",
+	13: "openedAt",
+	14: "updatedAt",
+	15: "events",
+	16: "undelivered",
+	17: "failed",
 }
 
 // Decode decodes ThreadSummary from json.
@@ -4810,8 +4830,18 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"myTurn\"")
 			}
-		case "actions":
+		case "lastFrom":
 			requiredBitSet[1] |= 1 << 3
+			if err := func() error {
+				if err := s.LastFrom.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"lastFrom\"")
+			}
+		case "actions":
+			requiredBitSet[1] |= 1 << 4
 			if err := func() error {
 				s.Actions = make([]Action, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -4829,7 +4859,7 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"actions\"")
 			}
 		case "openedAt":
-			requiredBitSet[1] |= 1 << 4
+			requiredBitSet[1] |= 1 << 5
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.OpenedAt = v
@@ -4841,7 +4871,7 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"openedAt\"")
 			}
 		case "updatedAt":
-			requiredBitSet[1] |= 1 << 5
+			requiredBitSet[1] |= 1 << 6
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -4853,7 +4883,7 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"updatedAt\"")
 			}
 		case "events":
-			requiredBitSet[1] |= 1 << 6
+			requiredBitSet[1] |= 1 << 7
 			if err := func() error {
 				if err := s.Events.Decode(d); err != nil {
 					return err
@@ -4863,7 +4893,7 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"events\"")
 			}
 		case "undelivered":
-			requiredBitSet[1] |= 1 << 7
+			requiredBitSet[2] |= 1 << 0
 			if err := func() error {
 				if err := s.Undelivered.Decode(d); err != nil {
 					return err
@@ -4873,7 +4903,7 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"undelivered\"")
 			}
 		case "failed":
-			requiredBitSet[2] |= 1 << 0
+			requiredBitSet[2] |= 1 << 1
 			if err := func() error {
 				if err := s.Failed.Decode(d); err != nil {
 					return err
@@ -4894,7 +4924,7 @@ func (s *ThreadSummary) Decode(d *jx.Decoder) error {
 	for i, mask := range [3]uint8{
 		0b11111111,
 		0b11111101,
-		0b00000001,
+		0b00000011,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

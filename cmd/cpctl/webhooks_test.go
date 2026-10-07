@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -151,10 +152,10 @@ func TestWebhookDeliveryPagination(t *testing.T) {
 	}
 	// Nothing listens on loopback port 1, so every delivery stays pending.
 	alice.cp(t, "webhook", "add", "agent", "http://127.0.0.1:1/hook?project=testing", "-secret-file", file, "-origin", "outgoing")
-	var th threadJSON
-	alice.json(t, &th, "send", "bob", "Pagination test", "-m", "test")
-	for range 4 {
-		alice.cp(t, "reply", th.ID, "-m", "more")
+	// Separate threads: notifications about one thread replace each other
+	// until delivered.
+	for i := range 5 {
+		alice.cp(t, "send", "bob", fmt.Sprintf("Pagination test %d", i), "-m", "test")
 	}
 	var page rest.WebhookDeliveryList
 	alice.json(t, &page, "webhook", "deliveries", "agent", "-limit", "2", "-status", "pending")

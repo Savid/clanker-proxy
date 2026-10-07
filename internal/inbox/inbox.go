@@ -65,6 +65,11 @@ type Inbox struct {
 	// peer is saved, so they cannot race the callback's response.
 	confirmation *confirmation
 
+	// requestTimes are when recent peering requests arrived, for the
+	// rate limit on that public operation.
+	requestMu    sync.Mutex
+	requestTimes []time.Time
+
 	subMu sync.Mutex
 	subs  map[chan store.Summary]struct{}
 
@@ -278,6 +283,24 @@ func (b *Inbox) duplicate(ctx context.Context, e thread.Event) (bool, error) {
 	return true, nil
 }
 
+// full reports whether e would take its thread past the per-thread limits.
+func full(events []thread.Event, e thread.Event) error {
+	if len(events) >= thread.MaxEvents {
+		return fmt.Errorf("thread %s already holds %d events, the most allowed", e.Thread, thread.MaxEvents)
+	}
+
+	size := len(e.Body)
+	for _, s := range events {
+		size += len(s.Body)
+	}
+
+	if size > thread.MaxThreadBody {
+		return fmt.Errorf("thread %s would hold more than %d bytes of bodies", e.Thread, thread.MaxThreadBody)
+	}
+
+	return nil
+}
+
 // next replays e onto its thread. The event must be between the thread's
 // participants. own marks the owner's event: it must apply, and it is given
 // the thread's next clock, so it replays after everything the owner saw. A
@@ -312,6 +335,14 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 
 	if _, ok := t.RoleOf(e.From); !ok || t.Peer(e.From) != e.To {
 		return thread.Thread{}, errorf(KindUnprocessable, "thread %s is not between %s and %s", e.Thread, e.From, e.To)
+	}
+
+	if err = full(events, *e); err != nil {
+		if own {
+			return thread.Thread{}, errorf(KindConflict, "%v; open a new thread to go on", err)
+		}
+
+		return thread.Thread{}, errorf(KindUnprocessable, "%v", err)
 	}
 
 	if own {
@@ -384,7 +415,7 @@ func (b *Inbox) resolve(ctx context.Context, ref string) (string, error) {
 	case errors.Is(err, store.ErrNotFound):
 		return "", errorf(KindNotFound, "no thread matches %q", ref)
 	case errors.Is(err, store.ErrAmbiguous):
-		return "", errorf(KindConflict, "%q matches more than one thread; give more of its ID", ref)
+		return "", errorf(KindInvalid, "%q matches more than one thread; give more of its ID", ref)
 	default:
 		return id, err
 	}

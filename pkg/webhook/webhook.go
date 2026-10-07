@@ -90,13 +90,8 @@ func (c Config) Validate() error {
 	if !ok {
 		return errors.New("unsupported webhook type; see cpctl webhook types")
 	}
-	u, err := url.Parse(c.URL)
-	if err != nil || len(c.URL) > 2048 || u.Hostname() == "" || u.User != nil || strings.Contains(c.URL, "#") || u.Opaque != "" {
-		return errors.New("webhook URL must be an absolute URL without credentials or fragment")
-	}
-	ip, _ := netip.ParseAddr(u.Hostname())
-	if u.Scheme != "https" && (u.Scheme != "http" || !ip.IsLoopback()) {
-		return errors.New("webhook URL requires HTTPS, or HTTP on a literal loopback address")
+	if err := validateURL(c.URL); err != nil {
+		return err
 	}
 	if c.Origin != "incoming" && c.Origin != "outgoing" && c.Origin != "both" {
 		return errors.New("webhook origin must be incoming, outgoing or both")
@@ -112,10 +107,25 @@ func (c Config) Validate() error {
 			return errors.New("invalid or repeated webhook event; use '*' alone or supported event types")
 		}
 	}
-	if err = c.validateSigning(provider); err != nil {
+	if err := c.validateSigning(provider); err != nil {
 		return err
 	}
 	return validateHeaders(c.Headers)
+}
+
+func validateURL(raw string) error {
+	if len(raw) > 2048 {
+		return errors.New("webhook URL must be at most 2048 bytes")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil || strings.Contains(raw, "#") || u.Opaque != "" {
+		return errors.New("webhook URL must be an absolute URL without credentials or fragment")
+	}
+	ip, _ := netip.ParseAddr(u.Hostname())
+	if u.Scheme != "https" && (u.Scheme != "http" || !ip.IsLoopback()) {
+		return errors.New("webhook URL requires HTTPS, or HTTP on a literal loopback address")
+	}
+	return nil
 }
 
 func (c Config) validateSigning(provider Provider) error {
@@ -149,7 +159,7 @@ func validateHeaders(headers []Header) error {
 		}
 		seen[name] = true
 		if reservedHeader(name) {
-			return errors.New("transport, content-type, user-agent, idempotency-key and webhook headers are managed by the daemon")
+			return errors.New("transport, Content-Type, User-Agent, Idempotency-Key, Proxy-* and Webhook-* headers are managed by the daemon")
 		}
 		if len(h.Value) == 0 || len(h.Value) > 4096 || strings.ContainsFunc(h.Value, func(r rune) bool { return r < 32 || r == 127 }) {
 			return errors.New("webhook header values must be 1 to 4096 bytes without control characters")

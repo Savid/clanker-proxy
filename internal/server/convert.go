@@ -80,7 +80,7 @@ func summary(s store.Summary, self string) rest.ThreadSummary {
 		Sender: rest.Name(s.Sender), Recipient: rest.Name(s.Recipient), Peer: rest.Name(s.Peer),
 		Role: rest.ThreadSummaryRole(role), State: rest.ThreadState(s.State), MyTurn: s.Turn != "" && s.Turn == self,
 		Actions: actions, OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
-		Events: count(s.Events), Undelivered: count(s.Undelivered), Failed: count(s.Failed),
+		Events: count(s.Events), LastFrom: rest.Name(s.LastFrom), Undelivered: count(s.Undelivered), Failed: count(s.Failed),
 	}
 	if s.Turn != "" {
 		out.Turn = rest.NewOptName(rest.Name(s.Turn))
@@ -96,7 +96,7 @@ func threadView(v inbox.View, self string) *rest.Thread {
 		Sender: s.Sender, Recipient: s.Recipient, Peer: s.Peer, Role: rest.ThreadRole(s.Role),
 		State: s.State, Turn: s.Turn, MyTurn: s.MyTurn, Actions: s.Actions,
 		OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
-		Events: s.Events, Undelivered: s.Undelivered, Failed: s.Failed,
+		Events: s.Events, LastFrom: s.LastFrom, Undelivered: s.Undelivered, Failed: s.Failed,
 		Log: make([]rest.ThreadEvent, 0, len(v.Events)),
 	}
 

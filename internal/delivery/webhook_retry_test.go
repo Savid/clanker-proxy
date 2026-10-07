@@ -107,3 +107,16 @@ func TestWebhookRunHoldsEndpointAfterStoreError(t *testing.T) {
 		t.Fatal("endpoint stayed held after its hold ended")
 	}
 }
+
+func TestSetQueryKeepsOwnerPairs(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		"":                                  "wait=true",
+		"thread_id=1&wait=false&tok=a%2fb+": "thread_id=1&tok=a%2fb+&wait=true",
+		"z=1&&a=2&w%61it=no":                "z=1&a=2&wait=true",
+	} {
+		if got := setQuery(raw, map[string]string{"wait": "true"}); got != want {
+			t.Errorf("%q: got %q, want %q", raw, got, want)
+		}
+	}
+}

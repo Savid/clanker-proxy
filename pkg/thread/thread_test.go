@@ -234,6 +234,29 @@ func TestLengthsCountCharacters(t *testing.T) {
 	}
 }
 
+func TestControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	var b builder
+
+	for _, tc := range []struct {
+		title, body string
+		ok          bool
+	}{
+		{"Plain", "line one\n\tindented\r\nline three", true},
+		{"Tab\there", "", false},
+		{"Bell\a", "", false},
+		{"Clean", "escape \x1b[8mhidden", false},
+		{"Clean", "c1 \u009b31m", false},
+	} {
+		open := b.open(thread.KindRequest)
+		open.Title, open.Body = tc.title, tc.body
+		if err := open.Validate(); (err == nil) != tc.ok {
+			t.Errorf("title %q body %q: %v, want ok=%t", tc.title, tc.body, err, tc.ok)
+		}
+	}
+}
+
 func TestAllowed(t *testing.T) {
 	t.Parallel()
 

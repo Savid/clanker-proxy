@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ogen-go/ogen/ogenerrors"
@@ -35,7 +34,8 @@ func (tokenSource) PeerSecret(context.Context, rest.OperationName) (rest.PeerSec
 	return rest.PeerSecret{}, ogenerrors.ErrSkipClientSecurity
 }
 
-// agentPrefix marks agent tokens, which cpd limits to threads.
+// agentPrefix marks agent tokens, which cpd limits to threads. It must
+// match inbox.AgentPrefix, which cpctl cannot import; a test checks it.
 const agentPrefix = "cpa_"
 
 // agent reports whether cpctl holds an agent token rather than the owner's.
@@ -105,7 +105,7 @@ func newClient(baseURL, token string) (*rest.Client, error) {
 	return c, nil
 }
 
-// checkTransport refuses to send the owner token in the clear to another
+// checkTransport refuses to send a token in the clear to another
 // host: plain http is for loopback only.
 func checkTransport(baseURL string) error {
 	u, err := url.Parse(baseURL)
@@ -154,7 +154,7 @@ func (a *app) classify(err error, cmd *command) *failure {
 		return problemFailure(p, cmd, a.ref, a.agent())
 	}
 
-	if errors.Is(err, syscall.ECONNREFUSED) || isDialError(err) {
+	if isUnreachable(err) {
 		return &failure{
 			exit: exitUnreachable, msg: fmt.Sprintf("cannot reach cpd at %s: %v", a.url, err),
 			hint: "start cpd, or set CP_URL (or -url) to where it listens",
@@ -174,14 +174,14 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent b
 
 	switch p.StatusCode {
 	case http.StatusBadRequest:
-		f.exit, f.hint = exitUsage, "cpctl help "+name
+		f.exit, f.hint = exitUsage, badInputHint(name, ref)
 	case http.StatusUnauthorized:
 		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp), or to an agent token from cpctl token add"
 		if agent {
 			f.hint = "this agent token was revoked, has expired or is unknown; ask the owner for a new one"
 		}
 	case http.StatusForbidden:
-		f.exit, f.hint = exitRefused, "CP_TOKEN is an agent token, which cannot do this; ask the owner to run it"
+		f.exit, f.hint = exitRefused, "this is an agent token: it runs me, inbox, ls, show, wait, watch and the thread actions (reply, ack, needs-input, resolve, decline, close, reopen, withdraw); ask the owner for anything else"
 	case http.StatusNotFound:
 		f.exit, f.hint = exitNotFound, notFoundHint(name)
 	case http.StatusConflict, http.StatusUnprocessableEntity:
@@ -192,7 +192,7 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent b
 		case name == "token add":
 			f.hint = "choose another name, or revoke the existing one with cpctl token rm <name>"
 		case name == "webhook retry":
-			f.hint = "only failed deliveries of enabled webhooks can be retried; cpctl webhook deliveries <name> -status failed lists them, and cpctl webhook set <name> -enabled=true resumes a paused webhook"
+			f.hint = "cpctl webhook deliveries <name> -status failed lists failed deliveries; cpctl webhook set <name> -enabled=true enables a disabled webhook"
 		case ref != "":
 			f.hint = "cpctl show " + ref + " lists what you can do now, as commands"
 		}
@@ -201,6 +201,23 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent b
 	}
 
 	return f
+}
+
+// badInputHint points at what lists valid input, where cpd's message alone
+// does not.
+func badInputHint(cmd, ref string) string {
+	switch {
+	case ref != "":
+		return "cpctl ls shows full thread IDs; cpctl help " + cmd
+	case cmd == "approve" || cmd == "deny":
+		return "cpctl requests lists request IDs"
+	case cmd == "webhook retry":
+		return "cpctl webhook deliveries <name> -status failed lists delivery IDs"
+	case cmd == "webhook add" || cmd == "webhook set":
+		return "cpctl webhook events and cpctl webhook types list valid values; cpctl help " + cmd
+	default:
+		return "cpctl help " + cmd
+	}
 }
 
 func notFoundHint(cmd string) string {

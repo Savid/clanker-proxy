@@ -86,6 +86,12 @@ func (a *app) updateNotice() {
 
 	result, err := update.NewClient().Automatic(a.ctx, version, dir)
 	if err == nil && result.Available {
+		if a.agent() {
+			fmt.Fprintf(a.stderr, "update available: %s (current %s); tell the owner\n", result.Latest, version)
+
+			return
+		}
+
 		fmt.Fprintf(a.stderr, "update available: %s (current %s); run cpctl update, then restart cpd\n", result.Latest, version)
 	}
 }

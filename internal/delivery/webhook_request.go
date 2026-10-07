@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/savid/clanker-proxy/internal/store"
@@ -30,11 +34,7 @@ func webhookRequest(ctx context.Context, hook webhook.Config, job store.WebhookD
 		return nil, errors.New("invalid destination")
 	}
 	if len(provider.Query) > 0 {
-		query := req.URL.Query()
-		for name, value := range provider.Query {
-			query.Set(name, value)
-		}
-		req.URL.RawQuery = query.Encode()
+		req.URL.RawQuery = setQuery(req.URL.RawQuery, provider.Query)
 	}
 	// The owner's headers come after the formatter's, so a configured header
 	// such as ntfy's Title replaces the generated one.
@@ -73,4 +73,21 @@ func bodyRetryAfter(body []byte, now, until time.Time) time.Time {
 	// Clamp before converting: a huge float does not fit in a Duration.
 	seconds := math.Min(math.Ceil(response.RetryAfter), maxBackoff.Seconds())
 	return retryAt(time.Duration(seconds)*time.Second, now, until)
+}
+
+// setQuery sets the provider's parameters and keeps every other pair of the
+// owner's query exactly as written, since it can carry credentials.
+func setQuery(raw string, params map[string]string) string {
+	var pairs []string
+	for pair := range strings.SplitSeq(raw, "&") {
+		k, _, _ := strings.Cut(pair, "=")
+		if key, err := url.QueryUnescape(k); pair == "" || err == nil && params[key] != "" {
+			continue
+		}
+		pairs = append(pairs, pair)
+	}
+	for _, k := range slices.Sorted(maps.Keys(params)) {
+		pairs = append(pairs, url.QueryEscape(k)+"="+url.QueryEscape(params[k]))
+	}
+	return strings.Join(pairs, "&")
 }

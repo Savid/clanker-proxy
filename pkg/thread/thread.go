@@ -121,7 +121,9 @@ func Replay(events []Event) (Thread, error) {
 			return Thread{}, fmt.Errorf("event %s belongs to thread %s, not %s", e.ID, e.Thread, t.ID)
 		}
 
-		t = t.Apply(e)
+		// t's events are Replay's own, so appending in place keeps
+		// replay linear.
+		t = t.apply(e, t.Events)
 	}
 
 	return t, nil
@@ -130,8 +132,14 @@ func Replay(events []Event) (Thread, error) {
 // Apply returns the thread with e appended. An event that may not apply is
 // appended with Ignored set and leaves the state alone.
 func (t Thread) Apply(e Event) Thread {
+	return t.apply(e, slices.Clone(t.Events))
+}
+
+// apply appends e to events, which become the returned thread's.
+func (t Thread) apply(e Event, events []Applied) Thread {
+	events = append(events, Applied{Event: e})
 	next := t
-	next.Events = append(slices.Clone(t.Events), Applied{Event: e})
+	next.Events = events
 	last := &next.Events[len(next.Events)-1]
 
 	if err := t.Check(e); err != nil {

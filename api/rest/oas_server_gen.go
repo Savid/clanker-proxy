@@ -52,7 +52,8 @@ type Handler interface {
 	CreateWebhook(ctx context.Context, req *WebhookCreate) (*Webhook, error)
 	// DeleteAgentToken implements deleteAgentToken operation.
 	//
-	// The token stops working at once, including in open streams.
+	// The token stops working at once. A stream it opened sends nothing more and closes at its next event
+	// or keepalive.
 	//
 	// DELETE /api/v1/agent-tokens/{name}
 	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error
@@ -171,7 +172,7 @@ type Handler interface {
 	//
 	// Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
 	// Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
-	// and a new one drops the oldest.
+	// and a new one drops the oldest. Past 10 requests a minute it answers 503.
 	//
 	// POST /api/v1/peering-requests
 	RequestPeering(ctx context.Context, req *PeeringRequest) (*RequestReceipt, error)

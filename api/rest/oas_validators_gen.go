@@ -159,7 +159,7 @@ func (s Body) Validate() error {
 		MaxLengthSet:  true,
 		Email:         false,
 		Hostname:      false,
-		Regex:         nil,
+		Regex:         regexMap["^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]*$"],
 		MinNumeric:    0,
 		MinNumericSet: false,
 		MaxNumeric:    0,
@@ -1257,6 +1257,17 @@ func (s *Thread) Validate() error {
 		})
 	}
 	if err := func() error {
+		if err := s.LastFrom.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "lastFrom",
+			Error: err,
+		})
+	}
+	if err := func() error {
 		if s.Actions == nil {
 			return errors.New("nil is invalid value")
 		}
@@ -1680,6 +1691,17 @@ func (s *ThreadSummary) Validate() error {
 		})
 	}
 	if err := func() error {
+		if err := s.LastFrom.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "lastFrom",
+			Error: err,
+		})
+	}
+	if err := func() error {
 		if s.Actions == nil {
 			return errors.New("nil is invalid value")
 		}
@@ -1766,7 +1788,7 @@ func (s Title) Validate() error {
 		MaxLengthSet:  true,
 		Email:         false,
 		Hostname:      false,
-		Regex:         nil,
+		Regex:         regexMap["^[^\\x00-\\x1F\\x7F-\\x9F]+$"],
 		MinNumeric:    0,
 		MinNumericSet: false,
 		MaxNumeric:    0,

@@ -2170,6 +2170,9 @@ type Thread struct {
 	Turn  OptName     `json:"turn"`
 	// The thread is waiting on the owner.
 	MyTurn bool `json:"myTurn"`
+	// Who wrote the last event in replay order. With myTurn, the peer here means the owner has not
+	// answered their latest move.
+	LastFrom Name `json:"lastFrom"`
 	// What the owner may do now, for actOnThread. `comment` is always among them.
 	Actions     []Action  `json:"actions"`
 	OpenedAt    time.Time `json:"openedAt"`
@@ -2234,6 +2237,11 @@ func (s *Thread) GetTurn() OptName {
 // GetMyTurn returns the value of MyTurn.
 func (s *Thread) GetMyTurn() bool {
 	return s.MyTurn
+}
+
+// GetLastFrom returns the value of LastFrom.
+func (s *Thread) GetLastFrom() Name {
+	return s.LastFrom
 }
 
 // GetActions returns the value of Actions.
@@ -2324,6 +2332,11 @@ func (s *Thread) SetTurn(val OptName) {
 // SetMyTurn sets the value of MyTurn.
 func (s *Thread) SetMyTurn(val bool) {
 	s.MyTurn = val
+}
+
+// SetLastFrom sets the value of LastFrom.
+func (s *Thread) SetLastFrom(val Name) {
+	s.LastFrom = val
 }
 
 // SetActions sets the value of Actions.
@@ -2670,6 +2683,9 @@ type ThreadSummary struct {
 	Turn  OptName           `json:"turn"`
 	// The thread is waiting on the owner.
 	MyTurn bool `json:"myTurn"`
+	// Who wrote the last event in replay order. With myTurn, the peer here means the owner has not
+	// answered their latest move.
+	LastFrom Name `json:"lastFrom"`
 	// What the owner may do now, for actOnThread. `comment` is always among them.
 	Actions     []Action  `json:"actions"`
 	OpenedAt    time.Time `json:"openedAt"`
@@ -2732,6 +2748,11 @@ func (s *ThreadSummary) GetTurn() OptName {
 // GetMyTurn returns the value of MyTurn.
 func (s *ThreadSummary) GetMyTurn() bool {
 	return s.MyTurn
+}
+
+// GetLastFrom returns the value of LastFrom.
+func (s *ThreadSummary) GetLastFrom() Name {
+	return s.LastFrom
 }
 
 // GetActions returns the value of Actions.
@@ -2817,6 +2838,11 @@ func (s *ThreadSummary) SetTurn(val OptName) {
 // SetMyTurn sets the value of MyTurn.
 func (s *ThreadSummary) SetMyTurn(val bool) {
 	s.MyTurn = val
+}
+
+// SetLastFrom sets the value of LastFrom.
+func (s *ThreadSummary) SetLastFrom(val Name) {
+	s.LastFrom = val
 }
 
 // SetActions sets the value of Actions.

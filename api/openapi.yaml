@@ -10,7 +10,8 @@ info:
     before any handler runs. **owner** (the default): the daemon's owner,
     with the token in `<dir>/owner.token`; cpctl uses it. **agent**: a token
     the owner creates for an agent working for them; it reads and acts on
-    existing threads and nothing else. **peer**: another daemon, with the
+    existing threads, follows the stream and reads the owner's name, and
+    nothing else. **peer**: another daemon, with the
     secret it shares with this one; it identifies which peer is calling.
     **public**: no token; only `getHealth` and `requestPeering`.
     This spec is the source of truth for `api/rest` (server and client).
@@ -240,7 +241,9 @@ paths:
       operationId: deleteAgentToken
       tags: [tokens]
       summary: Revoke an agent token
-      description: The token stops working at once, including in open streams.
+      description: >-
+        The token stops working at once. A stream it opened sends nothing
+        more and closes at its next event or keepalive.
       responses:
         '204':
           description: Revoked.
@@ -291,7 +294,7 @@ paths:
         Another daemon asks this one's owner to accept it as a peer, offering
         the secret both will use. Nothing is accepted from it until the owner
         approves. Requests expire after a week; at most 20 wait, and a new
-        one drops the oldest.
+        one drops the oldest. Past 10 requests a minute it answers 503.
       security: []
       requestBody:
         description: The requester and the secret it offers.
@@ -1004,13 +1007,15 @@ components:
       maxLength: 36
     Title:
       type: string
-      description: A thread's one-line title, at most 200 characters.
+      description: A thread's one-line title, at most 200 characters, without control characters.
       minLength: 1
       maxLength: 200
+      pattern: '^[^\x00-\x1F\x7F-\x9F]+$'
     Body:
       type: string
-      description: Markdown, at most 65536 characters.
+      description: Markdown, at most 65536 characters, without control characters but tab and line breaks.
       maxLength: 65536
+      pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]*$'
     Note:
       type: string
       description: A message for the other owner.
@@ -1318,7 +1323,7 @@ components:
       description: >-
         A thread without its events.
       type: object
-      required: [id, title, kind, labels, sender, recipient, peer, role, state, myTurn, actions, openedAt, updatedAt, events, undelivered, failed]
+      required: [id, title, kind, labels, sender, recipient, peer, role, state, myTurn, actions, openedAt, updatedAt, events, lastFrom, undelivered, failed]
       properties:
         id:
           $ref: '#/components/schemas/ID'
@@ -1348,6 +1353,11 @@ components:
         myTurn:
           type: boolean
           description: The thread is waiting on the owner.
+        lastFrom:
+          $ref: '#/components/schemas/Name'
+          description: >-
+            Who wrote the last event in replay order. With myTurn, the peer
+            here means the owner has not answered their latest move.
         actions:
           type: array
           description: >-

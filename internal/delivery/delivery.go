@@ -9,10 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ogen-go/ogen/ogenerrors"
 
@@ -106,13 +109,44 @@ type responseClient struct {
 	status int
 }
 
+// maxPeerResponse bounds what is read from a peer's daemon. Its answers are
+// small; a larger one is cut off and fails to decode.
+const maxPeerResponse = 64 << 10
+
+// maxPeerError bounds the peer-supplied text kept with a failed delivery,
+// which cpctl shows to the owner's agent.
+const maxPeerError = 300
+
 func (c *responseClient) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.client.Do(req) //nolint:gosec // peer URLs are added or approved by the owner; redirects are refused
 	if resp != nil {
 		c.status = resp.StatusCode
+		resp.Body = limitedBody{Reader: io.LimitReader(resp.Body, maxPeerResponse), Closer: resp.Body}
 	}
 
 	return resp, err
+}
+
+type limitedBody struct {
+	io.Reader
+	io.Closer
+}
+
+// clip keeps a peer-influenced message short and printable.
+func clip(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+
+		return r
+	}, s)
+
+	if r := []rune(s); len(r) > maxPeerError {
+		return string(r[:maxPeerError]) + "…"
+	}
+
+	return s
 }
 
 func (d *Deliverer) client(baseURL, peerSecret string) (*rest.Client, *responseClient, error) {
@@ -292,12 +326,16 @@ func describe(err error) error {
 		detail += ": " + p.Response.Detail.Value
 	}
 
-	return fmt.Errorf("%d %s", p.StatusCode, detail)
+	return fmt.Errorf("%d %s", p.StatusCode, clip(detail))
 }
 
 func (d *Deliverer) record(ctx context.Context, o store.Outgoing, retry bool, err error) error {
 	now := d.now().UTC()
 	id := o.Event.ID
+
+	if err != nil {
+		err = errors.New(clip(err.Error()))
+	}
 
 	switch {
 	case err == nil:
