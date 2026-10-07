@@ -32,7 +32,6 @@ const (
 	MaxPendingRequests = 20
 	RequestTTL         = 7 * 24 * time.Hour
 	maxURL             = 512
-	rollbackTimeout    = 5 * time.Second
 )
 
 var secretPattern = regexp.MustCompile(`^cpp_[A-Za-z0-9_-]{43}$`)
@@ -63,6 +62,10 @@ func Equal(a, b string) bool {
 // PeerBySecret returns the peer whose secret this is. Every peer is compared,
 // in constant time, so the answer's timing says nothing about the secret.
 func (b *Inbox) PeerBySecret(ctx context.Context, secret string) (store.Peer, error) {
+	if err := b.waitConfirmation(ctx, secret); err != nil {
+		return store.Peer{}, err
+	}
+
 	peers, err := b.store.Peers(ctx)
 	if err != nil {
 		return store.Peer{}, err
@@ -84,6 +87,29 @@ func (b *Inbox) PeerBySecret(ctx context.Context, secret string) (store.Peer, er
 	}
 
 	return found, nil
+}
+
+type confirmation struct {
+	secret   string
+	previous string
+	done     chan struct{}
+}
+
+func (b *Inbox) waitConfirmation(ctx context.Context, secret string) error {
+	b.mu.Lock()
+	pending := b.confirmation
+	b.mu.Unlock()
+
+	if pending == nil || !Equal(pending.secret, secret) && !Equal(pending.previous, secret) {
+		return nil
+	}
+
+	select {
+	case <-pending.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // AddPeer asks the daemon at url to become peers, under a new secret, and
@@ -233,10 +259,8 @@ func (b *Inbox) Requests(ctx context.Context) ([]store.Request, error) {
 }
 
 // Approve accepts a peering request, as name or the name they asked for.
-// The peer is saved, then the requester's daemon is told at the URL it gave,
-// with the secret it offered; if it does not confirm, the approval is undone.
-// That proves the URL is the requester's, and nothing they send on hearing
-// back can arrive before they are a peer here.
+// Confirmation must precede saving the peer: an offered secret cannot grant
+// access until the daemon at the claimed URL proves it holds that secret.
 func (b *Inbox) Approve(ctx context.Context, id, name string) (store.Peer, error) {
 	b.peerMu.Lock()
 	defer b.peerMu.Unlock()
@@ -259,9 +283,29 @@ func (b *Inbox) Approve(ctx context.Context, id, name string) (store.Peer, error
 		return store.Peer{}, err
 	}
 
-	prev, err := b.approvable(ctx, n, r.URL)
+	previous, err := b.approvable(ctx, n, r.URL)
 	if err != nil {
 		return store.Peer{}, err
+	}
+
+	pending := &confirmation{secret: r.Secret, done: make(chan struct{})}
+	if previous != nil {
+		// A crossed acceptance must not activate the old secret and discard
+		// this request while its replacement is being confirmed.
+		pending.previous = previous.Secret
+	}
+	b.mu.Lock()
+	b.confirmation = pending
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		b.confirmation = nil
+		close(pending.done)
+		b.mu.Unlock()
+	}()
+
+	if err = b.fed.Accepted(ctx, r.URL, r.Secret); err != nil {
+		return store.Peer{}, errorf(KindUpstream, "the daemon at %s did not confirm this request, so it is not approved: %v", r.URL, err)
 	}
 
 	p, err := b.store.Approve(ctx, id, n, now, now.Add(-RequestTTL))
@@ -269,18 +313,6 @@ func (b *Inbox) Approve(ctx context.Context, id, name string) (store.Peer, error
 		return p, errorf(KindNotFound, "no pending request %q", id)
 	} else if err != nil {
 		return p, err
-	}
-
-	if err = b.fed.Accepted(ctx, r.URL, r.Secret); err != nil {
-		// A disconnected owner still needs the unconfirmed approval undone.
-		undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
-		defer cancel()
-
-		if undoErr := b.store.Unapprove(undoCtx, p, prev, r); undoErr != nil {
-			return store.Peer{}, fmt.Errorf("undo approval of %s: %w", n, undoErr)
-		}
-
-		return store.Peer{}, errorf(KindUpstream, "the daemon at %s did not confirm this request, so it is not approved: %v", r.URL, err)
 	}
 
 	if err = b.store.DeleteRequestsFrom(ctx, p.URL); err != nil {
@@ -310,8 +342,7 @@ func (b *Inbox) boundElsewhere(ctx context.Context, name, url string) error {
 }
 
 // approvable checks that a request from url can become the peer called name,
-// and returns the peer it replaces: one of that name at the same URL, or
-// nil.
+// and returns the peer it would replace.
 func (b *Inbox) approvable(ctx context.Context, name, url string) (*store.Peer, error) {
 	if err := b.boundElsewhere(ctx, name, url); err != nil {
 		return nil, err
@@ -322,7 +353,7 @@ func (b *Inbox) approvable(ctx context.Context, name, url string) (*store.Peer, 
 		return nil, err
 	}
 
-	var prev *store.Peer
+	var previous *store.Peer
 
 	for _, p := range peers {
 		switch {
@@ -331,11 +362,11 @@ func (b *Inbox) approvable(ctx context.Context, name, url string) (*store.Peer, 
 		case p.Name != name && p.URL == url:
 			return nil, errorf(KindConflict, "%s is already a peer at %s; use that name or remove them first", p.Name, url)
 		case p.Name == name:
-			prev = &p
+			previous = &p
 		}
 	}
 
-	return prev, nil
+	return previous, nil
 }
 
 // Deny drops a peering request.

@@ -58,6 +58,8 @@ type Deliverer struct {
 
 var _ inbox.Federation = (*Deliverer)(nil)
 
+var errRedirect = errors.New("peer redirected the request; use its direct URL")
+
 // New returns a deliverer. The inbox it serves needs it first, so Attach
 // connects the two afterwards.
 func New(log *slog.Logger, st *store.Store, cfg Config) *Deliverer {
@@ -65,7 +67,11 @@ func New(log *slog.Logger, st *store.Store, cfg Config) *Deliverer {
 		cfg.Now = time.Now
 	}
 
-	return &Deliverer{log: log, store: st, now: cfg.Now, http: &http.Client{Timeout: httpTimeout}}
+	return &Deliverer{log: log, store: st, now: cfg.Now, http: &http.Client{
+		Timeout: httpTimeout,
+		// The shared secret may be in a header or a replayable request body.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return errRedirect },
+	}}
 }
 
 // Attach connects the deliverer to its inbox: notify hears of delivery
@@ -90,18 +96,33 @@ func (s secret) PeerSecret(context.Context, rest.OperationName) (rest.PeerSecret
 	return rest.PeerSecret{Token: string(s)}, nil
 }
 
-func (d *Deliverer) client(baseURL, peerSecret string) (*rest.Client, error) {
-	c, err := rest.NewClient(baseURL, secret(peerSecret), rest.WithClient(d.http))
-	if err != nil {
-		return nil, fmt.Errorf("peer url %q: %w", baseURL, err)
+type responseClient struct {
+	client *http.Client
+	status int
+}
+
+func (c *responseClient) Do(req *http.Request) (*http.Response, error) {
+	resp, err := c.client.Do(req) //nolint:gosec // peer URLs are added or approved by the owner; redirects are refused
+	if resp != nil {
+		c.status = resp.StatusCode
 	}
 
-	return c, nil
+	return resp, err
+}
+
+func (d *Deliverer) client(baseURL, peerSecret string) (*rest.Client, *responseClient, error) {
+	response := &responseClient{client: d.http}
+	c, err := rest.NewClient(baseURL, secret(peerSecret), rest.WithClient(response))
+	if err != nil {
+		return nil, nil, fmt.Errorf("peer url %q: %w", baseURL, err)
+	}
+
+	return c, response, nil
 }
 
 // RequestPeering asks the daemon at baseURL to become peers.
 func (d *Deliverer) RequestPeering(ctx context.Context, baseURL string, req inbox.PeeringRequest) error {
-	c, err := d.client(baseURL, "")
+	c, _, err := d.client(baseURL, "")
 	if err != nil {
 		return err
 	}
@@ -125,7 +146,7 @@ func (d *Deliverer) RequestPeering(ctx context.Context, baseURL string, req inbo
 
 // Accepted tells the daemon at baseURL its request was approved.
 func (d *Deliverer) Accepted(ctx context.Context, baseURL, peerSecret string) error {
-	c, err := d.client(baseURL, peerSecret)
+	c, _, err := d.client(baseURL, peerSecret)
 	if err != nil {
 		return err
 	}
@@ -211,7 +232,7 @@ func (d *Deliverer) Drain(ctx context.Context) error {
 
 // deliver posts one event. It reports whether a failure is worth retrying.
 func (d *Deliverer) deliver(ctx context.Context, o store.Outgoing) (bool, error) {
-	c, err := d.client(o.URL, o.Secret)
+	c, response, err := d.client(o.URL, o.Secret)
 	if err != nil {
 		return false, err
 	}
@@ -221,14 +242,11 @@ func (d *Deliverer) deliver(ctx context.Context, o store.Outgoing) (bool, error)
 		return false, nil
 	}
 
-	if p, ok := errors.AsType[*rest.ProblemStatusCode](err); ok {
-		// The peer understood and refused the event: sending it again
-		// changes nothing. A 401 is retried: their owner may not have
-		// approved the peering yet.
-		switch p.StatusCode {
-		case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
-			return false, describe(err)
-		}
+	// A proxy can refuse with HTML or an empty body, so finality cannot
+	// depend on decoding a Problem. A 401 may pass once peering is approved.
+	switch response.status {
+	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
+		return false, describe(err)
 	}
 
 	return true, describe(err)

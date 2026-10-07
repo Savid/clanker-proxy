@@ -128,8 +128,10 @@ paths:
         secret it offered: only if that daemon confirms does the requester
         become a peer, under the name given or the one they asked for. So a
         request cannot claim someone else's URL. Fails with 502 when their
-        daemon does not confirm; the request stays. If confirmation is
-        interrupted, the request and any previous peer are restored.
+        daemon does not confirm; the request stays. No events are accepted
+        under the offered secret before confirmation succeeds. If confirmation
+        is interrupted, the request and any previous peer are left unchanged.
+        The URL must reach the daemon directly; redirects are refused.
       requestBody:
         description: What to call the new peer.
         required: true
@@ -172,7 +174,8 @@ paths:
         their owner approves; then they deliver. Fails with 502 when their
         daemon cannot be reached, and saves nothing. Fails with 409 when
         the name or URL already belongs to a peer; each daemon has one name
-        here. Trailing slashes on daemon URLs are removed.
+        here. Trailing slashes on daemon URLs are removed. The URL must reach
+        the daemon directly; redirects are refused.
       requestBody:
         description: Who to ask, and where.
         required: true

@@ -57,10 +57,13 @@ type Inbox struct {
 	// state.
 	mu sync.Mutex
 
-	// Owner peering changes must keep their checked names, URLs and rollback
-	// snapshots until the callback finishes. Peer callbacks do not take this
+	// Owner peering changes must keep their checked names and URLs until
+	// confirmation finishes. Peer callbacks do not take this
 	// lock, so they can confirm while an owner operation is waiting on them.
 	peerMu sync.Mutex
+	// Protected by mu. Deliveries prompted by confirmation wait until the
+	// peer is saved, so they cannot race the callback's response.
+	confirmation *confirmation
 
 	subMu sync.Mutex
 	subs  map[chan store.Summary]struct{}

@@ -190,7 +190,8 @@ func (s *Server) handleActOnThreadRequest(args [1]string, argsEscaped bool, w ht
 // Makes a secret, sends it with a peering request to the daemon at `url`, and saves the peer as
 // `requested`. Events to them queue until their owner approves; then they deliver. Fails with 502 when
 // their daemon cannot be reached, and saves nothing. Fails with 409 when the name or URL already
-// belongs to a peer; each daemon has one name here. Trailing slashes on daemon URLs are removed.
+// belongs to a peer; each daemon has one name here. Trailing slashes on daemon URLs are removed. The
+// URL must reach the daemon directly; redirects are refused.
 //
 // POST /api/v1/peers
 func (s *Server) handleAddPeerRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -334,7 +335,9 @@ func (s *Server) handleAddPeerRequest(args [0]string, argsEscaped bool, w http.R
 // First calls the requester's daemon, at the URL it gave, with the secret it offered: only if that
 // daemon confirms does the requester become a peer, under the name given or the one they asked for. So
 // a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm; the
-// request stays. If confirmation is interrupted, the request and any previous peer are restored.
+// request stays. No events are accepted under the offered secret before confirmation succeeds. If
+// confirmation is interrupted, the request and any previous peer are left unchanged. The URL must
+// reach the daemon directly; redirects are refused.
 //
 // POST /api/v1/peering-requests/{id}/approve
 func (s *Server) handleApproveRequestRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

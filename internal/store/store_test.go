@@ -286,43 +286,6 @@ func TestActivateReschedulesOnce(t *testing.T) {
 	}
 }
 
-// Unapprove puts back exactly what Approve replaced.
-func TestUnapprove(t *testing.T) {
-	t.Parallel()
-
-	st := open(t)
-	ctx := t.Context()
-
-	old := store.Peer{Name: "bob", URL: "http://bob", Secret: "cpp_old", Status: store.PeerActive, AddedAt: t0}
-	if err := st.AddPeer(ctx, old); err != nil {
-		t.Fatal(err)
-	}
-
-	r := store.Request{ID: "r1", Name: "bob", URL: "http://bob", Secret: "cpp_new", Note: "hi", At: t0}
-	if _, err := st.AddRequest(ctx, r, 5, t0.Add(-time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-
-	p, err := st.Approve(ctx, "r1", "bob", t0, t0.Add(-time.Hour))
-	if err != nil || p.Secret != "cpp_new" {
-		t.Fatalf("Approve = %+v, %v", p, err)
-	}
-
-	if err = st.Unapprove(ctx, p, &old, r); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := st.Peer(ctx, "bob")
-	if err != nil || got.Secret != "cpp_old" {
-		t.Errorf("peer after undo = %+v, %v", got, err)
-	}
-
-	back, err := st.Request(ctx, "r1", t0.Add(-time.Hour))
-	if err != nil || back.Secret != "cpp_new" || back.Note != "hi" {
-		t.Errorf("request after undo = %+v, %v", back, err)
-	}
-}
-
 // A removed peer's name keeps its URL only while threads with them remain.
 func TestFormerURL(t *testing.T) {
 	t.Parallel()

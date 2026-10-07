@@ -320,30 +320,6 @@ func (s *Store) Approve(ctx context.Context, id, name string, at, expired time.T
 	return p, err
 }
 
-// Unapprove undoes Approve: it removes the peer approve made, puts back prev
-// (the peer of that name before, if any) and the request r.
-func (s *Store) Unapprove(ctx context.Context, approved Peer, prev *Peer, r Request) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM peers WHERE name = ? AND secret = ?`, approved.Name, approved.Secret); err != nil {
-			return fmt.Errorf("unapprove: %w", err)
-		}
-
-		if prev != nil {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO peers (`+peerColumns+`) VALUES (?, ?, ?, ?, ?)`,
-				prev.Name, prev.URL, prev.Secret, prev.Status, formatTime(prev.AddedAt)); err != nil {
-				return fmt.Errorf("unapprove: %w", err)
-			}
-		}
-
-		if _, err := tx.ExecContext(ctx, `INSERT INTO requests (id, name, url, secret, note, at) VALUES (?, ?, ?, ?, ?, ?)`,
-			r.ID, r.Name, r.URL, r.Secret, r.Note, formatTime(r.At)); err != nil {
-			return fmt.Errorf("unapprove: %w", err)
-		}
-
-		return nil
-	})
-}
-
 // DeleteRequestsFrom drops every pending request from url.
 func (s *Store) DeleteRequestsFrom(ctx context.Context, url string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM requests WHERE url = ?`, url); err != nil {
