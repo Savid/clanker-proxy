@@ -6204,7 +6204,7 @@ func (s *WebhookUpdate) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"headers\"")
 			}
 		default:
-			return d.Skip()
+			return errors.Errorf("unexpected field %q", k)
 		}
 		return nil
 	}); err != nil {

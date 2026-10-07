@@ -102,7 +102,7 @@ func TestWebhookPauseDeleteAndRetry(t *testing.T) {
 	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
 	d := deliveries(t, st, "agent", 1)[0]
 	c.Enabled = false
-	if err := st.UpdateWebhook(ctx, c); err != nil {
+	if _, err := st.UpdateWebhook(ctx, c.Name, webhook.Update{Enabled: new(c.Enabled)}); err != nil {
 		t.Fatal(err)
 	}
 	due, err := st.DueWebhooks(ctx, t0)
@@ -118,7 +118,7 @@ func TestWebhookPauseDeleteAndRetry(t *testing.T) {
 		t.Fatalf("retry disabled: %v", err)
 	}
 	c.Enabled = true
-	if err = st.UpdateWebhook(ctx, c); err != nil {
+	if _, err = st.UpdateWebhook(ctx, c.Name, webhook.Update{Enabled: new(c.Enabled)}); err != nil {
 		t.Fatal(err)
 	}
 	if err = st.RetryWebhook(ctx, c.Name, d.ID, t0.Add(store.WebhookTTL)); err != nil {

@@ -58,7 +58,8 @@ Provider details:
   query parameter in the configured URL is retained for an existing thread.
   Forum/media channels need an existing thread ID; automatic thread creation
   is not supported. Discord's `429` JSON `retry_after` is honored as well as
-  the `Retry-After` header.
+  the `Retry-After` header. Cooldowns are per named destination; a Discord
+  global rate limit does not pause your other configured Discord destinations.
 - [Slack](https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/):
   use an incoming webhook for the desired channel. Messages use plain-text
   blocks, suppress link unfurling, and neutralize mention syntax.
@@ -284,6 +285,7 @@ already in flight may finish after changing, pausing, or removing its endpoint.
 The API uses `POST /api/v1/webhooks` to create and
 `PATCH /api/v1/webhooks/{name}` for partial updates. In PATCH requests, omit
 `url`, `secret`, or `headers` to retain them; `secret: ""` disables signing and
-`headers: []` clears headers. Read responses include `type`, `destination`
+`headers: []` clears headers. Updates merge and validate atomically. Unknown
+fields, including an attempted `type` change, are refused. Read responses include `type`, `destination`
 (scheme and host only), `signing`, and `headerNames`, alongside filters and
 delivery backoff status. The full contract is in `/openapi.yaml`.

@@ -780,6 +780,7 @@ components:
           $ref: '#/components/schemas/WebhookHeaders'
     WebhookUpdate:
       type: object
+      additionalProperties: false
       description: >-
         Changes to a destination. Omitted settings are retained. Empty secret
         disables signing; empty headers remove custom headers. Type is immutable.

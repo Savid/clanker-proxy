@@ -81,7 +81,7 @@ func TestWebhookLongRetryAfterIsCappedAndCleared(t *testing.T) {
 		t.Fatalf("paused until %s, want an hour", h.PausedUntil)
 	}
 	// Re-enabling (any owner update) is how an operator resumes a paused endpoint.
-	if err := st.UpdateWebhook(t.Context(), h); err != nil {
+	if _, err := st.UpdateWebhook(t.Context(), h.Name, webhook.Update{Enabled: new(true)}); err != nil {
 		t.Fatal(err)
 	}
 	if h = hookState(t, st); !h.PausedUntil.IsZero() || h.Failures != 0 {

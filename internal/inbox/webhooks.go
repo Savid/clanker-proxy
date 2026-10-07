@@ -41,20 +41,10 @@ func (b *Inbox) CreateWebhook(ctx context.Context, c webhook.Config) (webhook.Co
 	return c, webhookError(b.store.CreateWebhook(ctx, c))
 }
 
-// UpdateWebhook validates the merged settings before replacing them.
+// UpdateWebhook applies partial settings atomically with validation.
 func (b *Inbox) UpdateWebhook(ctx context.Context, name string, change webhook.Update) (webhook.Config, error) {
-	c, err := b.Webhook(ctx, name)
-	if err != nil {
-		return c, err
-	}
-	c = change.Apply(c)
-	if err = c.Validate(); err != nil {
-		return c, errorf(KindInvalid, "%v", err)
-	}
-	if err = b.store.UpdateWebhook(ctx, c); err != nil {
-		return c, webhookError(err)
-	}
-	return b.Webhook(ctx, c.Name)
+	c, err := b.store.UpdateWebhook(ctx, name, change)
+	return c, webhookError(err)
 }
 
 // DeleteWebhook removes a destination and its delivery history.
@@ -104,6 +94,8 @@ func webhookError(err error) error {
 		return errorf(KindConflict, "webhook name already exists")
 	case errors.Is(err, store.ErrWebhookRetry):
 		return errorf(KindConflict, "only failed deliveries of enabled webhooks can be retried")
+	case errors.Is(err, store.ErrWebhookInvalid):
+		return errorf(KindInvalid, "%v", err)
 	default:
 		return err
 	}

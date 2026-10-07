@@ -78,6 +78,9 @@ func TestWebhookPrivateDestinationAndUpdates(t *testing.T) {
 	if h.Type != "discord" || h.Destination != "https://discord.com" || h.Signing || h.Enabled || h.Origin != "both" || len(h.HeaderNames) != 1 {
 		t.Fatal("partial update changed omitted fields")
 	}
+	if rec := call(http.MethodPatch, "/api/v1/webhooks/discord", `{"type":"generic"}`); rec.Code != http.StatusBadRequest {
+		t.Fatal("attempted destination type change was not refused")
+	}
 	for _, path := range []string{"/api/v1/webhooks", "/api/v1/webhooks/discord"} {
 		if rec := call(http.MethodGet, path, ""); rec.Code != http.StatusOK {
 			t.Fatal("read failed")

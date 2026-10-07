@@ -134,7 +134,7 @@ func TestPendingWebhookUsesChangedHeadersAndSigning(t *testing.T) {
 	}
 	c.Secret = ""
 	c.Headers = []webhook.Header{{Name: "Authorization", Value: "Bearer new-value"}}
-	if err = st.UpdateWebhook(t.Context(), c); err != nil {
+	if _, err = st.UpdateWebhook(t.Context(), c.Name, webhook.Update{Secret: new(c.Secret), Headers: &c.Headers}); err != nil {
 		t.Fatal(err)
 	}
 	drainHooks(t, st, t0)

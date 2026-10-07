@@ -23,6 +23,9 @@ const WebhookTTL = 7 * 24 * time.Hour
 // ErrWebhookRetry means a delivery is not failed, or its webhook is disabled.
 var ErrWebhookRetry = errors.New("only failed deliveries of enabled webhooks can be retried")
 
+// ErrWebhookInvalid marks validation failures inside an atomic settings update.
+var ErrWebhookInvalid = errors.New("invalid webhook settings")
+
 const webhookColumns = `name, type, url, events, origin, enabled, secret, headers, retry_after, failures`
 
 func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
@@ -87,20 +90,40 @@ func (s *Store) CreateWebhook(ctx context.Context, c webhook.Config) error {
 	return err
 }
 
-// UpdateWebhook replaces validated settings; Type is immutable.
-// An owner update is the signal that the receiver may be fixed, so it also
-// clears the endpoint's backoff.
-func (s *Store) UpdateWebhook(ctx context.Context, c webhook.Config) error {
-	events, err := json.Marshal(c.Events)
-	if err != nil {
-		return err
-	}
-	headers, err := json.Marshal(c.Headers)
-	if err != nil {
-		return err
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, c.Enabled, c.Secret, string(headers), c.Name)
-	return webhookChanged(res, err)
+// UpdateWebhook merges and validates under the write lock, so unrelated edits
+// cannot undo credential rotation or overwrite a deleted and recreated name.
+// An owner update also clears backoff to resume a repaired destination.
+func (s *Store) UpdateWebhook(ctx context.Context, name string, change webhook.Update) (webhook.Config, error) {
+	var out webhook.Config
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		c, err := scanWebhook(tx.QueryRowContext(ctx, `SELECT `+webhookColumns+` FROM webhooks WHERE name=?`, name))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		c = change.Apply(c)
+		if err = c.Validate(); err != nil {
+			return fmt.Errorf("%w: %w", ErrWebhookInvalid, err)
+		}
+		events, err := json.Marshal(c.Events)
+		if err != nil {
+			return err
+		}
+		headers, err := json.Marshal(c.Headers)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, c.Enabled, c.Secret, string(headers), name); err != nil {
+			return err
+		}
+		c.PausedUntil = time.Time{}
+		c.Failures = 0
+		out = c
+		return nil
+	})
+	return out, err
 }
 
 // DeleteWebhook also deletes queued deliveries through the foreign key.
