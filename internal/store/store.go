@@ -136,12 +136,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	if err = upgradeWebhooks(ctx, db); err != nil {
-		_ = db.Close()
-
-		return nil, fmt.Errorf("upgrade webhooks %s: %w", path, err)
-	}
-
 	if _, err = db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
 
@@ -149,28 +143,6 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 
 	return &Store{db: db}, nil
-}
-
-// upgradeWebhooks adds destination types and headers to a webhooks table
-// created before them, so configured webhooks survive an upgrade. CREATE
-// TABLE IF NOT EXISTS keeps an existing table as it is, and every webhook
-// query needs these columns. Those webhooks were all signed generic ones.
-func upgradeWebhooks(ctx context.Context, db *sql.DB) error {
-	var tables, typed int
-
-	err := db.QueryRowContext(ctx, `SELECT
- (SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='webhooks'),
- (SELECT count(*) FROM pragma_table_info('webhooks') WHERE name='type')`).Scan(&tables, &typed)
-	if err != nil || tables == 0 || typed == 1 {
-		return err
-	}
-
-	return (&Store{db: db}).tx(ctx, func(tx *sql.Tx) error {
-		_, alterErr := tx.ExecContext(ctx, `ALTER TABLE webhooks ADD COLUMN type TEXT NOT NULL DEFAULT 'generic';
-ALTER TABLE webhooks ADD COLUMN headers TEXT NOT NULL DEFAULT '[]'`)
-
-		return alterErr
-	})
 }
 
 // Close closes the database.

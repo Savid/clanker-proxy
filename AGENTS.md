@@ -91,8 +91,6 @@ CP_DIR=/tmp/a CP_URL=http://127.0.0.1:18471 build/bin/cpctl peer add bob http://
 - Never log or print tokens or peer secrets, including as flag defaults.
   Never log the request ID by hand; the context adds it.
 - Hard cutover: no backward compatibility, migrations, shims or deprecated paths.
-  The exception is the owner's stored data: when a released table changes,
-  upgrade it in `store.Open` (as `upgradeWebhooks` does) rather than drop it.
 - Comments say what the code cannot: why, constraints, non-obvious
   consequences. No restating code, no history, no references to plans,
   reviews or tickets.

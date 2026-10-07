@@ -24,10 +24,6 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
 
 ## Before you start
 
-- **Versions.** Both your cpd and the `cpctl` in the orb must be a release
-  with destination types (after v0.1.2): older ones cannot read the key from
-  stdin or the URL from a file. Run `cpctl update` where cpd runs and restart
-  it. Webhooks you configured before are kept, as signed `generic` webhooks.
 - **A reachable cpd.** cpd runs outside the orb, always on, with a public
   HTTPS `-url`. Peers deliver to it while the orb sleeps; a webhook wakes the
   orb, and its agents call back to cpd.
