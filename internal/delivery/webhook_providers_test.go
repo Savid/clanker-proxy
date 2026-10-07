@@ -60,7 +60,7 @@ func assertProviderRequest(t *testing.T, kind string, r *http.Request) {
 	if kind == "discord" && (r.URL.Query().Get("wait") != "true" || r.URL.Query().Get("thread_id") != "123") {
 		t.Error("Discord must confirm message persistence and retain thread_id")
 	}
-	if kind == "generic" && r.Header.Get("Webhook-Id") == "" {
+	if kind == "generic" && (r.Header.Get("Webhook-Id") == "" || r.Header.Get("Idempotency-Key") != r.Header.Get("Webhook-Id")) {
 		t.Error("unsigned generic delivery needs an ID for deduplication")
 	}
 	if kind == "ntfy" {

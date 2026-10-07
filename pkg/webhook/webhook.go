@@ -149,7 +149,7 @@ func validateHeaders(headers []Header) error {
 		}
 		seen[name] = true
 		if reservedHeader(name) {
-			return errors.New("transport, content-type, user-agent and webhook headers are managed by the daemon")
+			return errors.New("transport, content-type, user-agent, idempotency-key and webhook headers are managed by the daemon")
 		}
 		if len(h.Value) == 0 || len(h.Value) > 4096 || strings.ContainsFunc(h.Value, func(r rune) bool { return r < 32 || r == 127 }) {
 			return errors.New("webhook header values must be 1 to 4096 bytes without control characters")
@@ -160,7 +160,7 @@ func validateHeaders(headers []Header) error {
 
 func reservedHeader(name string) bool {
 	return strings.HasPrefix(name, "webhook-") || strings.HasPrefix(name, "proxy-") ||
-		slices.Contains([]string{"host", "content-length", "content-type", "connection", "transfer-encoding", "trailer", "te", "upgrade", "expect", "user-agent"}, name)
+		slices.Contains([]string{"host", "content-length", "content-type", "connection", "transfer-encoding", "trailer", "te", "upgrade", "expect", "user-agent", "idempotency-key"}, name)
 }
 
 // Destination omits paths and queries, which may contain provider credentials.

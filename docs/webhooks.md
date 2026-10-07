@@ -101,7 +101,7 @@ cpctl webhook add phone https://gotify.example.com/message \
 Headers also support custom receivers and reverse proxies. There can be at most
 16, with case-insensitively unique names (up to 64 bytes) and single-line values
 (up to 4096 bytes). Transport, `Content-Type`, `User-Agent`, `Proxy-*`, and
-`Webhook-*` headers are managed by `cpd` and cannot be overridden. For ntfy,
+`Webhook-*` and `Idempotency-Key` headers are managed by `cpd` and cannot be overridden. For ntfy,
 a `Title` header replaces the generated title. Header files and URLs are stored in the daemon's
 private database; they are not reread from the CLI machine on delivery.
 
@@ -219,6 +219,8 @@ is configured they also include a signature following the
 [Standard Webhooks signing format](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md):
 
 - `Webhook-Id`: delivery UUID, also the payload's `id`.
+- `Idempotency-Key`: the same UUID, for intermediaries such as Amp that
+  deduplicate retries by this header.
 - `Webhook-Timestamp`: Unix seconds at this delivery attempt.
 - `Webhook-Signature`: present only when signing is enabled; `v1,` followed by a base64 HMAC-SHA256 signature.
 

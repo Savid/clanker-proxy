@@ -49,6 +49,7 @@ func webhookRequest(ctx context.Context, hook webhook.Config, job store.WebhookD
 	if provider.Signed {
 		timestamp := strconv.FormatInt(now.Unix(), 10)
 		req.Header.Set("Webhook-Id", job.ID)
+		req.Header.Set("Idempotency-Key", job.ID)
 		req.Header.Set("Webhook-Timestamp", timestamp)
 		if hook.Secret != "" {
 			sig, signErr := webhook.Signature(hook.Secret, job.ID, timestamp, message.Body)

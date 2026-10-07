@@ -577,6 +577,12 @@ webhooks:
           description: Stable delivery ID, unchanged across retries.
           schema:
             $ref: '#/components/schemas/ID'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Same value as Webhook-Id, for intermediaries that deduplicate retries by it.
+          schema:
+            $ref: '#/components/schemas/ID'
         - name: Webhook-Timestamp
           in: header
           required: true
