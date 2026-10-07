@@ -107,6 +107,148 @@ func (s *Action) UnmarshalText(data []byte) error {
 	}
 }
 
+type AgentToken struct {
+	Token string
+	Roles []string
+}
+
+// GetToken returns the value of Token.
+func (s *AgentToken) GetToken() string {
+	return s.Token
+}
+
+// GetRoles returns the value of Roles.
+func (s *AgentToken) GetRoles() []string {
+	return s.Roles
+}
+
+// SetToken sets the value of Token.
+func (s *AgentToken) SetToken(val string) {
+	s.Token = val
+}
+
+// SetRoles sets the value of Roles.
+func (s *AgentToken) SetRoles(val []string) {
+	s.Roles = val
+}
+
+// A new agent token. With peers, it reaches only threads with those peers: it lists and streams only
+// theirs, and others' answer 404.
+// Ref: #/components/schemas/AgentTokenInput
+type AgentTokenInput struct {
+	Name  Name  `json:"name"`
+	Peers Peers `json:"peers"`
+	// When it stops working. Omitted, it works until revoked.
+	ExpiresAt OptDateTime `json:"expiresAt"`
+}
+
+// GetName returns the value of Name.
+func (s *AgentTokenInput) GetName() Name {
+	return s.Name
+}
+
+// GetPeers returns the value of Peers.
+func (s *AgentTokenInput) GetPeers() Peers {
+	return s.Peers
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *AgentTokenInput) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// SetName sets the value of Name.
+func (s *AgentTokenInput) SetName(val Name) {
+	s.Name = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *AgentTokenInput) SetPeers(val Peers) {
+	s.Peers = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *AgentTokenInput) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
+
+// Agent tokens, by name.
+// Ref: #/components/schemas/AgentTokenList
+type AgentTokenList struct {
+	Tokens []AgentTokenSummary `json:"tokens"`
+}
+
+// GetTokens returns the value of Tokens.
+func (s *AgentTokenList) GetTokens() []AgentTokenSummary {
+	return s.Tokens
+}
+
+// SetTokens sets the value of Tokens.
+func (s *AgentTokenList) SetTokens(val []AgentTokenSummary) {
+	s.Tokens = val
+}
+
+// An agent token, without the token.
+// Ref: #/components/schemas/AgentTokenSummary
+type AgentTokenSummary struct {
+	Name      Name        `json:"name"`
+	Peers     Peers       `json:"peers"`
+	CreatedAt time.Time   `json:"createdAt"`
+	ExpiresAt OptDateTime `json:"expiresAt"`
+	// Its last use, to the minute.
+	UsedAt OptDateTime `json:"usedAt"`
+}
+
+// GetName returns the value of Name.
+func (s *AgentTokenSummary) GetName() Name {
+	return s.Name
+}
+
+// GetPeers returns the value of Peers.
+func (s *AgentTokenSummary) GetPeers() Peers {
+	return s.Peers
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *AgentTokenSummary) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *AgentTokenSummary) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// GetUsedAt returns the value of UsedAt.
+func (s *AgentTokenSummary) GetUsedAt() OptDateTime {
+	return s.UsedAt
+}
+
+// SetName sets the value of Name.
+func (s *AgentTokenSummary) SetName(val Name) {
+	s.Name = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *AgentTokenSummary) SetPeers(val Peers) {
+	s.Peers = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *AgentTokenSummary) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *AgentTokenSummary) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
+
+// SetUsedAt sets the value of UsedAt.
+func (s *AgentTokenSummary) SetUsedAt(val OptDateTime) {
+	s.UsedAt = val
+}
+
 // How to approve a peering request.
 // Ref: #/components/schemas/Approval
 type Approval struct {
@@ -130,6 +272,9 @@ type Code string
 type Count int32
 
 type DaemonURL url.URL
+
+// DeleteAgentTokenNoContent is response for DeleteAgentToken operation.
+type DeleteAgentTokenNoContent struct{}
 
 // DeleteWebhookNoContent is response for DeleteWebhook operation.
 type DeleteWebhookNoContent struct{}
@@ -527,6 +672,8 @@ type Me struct {
 	Name    Name         `json:"name"`
 	URL     OptDaemonURL `json:"url"`
 	Version string       `json:"version"`
+	// For an agent token limited to peers, those peers; absent otherwise.
+	Peers Peers `json:"peers"`
 }
 
 // GetName returns the value of Name.
@@ -544,6 +691,11 @@ func (s *Me) GetVersion() string {
 	return s.Version
 }
 
+// GetPeers returns the value of Peers.
+func (s *Me) GetPeers() Peers {
+	return s.Peers
+}
+
 // SetName sets the value of Name.
 func (s *Me) SetName(val Name) {
 	s.Name = val
@@ -559,7 +711,73 @@ func (s *Me) SetVersion(val string) {
 	s.Version = val
 }
 
+// SetPeers sets the value of Peers.
+func (s *Me) SetPeers(val Peers) {
+	s.Peers = val
+}
+
 type Name string
+
+// A new agent token and the token itself, which is never shown again.
+// Ref: #/components/schemas/NewAgentToken
+type NewAgentToken struct {
+	Name  Name  `json:"name"`
+	Peers Peers `json:"peers"`
+	// The bearer token. Give it to the agent as CP_TOKEN.
+	Token     string      `json:"token"`
+	CreatedAt time.Time   `json:"createdAt"`
+	ExpiresAt OptDateTime `json:"expiresAt"`
+}
+
+// GetName returns the value of Name.
+func (s *NewAgentToken) GetName() Name {
+	return s.Name
+}
+
+// GetPeers returns the value of Peers.
+func (s *NewAgentToken) GetPeers() Peers {
+	return s.Peers
+}
+
+// GetToken returns the value of Token.
+func (s *NewAgentToken) GetToken() string {
+	return s.Token
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *NewAgentToken) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *NewAgentToken) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// SetName sets the value of Name.
+func (s *NewAgentToken) SetName(val Name) {
+	s.Name = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *NewAgentToken) SetPeers(val Peers) {
+	s.Peers = val
+}
+
+// SetToken sets the value of Token.
+func (s *NewAgentToken) SetToken(val string) {
+	s.Token = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *NewAgentToken) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *NewAgentToken) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
 
 // A thread to open with a peer.
 // Ref: #/components/schemas/NewThread
@@ -666,6 +884,52 @@ func (o OptBody) Get() (v Body, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptBody) Or(d Body) Body {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptBool returns new OptBool with value set to v.
+func NewOptBool(v bool) OptBool {
+	return OptBool{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptBool is optional bool.
+type OptBool struct {
+	Value bool
+	Set   bool
+}
+
+// IsSet returns true if OptBool was set.
+func (o OptBool) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptBool) Reset() {
+	var v bool
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptBool) SetTo(v bool) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptBool) Get() (v bool, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptBool) Or(d bool) bool {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -1270,6 +1534,52 @@ func (o OptTitle) Or(d Title) Title {
 	return d
 }
 
+// NewOptWebhookOrigin returns new OptWebhookOrigin with value set to v.
+func NewOptWebhookOrigin(v WebhookOrigin) OptWebhookOrigin {
+	return OptWebhookOrigin{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptWebhookOrigin is optional WebhookOrigin.
+type OptWebhookOrigin struct {
+	Value WebhookOrigin
+	Set   bool
+}
+
+// IsSet returns true if OptWebhookOrigin was set.
+func (o OptWebhookOrigin) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptWebhookOrigin) Reset() {
+	var v WebhookOrigin
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptWebhookOrigin) SetTo(v WebhookOrigin) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptWebhookOrigin) Get() (v WebhookOrigin, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptWebhookOrigin) Or(d WebhookOrigin) WebhookOrigin {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptWebhookSecret returns new OptWebhookSecret with value set to v.
 func NewOptWebhookSecret(v WebhookSecret) OptWebhookSecret {
 	return OptWebhookSecret{
@@ -1310,6 +1620,52 @@ func (o OptWebhookSecret) Get() (v WebhookSecret, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptWebhookSecret) Or(d WebhookSecret) WebhookSecret {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptWebhookURL returns new OptWebhookURL with value set to v.
+func NewOptWebhookURL(v WebhookURL) OptWebhookURL {
+	return OptWebhookURL{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptWebhookURL is optional WebhookURL.
+type OptWebhookURL struct {
+	Value WebhookURL
+	Set   bool
+}
+
+// IsSet returns true if OptWebhookURL was set.
+func (o OptWebhookURL) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptWebhookURL) Reset() {
+	var v WebhookURL
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptWebhookURL) SetTo(v WebhookURL) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptWebhookURL) Get() (v WebhookURL, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptWebhookURL) Or(d WebhookURL) WebhookURL {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -1572,6 +1928,8 @@ func (s *PeeringRequest) SetSecret(val string) {
 func (s *PeeringRequest) SetNote(val OptNote) {
 	s.Note = val
 }
+
+type Peers []Name
 
 // RFC 9457 problem details.
 // Ref: #/components/schemas/Problem
@@ -1860,6 +2218,9 @@ type Thread struct {
 	Turn  OptName     `json:"turn"`
 	// The thread is waiting on the owner.
 	MyTurn bool `json:"myTurn"`
+	// Who made the latest move to arrive that changed something. With myTurn, the peer here means the
+	// owner has not answered it.
+	LastFrom Name `json:"lastFrom"`
 	// What the owner may do now, for actOnThread. `comment` is always among them.
 	Actions     []Action  `json:"actions"`
 	OpenedAt    time.Time `json:"openedAt"`
@@ -1924,6 +2285,11 @@ func (s *Thread) GetTurn() OptName {
 // GetMyTurn returns the value of MyTurn.
 func (s *Thread) GetMyTurn() bool {
 	return s.MyTurn
+}
+
+// GetLastFrom returns the value of LastFrom.
+func (s *Thread) GetLastFrom() Name {
+	return s.LastFrom
 }
 
 // GetActions returns the value of Actions.
@@ -2014,6 +2380,11 @@ func (s *Thread) SetTurn(val OptName) {
 // SetMyTurn sets the value of MyTurn.
 func (s *Thread) SetMyTurn(val bool) {
 	s.MyTurn = val
+}
+
+// SetLastFrom sets the value of LastFrom.
+func (s *Thread) SetLastFrom(val Name) {
+	s.LastFrom = val
 }
 
 // SetActions sets the value of Actions.
@@ -2360,6 +2731,9 @@ type ThreadSummary struct {
 	Turn  OptName           `json:"turn"`
 	// The thread is waiting on the owner.
 	MyTurn bool `json:"myTurn"`
+	// Who made the latest move to arrive that changed something. With myTurn, the peer here means the
+	// owner has not answered it.
+	LastFrom Name `json:"lastFrom"`
 	// What the owner may do now, for actOnThread. `comment` is always among them.
 	Actions     []Action  `json:"actions"`
 	OpenedAt    time.Time `json:"openedAt"`
@@ -2422,6 +2796,11 @@ func (s *ThreadSummary) GetTurn() OptName {
 // GetMyTurn returns the value of MyTurn.
 func (s *ThreadSummary) GetMyTurn() bool {
 	return s.MyTurn
+}
+
+// GetLastFrom returns the value of LastFrom.
+func (s *ThreadSummary) GetLastFrom() Name {
+	return s.LastFrom
 }
 
 // GetActions returns the value of Actions.
@@ -2509,6 +2888,11 @@ func (s *ThreadSummary) SetMyTurn(val bool) {
 	s.MyTurn = val
 }
 
+// SetLastFrom sets the value of LastFrom.
+func (s *ThreadSummary) SetLastFrom(val Name) {
+	s.LastFrom = val
+}
+
 // SetActions sets the value of Actions.
 func (s *ThreadSummary) SetActions(val []Action) {
 	s.Actions = val
@@ -2584,14 +2968,21 @@ func (s *ThreadSummaryRole) UnmarshalText(data []byte) error {
 
 type Title string
 
-// Owner-configured signed notifications, without the signing key.
+// Owner-configured notifications, without destination paths, queries, custom header values or signing
+// keys.
 // Ref: #/components/schemas/Webhook
 type Webhook struct {
-	Name    Name          `json:"name"`
-	URL     WebhookURL    `json:"url"`
-	Events  WebhookEvents `json:"events"`
-	Origin  WebhookOrigin `json:"origin"`
-	Enabled bool          `json:"enabled"`
+	Name  Name        `json:"name"`
+	Type  WebhookType `json:"type"`
+	Peers Peers       `json:"peers"`
+	// Destination scheme and host only; path and query are never returned.
+	Destination string `json:"destination"`
+	// Whether generic notifications have a configured signing key.
+	Signing     bool                `json:"signing"`
+	HeaderNames []WebhookHeaderName `json:"headerNames"`
+	Events      WebhookEvents       `json:"events"`
+	Origin      WebhookOrigin       `json:"origin"`
+	Enabled     bool                `json:"enabled"`
 	// Set while the endpoint is backing off after failed attempts or a receiver's Retry-After; no delivery
 	// is attempted before it. Any update or manual retry clears it.
 	PausedUntil OptDateTime `json:"pausedUntil"`
@@ -2602,9 +2993,29 @@ func (s *Webhook) GetName() Name {
 	return s.Name
 }
 
-// GetURL returns the value of URL.
-func (s *Webhook) GetURL() WebhookURL {
-	return s.URL
+// GetType returns the value of Type.
+func (s *Webhook) GetType() WebhookType {
+	return s.Type
+}
+
+// GetPeers returns the value of Peers.
+func (s *Webhook) GetPeers() Peers {
+	return s.Peers
+}
+
+// GetDestination returns the value of Destination.
+func (s *Webhook) GetDestination() string {
+	return s.Destination
+}
+
+// GetSigning returns the value of Signing.
+func (s *Webhook) GetSigning() bool {
+	return s.Signing
+}
+
+// GetHeaderNames returns the value of HeaderNames.
+func (s *Webhook) GetHeaderNames() []WebhookHeaderName {
+	return s.HeaderNames
 }
 
 // GetEvents returns the value of Events.
@@ -2632,9 +3043,29 @@ func (s *Webhook) SetName(val Name) {
 	s.Name = val
 }
 
-// SetURL sets the value of URL.
-func (s *Webhook) SetURL(val WebhookURL) {
-	s.URL = val
+// SetType sets the value of Type.
+func (s *Webhook) SetType(val WebhookType) {
+	s.Type = val
+}
+
+// SetPeers sets the value of Peers.
+func (s *Webhook) SetPeers(val Peers) {
+	s.Peers = val
+}
+
+// SetDestination sets the value of Destination.
+func (s *Webhook) SetDestination(val string) {
+	s.Destination = val
+}
+
+// SetSigning sets the value of Signing.
+func (s *Webhook) SetSigning(val bool) {
+	s.Signing = val
+}
+
+// SetHeaderNames sets the value of HeaderNames.
+func (s *Webhook) SetHeaderNames(val []WebhookHeaderName) {
+	s.HeaderNames = val
 }
 
 // SetEvents sets the value of Events.
@@ -2657,20 +3088,36 @@ func (s *Webhook) SetPausedUntil(val OptDateTime) {
 	s.PausedUntil = val
 }
 
-// A new webhook. Secret is supplied by the owner and never returned.
+// A new webhook. Generic signing is opt-in. Destination URL, custom header values and signing key are
+// write-only. Chat destinations authenticate with their provider URL or custom headers, without a
+// signing key. With peers, only those peers' thread events are sent, and never peering requests, whose
+// names the requester chooses.
 // Ref: #/components/schemas/WebhookCreate
 type WebhookCreate struct {
-	Name    Name          `json:"name"`
-	URL     WebhookURL    `json:"url"`
-	Events  WebhookEvents `json:"events"`
-	Origin  WebhookOrigin `json:"origin"`
-	Enabled bool          `json:"enabled"`
-	Secret  WebhookSecret `json:"secret"`
+	Peers   Peers            `json:"peers"`
+	Name    Name             `json:"name"`
+	Type    WebhookType      `json:"type"`
+	URL     WebhookURL       `json:"url"`
+	Events  WebhookEvents    `json:"events"`
+	Origin  WebhookOrigin    `json:"origin"`
+	Enabled bool             `json:"enabled"`
+	Secret  OptWebhookSecret `json:"secret"`
+	Headers WebhookHeaders   `json:"headers"`
+}
+
+// GetPeers returns the value of Peers.
+func (s *WebhookCreate) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetName returns the value of Name.
 func (s *WebhookCreate) GetName() Name {
 	return s.Name
+}
+
+// GetType returns the value of Type.
+func (s *WebhookCreate) GetType() WebhookType {
+	return s.Type
 }
 
 // GetURL returns the value of URL.
@@ -2694,13 +3141,28 @@ func (s *WebhookCreate) GetEnabled() bool {
 }
 
 // GetSecret returns the value of Secret.
-func (s *WebhookCreate) GetSecret() WebhookSecret {
+func (s *WebhookCreate) GetSecret() OptWebhookSecret {
 	return s.Secret
+}
+
+// GetHeaders returns the value of Headers.
+func (s *WebhookCreate) GetHeaders() WebhookHeaders {
+	return s.Headers
+}
+
+// SetPeers sets the value of Peers.
+func (s *WebhookCreate) SetPeers(val Peers) {
+	s.Peers = val
 }
 
 // SetName sets the value of Name.
 func (s *WebhookCreate) SetName(val Name) {
 	s.Name = val
+}
+
+// SetType sets the value of Type.
+func (s *WebhookCreate) SetType(val WebhookType) {
+	s.Type = val
 }
 
 // SetURL sets the value of URL.
@@ -2724,8 +3186,13 @@ func (s *WebhookCreate) SetEnabled(val bool) {
 }
 
 // SetSecret sets the value of Secret.
-func (s *WebhookCreate) SetSecret(val WebhookSecret) {
+func (s *WebhookCreate) SetSecret(val OptWebhookSecret) {
 	s.Secret = val
+}
+
+// SetHeaders sets the value of Headers.
+func (s *WebhookCreate) SetHeaders(val WebhookHeaders) {
+	s.Headers = val
 }
 
 // Delivery metadata without the signing key or response body.
@@ -3159,6 +3626,36 @@ func (s *WebhookEventsItem) UnmarshalText(data []byte) error {
 	}
 }
 
+type WebhookHeaderName string
+
+type WebhookHeaders []WebhookHeadersItem
+
+type WebhookHeadersItem struct {
+	Name WebhookHeaderName `json:"name"`
+	// A single-line value of at most 4096 bytes, without control characters.
+	Value string `json:"value"`
+}
+
+// GetName returns the value of Name.
+func (s *WebhookHeadersItem) GetName() WebhookHeaderName {
+	return s.Name
+}
+
+// GetValue returns the value of Value.
+func (s *WebhookHeadersItem) GetValue() string {
+	return s.Value
+}
+
+// SetName sets the value of Name.
+func (s *WebhookHeadersItem) SetName(val WebhookHeaderName) {
+	s.Name = val
+}
+
+// SetValue sets the value of Value.
+func (s *WebhookHeadersItem) SetValue(val string) {
+	s.Value = val
+}
+
 // Configured webhooks, sorted by name.
 // Ref: #/components/schemas/WebhookList
 type WebhookList struct {
@@ -3229,20 +3726,128 @@ type WebhookSecret string
 
 type WebhookSubject string
 
-type WebhookURL url.URL
+// Destination format. Immutable after creation. Teams uses Workflows Adaptive Cards; apprise sends to
+// a configured Apprise API endpoint.
+// Ref: #/components/schemas/WebhookType
+type WebhookType string
 
-// Full replacement of settings, with an optional signing-key replacement.
+const (
+	WebhookTypeGeneric    WebhookType = "generic"
+	WebhookTypeDiscord    WebhookType = "discord"
+	WebhookTypeSlack      WebhookType = "slack"
+	WebhookTypeTeams      WebhookType = "teams"
+	WebhookTypeGoogleChat WebhookType = "google-chat"
+	WebhookTypeMattermost WebhookType = "mattermost"
+	WebhookTypeRocketchat WebhookType = "rocketchat"
+	WebhookTypeNtfy       WebhookType = "ntfy"
+	WebhookTypeGotify     WebhookType = "gotify"
+	WebhookTypeApprise    WebhookType = "apprise"
+)
+
+// AllValues returns all WebhookType values.
+func (WebhookType) AllValues() []WebhookType {
+	return []WebhookType{
+		WebhookTypeGeneric,
+		WebhookTypeDiscord,
+		WebhookTypeSlack,
+		WebhookTypeTeams,
+		WebhookTypeGoogleChat,
+		WebhookTypeMattermost,
+		WebhookTypeRocketchat,
+		WebhookTypeNtfy,
+		WebhookTypeGotify,
+		WebhookTypeApprise,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookType) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookTypeGeneric:
+		return []byte(s), nil
+	case WebhookTypeDiscord:
+		return []byte(s), nil
+	case WebhookTypeSlack:
+		return []byte(s), nil
+	case WebhookTypeTeams:
+		return []byte(s), nil
+	case WebhookTypeGoogleChat:
+		return []byte(s), nil
+	case WebhookTypeMattermost:
+		return []byte(s), nil
+	case WebhookTypeRocketchat:
+		return []byte(s), nil
+	case WebhookTypeNtfy:
+		return []byte(s), nil
+	case WebhookTypeGotify:
+		return []byte(s), nil
+	case WebhookTypeApprise:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookType) UnmarshalText(data []byte) error {
+	switch WebhookType(data) {
+	case WebhookTypeGeneric:
+		*s = WebhookTypeGeneric
+		return nil
+	case WebhookTypeDiscord:
+		*s = WebhookTypeDiscord
+		return nil
+	case WebhookTypeSlack:
+		*s = WebhookTypeSlack
+		return nil
+	case WebhookTypeTeams:
+		*s = WebhookTypeTeams
+		return nil
+	case WebhookTypeGoogleChat:
+		*s = WebhookTypeGoogleChat
+		return nil
+	case WebhookTypeMattermost:
+		*s = WebhookTypeMattermost
+		return nil
+	case WebhookTypeRocketchat:
+		*s = WebhookTypeRocketchat
+		return nil
+	case WebhookTypeNtfy:
+		*s = WebhookTypeNtfy
+		return nil
+	case WebhookTypeGotify:
+		*s = WebhookTypeGotify
+		return nil
+	case WebhookTypeApprise:
+		*s = WebhookTypeApprise
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type WebhookURL string
+
+// Changes to a destination. Omitted settings are retained. Empty secret disables signing; empty
+// headers remove custom headers; empty peers send every peer's events. Type is immutable.
 // Ref: #/components/schemas/WebhookUpdate
 type WebhookUpdate struct {
-	URL     WebhookURL       `json:"url"`
+	Peers   Peers            `json:"peers"`
+	URL     OptWebhookURL    `json:"url"`
 	Events  WebhookEvents    `json:"events"`
-	Origin  WebhookOrigin    `json:"origin"`
-	Enabled bool             `json:"enabled"`
+	Origin  OptWebhookOrigin `json:"origin"`
+	Enabled OptBool          `json:"enabled"`
 	Secret  OptWebhookSecret `json:"secret"`
+	Headers WebhookHeaders   `json:"headers"`
+}
+
+// GetPeers returns the value of Peers.
+func (s *WebhookUpdate) GetPeers() Peers {
+	return s.Peers
 }
 
 // GetURL returns the value of URL.
-func (s *WebhookUpdate) GetURL() WebhookURL {
+func (s *WebhookUpdate) GetURL() OptWebhookURL {
 	return s.URL
 }
 
@@ -3252,12 +3857,12 @@ func (s *WebhookUpdate) GetEvents() WebhookEvents {
 }
 
 // GetOrigin returns the value of Origin.
-func (s *WebhookUpdate) GetOrigin() WebhookOrigin {
+func (s *WebhookUpdate) GetOrigin() OptWebhookOrigin {
 	return s.Origin
 }
 
 // GetEnabled returns the value of Enabled.
-func (s *WebhookUpdate) GetEnabled() bool {
+func (s *WebhookUpdate) GetEnabled() OptBool {
 	return s.Enabled
 }
 
@@ -3266,8 +3871,18 @@ func (s *WebhookUpdate) GetSecret() OptWebhookSecret {
 	return s.Secret
 }
 
+// GetHeaders returns the value of Headers.
+func (s *WebhookUpdate) GetHeaders() WebhookHeaders {
+	return s.Headers
+}
+
+// SetPeers sets the value of Peers.
+func (s *WebhookUpdate) SetPeers(val Peers) {
+	s.Peers = val
+}
+
 // SetURL sets the value of URL.
-func (s *WebhookUpdate) SetURL(val WebhookURL) {
+func (s *WebhookUpdate) SetURL(val OptWebhookURL) {
 	s.URL = val
 }
 
@@ -3277,16 +3892,21 @@ func (s *WebhookUpdate) SetEvents(val WebhookEvents) {
 }
 
 // SetOrigin sets the value of Origin.
-func (s *WebhookUpdate) SetOrigin(val WebhookOrigin) {
+func (s *WebhookUpdate) SetOrigin(val OptWebhookOrigin) {
 	s.Origin = val
 }
 
 // SetEnabled sets the value of Enabled.
-func (s *WebhookUpdate) SetEnabled(val bool) {
+func (s *WebhookUpdate) SetEnabled(val OptBool) {
 	s.Enabled = val
 }
 
 // SetSecret sets the value of Secret.
 func (s *WebhookUpdate) SetSecret(val OptWebhookSecret) {
 	s.Secret = val
+}
+
+// SetHeaders sets the value of Headers.
+func (s *WebhookUpdate) SetHeaders(val WebhookHeaders) {
+	s.Headers = val
 }

@@ -11,7 +11,9 @@ type Handler interface {
 	// ActOnThread implements actOnThread operation.
 	//
 	// Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-	// they may.
+	// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+	// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+	// those peers, as getThread.
 	//
 	// POST /api/v1/threads/{ref}/events
 	ActOnThread(ctx context.Context, req *ThreadAction, params ActOnThreadParams) (*ThreadSummary, error)
@@ -36,12 +38,27 @@ type Handler interface {
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, req *Approval, params ApproveRequestParams) (*Peer, error)
+	// CreateAgentToken implements createAgentToken operation.
+	//
+	// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+	// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+	// the name is taken, and with 400 when `expiresAt` is not in the future.
+	//
+	// POST /api/v1/agent-tokens
+	CreateAgentToken(ctx context.Context, req *AgentTokenInput) (*NewAgentToken, error)
 	// CreateWebhook implements createWebhook operation.
 	//
 	// Only future matching events are queued; secrets are never returned.
 	//
 	// POST /api/v1/webhooks
 	CreateWebhook(ctx context.Context, req *WebhookCreate) (*Webhook, error)
+	// DeleteAgentToken implements deleteAgentToken operation.
+	//
+	// The token stops working at once. A stream it opened sends nothing more and closes at its next event
+	// or keepalive.
+	//
+	// DELETE /api/v1/agent-tokens/{name}
+	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error
 	// DeleteWebhook implements deleteWebhook operation.
 	//
 	// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
@@ -53,8 +70,9 @@ type Handler interface {
 	//
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
 	// `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-	// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-	// than ten minutes ahead.
+	// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+	// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+	// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 	//
 	// POST /api/v1/federation/events
 	DeliverEvent(ctx context.Context, req *Event) (*Receipt, error)
@@ -84,7 +102,9 @@ type Handler interface {
 	GetPeer(ctx context.Context, params GetPeerParams) (*Peer, error)
 	// GetThread implements getThread operation.
 	//
-	// The thread's summary and every event, in the order both daemons replay them.
+	// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+	// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+	// and any other answers 404 as if it did not exist.
 	//
 	// GET /api/v1/threads/{ref}
 	GetThread(ctx context.Context, params GetThreadParams) (*Thread, error)
@@ -94,6 +114,12 @@ type Handler interface {
 	//
 	// GET /api/v1/webhooks/{name}
 	GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error)
+	// ListAgentTokens implements listAgentTokens operation.
+	//
+	// Every agent token, by name, without the tokens themselves.
+	//
+	// GET /api/v1/agent-tokens
+	ListAgentTokens(ctx context.Context) (*AgentTokenList, error)
 	// ListPeers implements listPeers operation.
 	//
 	// Every peer, requested or active.
@@ -109,7 +135,7 @@ type Handler interface {
 	ListRequests(ctx context.Context) (*RequestList, error)
 	// ListThreads implements listThreads operation.
 	//
-	// Newest activity first.
+	// Newest activity first. An agent token limited to peers lists only threads with those peers.
 	//
 	// GET /api/v1/threads
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
@@ -151,7 +177,7 @@ type Handler interface {
 	//
 	// Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
 	// Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
-	// and a new one drops the oldest.
+	// and a new one drops the oldest. Past 10 requests a minute it answers 503.
 	//
 	// POST /api/v1/peering-requests
 	RequestPeering(ctx context.Context, req *PeeringRequest) (*RequestReceipt, error)
@@ -165,11 +191,13 @@ type Handler interface {
 	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
 	// UpdateWebhook implements updateWebhook operation.
 	//
-	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-	// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+	// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+	// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+	// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+	// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+	// backoff (pausedUntil).
 	//
-	// PUT /api/v1/webhooks/{name}
+	// PATCH /api/v1/webhooks/{name}
 	UpdateWebhook(ctx context.Context, req *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)
 	// NewError creates *ProblemStatusCode from error returned by handler.
 	//

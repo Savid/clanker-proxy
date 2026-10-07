@@ -1,7 +1,7 @@
 // Package store keeps the daemon's state in SQLite: the owner, peers and
 // their secrets, pending peering requests, every event, the outbox of events
-// to deliver, a projection of each thread for listing, and the URLs of
-// removed peers whose threads remain.
+// to deliver, a projection of each thread for listing, the URLs of removed
+// peers whose threads remain, agent tokens and webhooks.
 package store
 
 import (
@@ -73,16 +73,29 @@ CREATE TABLE IF NOT EXISTS threads (
 	turn       TEXT NOT NULL,
 	opened_at  TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
-	events     INTEGER NOT NULL
+	events     INTEGER NOT NULL,
+	last_from  TEXT NOT NULL,
+	spent      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
+CREATE TABLE IF NOT EXISTS agent_tokens (
+	name       TEXT PRIMARY KEY,
+	hash       TEXT NOT NULL UNIQUE,
+	peers      TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	expires_at TEXT NOT NULL DEFAULT '',
+	used_at    TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS webhooks (
 	name        TEXT PRIMARY KEY,
+	type        TEXT NOT NULL,
 	url         TEXT NOT NULL,
 	events      TEXT NOT NULL,
 	origin      TEXT NOT NULL,
+	peers       TEXT NOT NULL,
 	enabled     INTEGER NOT NULL,
 	secret      TEXT NOT NULL,
+	headers     TEXT NOT NULL,
 	retry_after TEXT NOT NULL DEFAULT '',
 	failures    INTEGER NOT NULL DEFAULT 0
 );
@@ -100,7 +113,8 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 	next_attempt_at TEXT NOT NULL,
 	retry_until     TEXT NOT NULL,
 	finished_at     TEXT,
-	last_error      TEXT NOT NULL DEFAULT ''
+	last_error      TEXT NOT NULL DEFAULT '',
+	sending         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries(webhook, status, next_attempt_at, seq);
 CREATE INDEX IF NOT EXISTS webhook_expiry ON webhook_deliveries(status, retry_until);

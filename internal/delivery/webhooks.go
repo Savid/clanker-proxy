@@ -1,7 +1,6 @@
 package delivery
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -161,6 +160,9 @@ func (d *Webhooks) deliverWebhook(ctx context.Context, job store.WebhookDelivery
 	if !hook.Enabled {
 		return nil
 	}
+	if err = d.store.StartWebhook(ctx, job.ID); err != nil {
+		return err
+	}
 	status, message, retryAfter := d.postWebhook(ctx, hook, job)
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -169,7 +171,7 @@ func (d *Webhooks) deliverWebhook(ctx context.Context, job store.WebhookDelivery
 	next := latest(now.Add(webhookBackoff(job.ID, job.Attempts)), retryAfter)
 	if status == "pending" {
 		pause := webhookPause(hook, job, now, retryAfter)
-		if err = d.store.DeferWebhook(ctx, job.ID, hook.URL, pause); err != nil {
+		if err = d.store.DeferWebhook(ctx, job.ID, hook, pause); err != nil {
 			return err
 		}
 		// The delivery cannot go before its endpoint does; say so in nextAttemptAt.
@@ -214,26 +216,16 @@ func latest(a, b time.Time) time.Time {
 }
 
 func (d *Webhooks) postWebhook(ctx context.Context, hook webhook.Config, job store.WebhookDelivery) (string, string, time.Time) {
-	timestamp := strconv.FormatInt(d.now().Unix(), 10)
-	sig, err := webhook.Signature(hook.Secret, job.ID, timestamp, job.Payload)
+	req, err := webhookRequest(ctx, hook, job, d.now())
 	if err != nil {
-		return "failed", "invalid signing key", time.Time{}
+		return "failed", err.Error(), time.Time{}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hook.URL, bytes.NewReader(job.Payload))
-	if err != nil {
-		return "failed", "invalid destination", time.Time{}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "cpd")
-	req.Header.Set("Webhook-Id", job.ID)
-	req.Header.Set("Webhook-Timestamp", timestamp)
-	req.Header.Set("Webhook-Signature", sig)
 	resp, err := d.http.Do(req)
 	if err != nil {
 		return "pending", transportError(err), time.Time{}
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return "delivered", "", time.Time{}
 	}
@@ -243,13 +235,15 @@ func (d *Webhooks) postWebhook(ctx context.Context, hook webhook.Config, job sto
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			cooldown = webhookRetryAfter(resp.Header.Get("Retry-After"), d.now().UTC(), job.RetryUntil)
 		}
+		if provider, _ := webhook.LookupProvider(hook.Type); provider.RetryAfterBody && resp.StatusCode == http.StatusTooManyRequests {
+			cooldown = latest(cooldown, bodyRetryAfter(body, d.now().UTC(), job.RetryUntil))
+		}
 		return "pending", message, cooldown
 	}
 	return "failed", message, time.Time{}
 }
 
-// transportError names the failure class without the URL, which may carry
-// routing parameters the owner considers private.
+// transportError omits URLs and response bodies, which can contain credentials.
 func transportError(err error) string {
 	var dnsErr *net.DNSError
 	var certErr *tls.CertificateVerificationError
@@ -277,24 +271,26 @@ func webhookBackoff(key string, attempts int) time.Duration {
 	return base + base*time.Duration(sum[0])/(4*255)
 }
 
-// webhookRetryAfter honors a receiver's Retry-After for at most maxBackoff, so
-// one misconfigured proxy cannot pause an endpoint for its whole retry window.
+// webhookRetryAfter honors a Retry-After header, in seconds or as a date.
 func webhookRetryAfter(value string, now, until time.Time) time.Time {
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return retryAt(time.Duration(min(seconds, int64(maxBackoff/time.Second)))*time.Second, now, until)
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return retryAt(at.Sub(now), now, until)
+	}
+	return time.Time{}
+}
+
+// retryAt honors a receiver's requested delay for at most maxBackoff, so one
+// misconfigured proxy cannot pause an endpoint for its whole retry window.
+func retryAt(delay time.Duration, now, until time.Time) time.Time {
 	limit := now.Add(maxBackoff)
 	if until.Before(limit) {
 		limit = until
 	}
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
-		if seconds >= int64(limit.Sub(now)/time.Second) {
-			return limit
-		}
-		return now.Add(time.Duration(seconds) * time.Second)
-	}
-	if at, err := http.ParseTime(value); err == nil && at.After(now) {
-		if at.After(limit) {
-			return limit
-		}
+	if at := now.Add(delay); at.Before(limit) {
 		return at
 	}
-	return time.Time{}
+	return limit
 }

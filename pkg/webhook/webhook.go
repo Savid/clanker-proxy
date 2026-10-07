@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/netip"
+	"net/textproto"
 	"net/url"
 	"slices"
 	"strings"
@@ -15,19 +17,26 @@ import (
 	"github.com/savid/clanker-proxy/pkg/thread"
 )
 
+var types = []string{"thread.open", "thread.reply", "thread.ack", "thread.needs-input", "thread.resolve", "thread.decline", "thread.close", "thread.reopen", "thread.withdraw", "peering.requested"}
+
 // Types is the event catalog. A wildcard also subscribes to future types.
 func Types() []string {
-	return []string{"thread.open", "thread.reply", "thread.ack", "thread.needs-input", "thread.resolve", "thread.decline", "thread.close", "thread.reopen", "thread.withdraw", "peering.requested"}
+	return slices.Clone(types)
 }
 
-// Config describes one owner-controlled destination. API responses must omit Secret.
+// Config describes one owner-controlled destination. URL, Secret and header
+// values are credentials and must never appear in API responses or logs.
 type Config struct {
-	Name    string
-	URL     string
-	Events  []string
-	Origin  string
+	Name   string
+	Type   string
+	URL    string
+	Events []string
+	Origin string
+	// Peers limits thread events to these peers; empty means every peer.
+	Peers   []string
 	Enabled bool
 	Secret  string
+	Headers []Header
 
 	// PausedUntil and Failures are endpoint backoff kept by delivery; owner
 	// updates reset them, and Validate ignores them.
@@ -35,38 +44,174 @@ type Config struct {
 	Failures    int
 }
 
+// Header is an owner-supplied header; names are public and values are secret.
+type Header struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// Update changes only supplied fields. Type is immutable so queued events
+// cannot silently switch to another provider's message format.
+type Update struct {
+	URL     *string
+	Events  []string
+	Origin  *string
+	Peers   *[]string
+	Enabled *bool
+	Secret  *string
+	Headers *[]Header
+}
+
+// Apply merges a partial update before the resulting configuration is validated.
+func (u Update) Apply(c Config) Config {
+	if u.URL != nil {
+		c.URL = *u.URL
+	}
+	if u.Events != nil {
+		c.Events = u.Events
+	}
+	if u.Origin != nil {
+		c.Origin = *u.Origin
+	}
+	if u.Peers != nil {
+		c.Peers = *u.Peers
+	}
+	if u.Enabled != nil {
+		c.Enabled = *u.Enabled
+	}
+	if u.Secret != nil {
+		c.Secret = *u.Secret
+	}
+	if u.Headers != nil {
+		c.Headers = *u.Headers
+	}
+	return c
+}
+
 // Validate checks the same constraints for HTTP and in-process callers.
 func (c Config) Validate() error {
 	if n, ok := thread.NormalizeName(c.Name); !ok || n != c.Name {
 		return errors.New("invalid webhook name")
 	}
-	u, err := url.Parse(c.URL)
-	if err != nil || len(c.URL) > 512 || u.Hostname() == "" || u.User != nil || strings.Contains(c.URL, "#") || u.Opaque != "" {
-		return errors.New("webhook URL must be an absolute URL without credentials or fragment")
+	provider, ok := LookupProvider(c.Type)
+	if !ok {
+		return errors.New("unsupported webhook type; see cpctl webhook types")
 	}
-	ip, _ := netip.ParseAddr(u.Hostname())
-	if u.Scheme != "https" && (u.Scheme != "http" || !ip.IsLoopback()) {
-		return errors.New("webhook URL requires HTTPS, or HTTP on a literal loopback address")
+	if err := validateURL(c.URL); err != nil {
+		return err
 	}
 	if c.Origin != "incoming" && c.Origin != "outgoing" && c.Origin != "both" {
 		return errors.New("webhook origin must be incoming, outgoing or both")
 	}
-	if len(c.Events) == 0 || len(c.Events) > len(Types()) {
+	if len(c.Events) == 0 || len(c.Events) > len(types) {
 		return errors.New("select '*' or a nonempty list of webhook event types")
 	}
 	for i, event := range c.Events {
 		if event == "*" && len(c.Events) == 1 {
 			continue
 		}
-		if !slices.Contains(Types(), event) || slices.Contains(c.Events[:i], event) {
+		if !slices.Contains(types, event) || slices.Contains(c.Events[:i], event) {
 			return errors.New("invalid or repeated webhook event; use '*' alone or supported event types")
 		}
+	}
+	if err := c.validatePeers(); err != nil {
+		return err
+	}
+	if err := c.validateSigning(provider); err != nil {
+		return err
+	}
+	return validateHeaders(c.Headers)
+}
+
+func validateURL(raw string) error {
+	if len(raw) > 2048 {
+		return errors.New("webhook URL must be at most 2048 bytes")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil || strings.Contains(raw, "#") || u.Opaque != "" {
+		return errors.New("webhook URL must be an absolute URL without credentials or fragment")
+	}
+	ip, _ := netip.ParseAddr(u.Hostname())
+	if u.Scheme != "https" && (u.Scheme != "http" || !ip.IsLoopback()) {
+		return errors.New("webhook URL requires HTTPS, or HTTP on a literal loopback address")
+	}
+	return nil
+}
+
+func (c Config) validatePeers() error {
+	if err := thread.ValidPeers(c.Peers); err != nil {
+		return fmt.Errorf("webhook %w", err)
+	}
+	// A requester chooses the name a peering request carries, so a filtered
+	// webhook never gets one.
+	if len(c.Peers) > 0 && slices.Contains(c.Events, "peering.requested") {
+		return errors.New("peering.requested goes only to webhooks without peers; leave it out or drop -peers")
+	}
+	return nil
+}
+
+func (c Config) validateSigning(provider Provider) error {
+	if c.Secret == "" {
+		return nil
+	}
+	if !provider.StandardWebhooks {
+		return errors.New("signing keys apply only to generic webhooks; provider destinations use their URL or authentication headers")
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(c.Secret)
 	if err != nil || len(key) != 32 || len(c.Secret) != 44 {
 		return errors.New("webhook secret must be the base64 encoding of exactly 32 bytes")
 	}
 	return nil
+}
+
+func validateHeaders(headers []Header) error {
+	if len(headers) > 16 {
+		return errors.New("at most 16 webhook headers are allowed")
+	}
+	seen := map[string]bool{}
+	for _, h := range headers {
+		name := strings.ToLower(h.Name)
+		if len(name) == 0 || len(name) > 64 || strings.ContainsFunc(name, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < '0' || r > '9') && !strings.ContainsRune("!#$%&'*+-.^_`|~", r)
+		}) {
+			return errors.New("invalid webhook header name")
+		}
+		if seen[name] {
+			return errors.New("webhook header names must be unique ignoring case")
+		}
+		seen[name] = true
+		if reservedHeader(name) {
+			return errors.New("transport, Content-Type, User-Agent, Idempotency-Key, Proxy-* and Webhook-* headers are managed by the daemon")
+		}
+		if len(h.Value) == 0 || len(h.Value) > 4096 || strings.ContainsFunc(h.Value, func(r rune) bool { return r < 32 || r == 127 }) {
+			return errors.New("webhook header values must be 1 to 4096 bytes without control characters")
+		}
+	}
+	return nil
+}
+
+func reservedHeader(name string) bool {
+	return strings.HasPrefix(name, "webhook-") || strings.HasPrefix(name, "proxy-") ||
+		slices.Contains([]string{"host", "content-length", "content-type", "connection", "transfer-encoding", "trailer", "te", "upgrade", "expect", "user-agent", "idempotency-key"}, name)
+}
+
+// Destination omits paths and queries, which may contain provider credentials.
+func (c Config) Destination() string {
+	u, err := url.Parse(c.URL)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// HeaderNames returns the public names without their values.
+func (c Config) HeaderNames() []string {
+	names := make([]string, 0, len(c.Headers))
+	for _, h := range c.Headers {
+		names = append(names, textproto.CanonicalMIMEHeaderKey(h.Name))
+	}
+	slices.Sort(names)
+	return names
 }
 
 // Payload deliberately omits bodies and credentials; consumers fetch current state.

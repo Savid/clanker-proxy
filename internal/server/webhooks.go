@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"net/url"
 
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/pkg/webhook"
@@ -13,17 +12,15 @@ func webhookResponse(c webhook.Config) *rest.Webhook {
 	for _, event := range c.Events {
 		events = append(events, rest.WebhookEventsItem(event))
 	}
-	u, _ := url.Parse(c.URL)
-	out := &rest.Webhook{Name: rest.Name(c.Name), URL: rest.WebhookURL(*u), Events: events, Origin: rest.WebhookOrigin(c.Origin), Enabled: c.Enabled}
+	names := make([]rest.WebhookHeaderName, 0, len(c.Headers))
+	for _, name := range c.HeaderNames() {
+		names = append(names, rest.WebhookHeaderName(name))
+	}
+	out := &rest.Webhook{Name: rest.Name(c.Name), Type: rest.WebhookType(c.Type), Destination: c.Destination(), Signing: c.Secret != "", HeaderNames: names, Events: events, Origin: rest.WebhookOrigin(c.Origin), Peers: toPeers(c.Peers), Enabled: c.Enabled}
 	if !c.PausedUntil.IsZero() {
 		out.PausedUntil = rest.NewOptDateTime(c.PausedUntil)
 	}
 	return out
-}
-
-func webhookURL(u rest.WebhookURL) string {
-	plain := url.URL(u)
-	return plain.String()
 }
 
 func webhookEvents(events rest.WebhookEvents) []string {
@@ -55,7 +52,7 @@ func (o *operations) GetWebhook(ctx context.Context, p rest.GetWebhookParams) (*
 }
 
 func (o *operations) CreateWebhook(ctx context.Context, r *rest.WebhookCreate) (*rest.Webhook, error) {
-	c, err := o.inbox.CreateWebhook(ctx, webhook.Config{Name: string(r.Name), URL: webhookURL(r.URL), Secret: string(r.Secret), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
+	c, err := o.inbox.CreateWebhook(ctx, webhook.Config{Name: string(r.Name), Type: string(r.Type), URL: string(r.URL), Secret: string(r.Secret.Or("")), Headers: webhookHeaders(r.Headers), Events: webhookEvents(r.Events), Origin: string(r.Origin), Peers: peerNames(r.Peers), Enabled: r.Enabled})
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +60,41 @@ func (o *operations) CreateWebhook(ctx context.Context, r *rest.WebhookCreate) (
 }
 
 func (o *operations) UpdateWebhook(ctx context.Context, r *rest.WebhookUpdate, p rest.UpdateWebhookParams) (*rest.Webhook, error) {
-	c, err := o.inbox.UpdateWebhook(ctx, webhook.Config{Name: string(p.Name), URL: webhookURL(r.URL), Secret: string(r.Secret.Or("")), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
+	change := webhook.Update{}
+	if v, ok := r.URL.Get(); ok {
+		change.URL = new(string(v))
+	}
+	if r.Events != nil {
+		change.Events = webhookEvents(r.Events)
+	}
+	if v, ok := r.Origin.Get(); ok {
+		change.Origin = new(string(v))
+	}
+	if r.Peers != nil {
+		change.Peers = new(peerNames(r.Peers))
+	}
+	if v, ok := r.Enabled.Get(); ok {
+		change.Enabled = &v
+	}
+	if v, ok := r.Secret.Get(); ok {
+		change.Secret = new(string(v))
+	}
+	if r.Headers != nil {
+		change.Headers = new(webhookHeaders(r.Headers))
+	}
+	c, err := o.inbox.UpdateWebhook(ctx, string(p.Name), change)
 	if err != nil {
 		return nil, err
 	}
 	return webhookResponse(c), nil
+}
+
+func webhookHeaders(headers rest.WebhookHeaders) []webhook.Header {
+	out := make([]webhook.Header, 0, len(headers))
+	for _, h := range headers {
+		out = append(out, webhook.Header{Name: string(h.Name), Value: h.Value})
+	}
+	return out
 }
 
 func (o *operations) DeleteWebhook(ctx context.Context, p rest.DeleteWebhookParams) error {

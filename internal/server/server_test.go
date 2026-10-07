@@ -1,12 +1,13 @@
 package server_test
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/savid/clanker-proxy/api"
 	"github.com/savid/clanker-proxy/internal/inbox"
@@ -18,6 +19,7 @@ import (
 type fixture struct {
 	h          http.Handler
 	owner      string
+	agent      string
 	peerSecret string
 }
 
@@ -26,6 +28,13 @@ func newFixture(t *testing.T) fixture {
 
 	ib := inboxtest.New(t)
 	f := fixture{owner: inbox.NewSecret(inbox.OwnerPrefix), peerSecret: ib.ActivePeer(t, "friend")}
+
+	agent, _, err := ib.CreateAgentToken(t.Context(), "helper", nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.agent = agent
 
 	s, err := server.New(slog.New(slog.DiscardHandler), ib.Inbox, server.Config{OwnerToken: f.owner, Version: "test"})
 	if err != nil {
@@ -56,8 +65,9 @@ func TestEveryOperationIsServed(t *testing.T) {
 }
 
 // Every operation admits exactly the callers its security in the spec
-// declares, and refuses the rest with 401 and a WWW-Authenticate challenge.
-// The spec is the access policy; this holds the server to it.
+// declares. It refuses a valid agent token with 403, and the rest with 401
+// and a WWW-Authenticate challenge. The spec is the access policy; this
+// holds the server to it.
 func TestAccessLevels(t *testing.T) {
 	t.Parallel()
 
@@ -66,8 +76,10 @@ func TestAccessLevels(t *testing.T) {
 	callers := map[string]string{
 		"nobody":     "",
 		"ownerToken": f.owner,
+		"agentToken": f.agent,
 		"peerSecret": f.peerSecret,
 		"garbage":    "cpo_" + strings.Repeat("x", 43),
+		"badAgent":   "cpa_" + strings.Repeat("x", 43),
 	}
 
 	for _, op := range apicontract.Operations(t, api.Spec) {
@@ -79,14 +91,19 @@ func TestAccessLevels(t *testing.T) {
 				admitted = admitted || s == caller
 			}
 
-			got401 := rec.Code == http.StatusUnauthorized
+			refusal := http.StatusUnauthorized
+			if caller == "agentToken" && slices.Contains(op.Schemes, "ownerToken") {
+				refusal = http.StatusForbidden
+			}
+
+			refused := rec.Code == refusal
 
 			switch {
-			case admitted && got401:
+			case admitted && (refused || rec.Code == http.StatusUnauthorized):
 				t.Errorf("%s: %s was refused: %s", op.ID, caller, rec.Body.String())
-			case !admitted && !got401:
-				t.Errorf("%s: %s was let in: %d %s", op.ID, caller, rec.Code, rec.Body.String())
-			case got401 && rec.Header().Get("WWW-Authenticate") == "":
+			case !admitted && !refused:
+				t.Errorf("%s: %s got %d, want %d: %s", op.ID, caller, rec.Code, refusal, rec.Body.String())
+			case rec.Code == http.StatusUnauthorized && rec.Header().Get("WWW-Authenticate") == "":
 				t.Errorf("%s: 401 for %s has no WWW-Authenticate", op.ID, caller)
 			}
 		}
@@ -151,26 +168,25 @@ func TestRequestLimits(t *testing.T) {
 		t.Errorf("long url: %d %s", rec.Code, rec.Body.String())
 	}
 
-	// Pending requests are capped: past the cap, a new one is taken and the
-	// oldest dropped, so a flood cannot shut out later requests.
-	for i := range inbox.MaxPendingRequests + 1 {
+	// Requests are rate-limited, so a flood is refused rather than queued.
+	// Every request above failed validation, so none of them counted.
+	accepted := 0
+	for i := range inbox.RequestsPerMinute + 1 {
 		rec := post(`{"name":"x` + string(rune('a'+i)) + `","url":"http://x.test","secret":"` + inbox.NewSecret(inbox.PeerPrefix) + `"}`)
-		if rec.Code != http.StatusAccepted {
+
+		switch rec.Code {
+		case http.StatusAccepted:
+			accepted++
+		case http.StatusServiceUnavailable:
+			if accepted != inbox.RequestsPerMinute {
+				t.Fatalf("refused after %d requests: %s", accepted, rec.Body.String())
+			}
+
+			return
+		default:
 			t.Fatalf("request %d answered %d %s", i, rec.Code, rec.Body.String())
 		}
 	}
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/peering-requests", nil)
-	req.Header.Set("Authorization", "Bearer "+f.owner)
-	f.h.ServeHTTP(rec, req)
-
-	var list struct{ Requests []struct{ Name string } }
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-		t.Fatal(err)
-	}
-
-	if n := len(list.Requests); n != inbox.MaxPendingRequests || list.Requests[0].Name != "xb" {
-		t.Errorf("pending after the cap: %d, oldest %+v; want %d from xb", n, list.Requests[0], inbox.MaxPendingRequests)
-	}
+	t.Errorf("%d requests in a minute all accepted", accepted)
 }

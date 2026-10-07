@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/pkg/thread"
@@ -108,8 +110,16 @@ func threadSteps(t rest.ThreadSummary) []step {
 		steps = append(steps, step{"cpctl ack " + ref, "say you have seen it; closes it"})
 	}
 
+	// The sender's answer to a question is a reply, and the move that hands
+	// the thread back, so it comes before ending the thread.
+	answering := t.State == rest.ThreadStateNeedsInput && t.Role == rest.ThreadSummaryRoleSender &&
+		slices.Contains(t.Actions, rest.ActionComment)
+	if answering {
+		steps = append(steps, step{`cpctl reply ` + ref + ` -m "<answer>"`, "answer their question; hands it back"})
+	}
+
 	for _, act := range stepOrder {
-		if slices.Contains(t.Actions, rest.Action(act)) && (act != thread.ActionAck || !fyiAck) {
+		if slices.Contains(t.Actions, rest.Action(act)) && (act != thread.ActionAck || !fyiAck) && (act != thread.ActionComment || !answering) {
 			steps = append(steps, actionSteps[act](ref))
 		}
 	}
@@ -164,8 +174,14 @@ func summaryOf(t *rest.Thread) rest.ThreadSummary {
 		ID: t.ID, Title: t.Title, Kind: t.Kind, Labels: t.Labels, Sender: t.Sender, Recipient: t.Recipient,
 		Peer: t.Peer, Role: rest.ThreadSummaryRole(t.Role), State: t.State, Turn: t.Turn, MyTurn: t.MyTurn,
 		Actions: t.Actions, OpenedAt: t.OpenedAt, UpdatedAt: t.UpdatedAt,
-		Events: t.Events, Undelivered: t.Undelivered, Failed: t.Failed,
+		Events: t.Events, LastFrom: t.LastFrom, Undelivered: t.Undelivered, Failed: t.Failed,
 	}
+}
+
+// unanswered is a thread waiting on the owner whose latest move is the
+// peer's: something they have not yet answered, acked or acted on.
+func unanswered(t rest.ThreadSummary) bool {
+	return t.MyTurn && t.LastFrom == t.Peer
 }
 
 // printSummary is a thread's header: what it is, where it stands, and whose
@@ -245,10 +261,29 @@ func printLog(w io.Writer, log []rest.ThreadEvent) {
 			fmt.Fprintf(w, "   (no effect: %s)\n", e.Ignored.Value)
 		}
 
+		// Every body line is marked, so a peer's text cannot pass for an
+		// event header or a next: step.
 		if e.Body.Set {
-			fmt.Fprintln(w, e.Body.Value)
+			for line := range strings.SplitSeq(printable(string(e.Body.Value), true), "\n") {
+				fmt.Fprintln(w, "  │ "+line)
+			}
 		}
 	}
+}
+
+// printable drops control characters, which could move the cursor, rewrite
+// the terminal or set its clipboard; multiline keeps line breaks and tabs.
+func printable(s string, multiline bool) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case multiline && (r == '\n' || r == '\t'):
+			return r
+		case unicode.IsControl(r), thread.Hidden(r):
+			return -1
+		default:
+			return r
+		}
+	}, s)
 }
 
 // direction is -> for threads the owner opened, <- for ones sent to them.
@@ -263,7 +298,7 @@ func direction(t rest.ThreadSummary) string {
 func turn(t rest.ThreadSummary) string {
 	switch {
 	case t.MyTurn:
-		return "yours"
+		return "mine"
 	case t.Turn.Set:
 		return string(t.Turn.Value)
 	default:
@@ -272,7 +307,8 @@ func turn(t rest.ThreadSummary) string {
 }
 
 func title(t rest.ThreadSummary) string {
-	s := string(t.Title)
+	// Quoted, so a peer's title cannot pass for cpctl's own words.
+	s := strconv.Quote(printable(string(t.Title), false))
 	if t.Kind == rest.ThreadKindFyi {
 		s = "[fyi] " + s
 	}
@@ -296,12 +332,12 @@ func deliveryNote(e rest.ThreadEvent) string {
 	case rest.DeliveryStatusPending:
 		s := fmt.Sprintf(" · queued for delivery (%d attempts)", d.Attempts)
 		if d.LastError.Set {
-			s += ": " + d.LastError.Value
+			s += ": " + strconv.Quote(printable(d.LastError.Value, false))
 		}
 
 		return s
 	case rest.DeliveryStatusFailed:
-		return " · NOT DELIVERED: " + d.LastError.Or("refused")
+		return " · NOT DELIVERED: " + strconv.Quote(printable(d.LastError.Or("refused"), false))
 	case rest.DeliveryStatusDelivered:
 		return ""
 	default:

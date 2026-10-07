@@ -121,7 +121,9 @@ func Replay(events []Event) (Thread, error) {
 			return Thread{}, fmt.Errorf("event %s belongs to thread %s, not %s", e.ID, e.Thread, t.ID)
 		}
 
-		t = t.Apply(e)
+		// t's events are Replay's own, so appending in place keeps
+		// replay linear.
+		t = t.apply(e, t.Events)
 	}
 
 	return t, nil
@@ -130,8 +132,14 @@ func Replay(events []Event) (Thread, error) {
 // Apply returns the thread with e appended. An event that may not apply is
 // appended with Ignored set and leaves the state alone.
 func (t Thread) Apply(e Event) Thread {
+	return t.apply(e, slices.Clone(t.Events))
+}
+
+// apply appends e to events, which become the returned thread's.
+func (t Thread) apply(e Event, events []Applied) Thread {
+	events = append(events, Applied{Event: e})
 	next := t
-	next.Events = append(slices.Clone(t.Events), Applied{Event: e})
+	next.Events = events
 	last := &next.Events[len(next.Events)-1]
 
 	if err := t.Check(e); err != nil {
@@ -254,7 +262,57 @@ func (t Thread) Allowed(user string) []Action {
 		}
 	}
 
+	if t.Spent(user) {
+		return EndingOnly(out)
+	}
+
 	return out
+}
+
+// used is how many events, and bytes of bodies, user has added.
+func (t Thread) used(user string) (int, int) {
+	n, size := 0, 0
+
+	for _, a := range t.Events {
+		if a.From == user {
+			n++
+			size += len(a.Body)
+		}
+	}
+
+	return n, size
+}
+
+// Spent reports whether user has used their room in the thread, so only
+// ending it without a body is left.
+func (t Thread) Spent(user string) bool {
+	n, size := t.used(user)
+
+	return n >= MaxEvents || size >= MaxThreadBody
+}
+
+// Room refuses e when its author has no room for it in the thread.
+func (t Thread) Room(e Event) error {
+	n, size := t.used(e.From)
+
+	switch {
+	case n >= MaxEvents+EndingSlack:
+		return fmt.Errorf("%s has added the most events allowed to thread %s", e.From, t.ID)
+	case (n >= MaxEvents || size+len(e.Body) > MaxThreadBody) && (e.Body != "" || !ending(e.Action)):
+		return fmt.Errorf("%s has used its room in thread %s: only close, decline or withdraw, without a body, can follow", e.From, t.ID)
+	default:
+		return nil
+	}
+}
+
+func ending(a Action) bool {
+	return a == ActionClose || a == ActionDecline || a == ActionWithdraw
+}
+
+// EndingOnly keeps the actions that end a thread, which are all an author
+// who has spent their room may take.
+func EndingOnly(actions []Action) []Action {
+	return slices.DeleteFunc(slices.Clone(actions), func(a Action) bool { return !ending(a) })
 }
 
 // RoleOf is user's role in the thread.

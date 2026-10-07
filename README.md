@@ -30,7 +30,11 @@ From source: `make build`, then use `build/bin/cpd` and `build/bin/cpctl`.
 
 `-name` is fixed on first run; `-url` is remembered. State lives in `~/.cp` (or `$CP_DIR`),
 including `owner.token`, which cpctl reads on the same machine; from
-elsewhere set `CP_URL` (https) and `CP_TOKEN`. Container: `make image`, then
+elsewhere set `CP_URL` (https) and `CP_TOKEN`. For an agent running somewhere
+you don't fully control, give it an agent token instead: `cpctl token add
+<name> -o <file>` makes one that can list, read and act on threads and nothing
+else (`-peers bob` keeps it to threads with bob), and `cpctl token rm <name>`
+revokes it. Container: `make image`, then
 `docker run -v cp-data:/data -p 127.0.0.1:8080:8080 clanker-proxy:local -name savid -url https://cp.savid.dev`.
 
 Peer, then talk:
@@ -51,7 +55,7 @@ A thread stays in the inbox of whoever needs to act next. The sender asks;
 the recipient does the work; the sender reviews the result and closes it.
 
 <p align="center">
-  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and send signed notifications with persistent retries. A receiver verifies and queues work; its agent reads the current thread before acting.">
+  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and deliver to chat services or automation with persistent retries. Generic JSON supports opt-in signing. Agent runners read the current thread before acting.">
 </p>
 
 `ack` is optional and keeps the turn with the recipient. To ask a follow-up
@@ -62,23 +66,47 @@ after closing. Each command takes the thread's ID or unique prefix.
 
 Either person can `reply` at any time. Only the sender's reply to `needs-input`
 changes whose turn it is. `cpctl inbox` shows what needs you;
-`cpctl show <id>` shows the full thread and the actions available now.
+`cpctl show <id>` shows the full thread and the actions available now. Each
+side has room for 1000 events and 4 MiB of bodies in a thread, after which it
+can still close, decline or withdraw; a peer can have 200 threads open with
+you at once.
 
 ## Webhooks
 
-Notify an agent runner or another service when something happens. Each webhook
-has its own event subscriptions, incoming/outgoing filter, and signing key.
-Deliveries survive restarts and retry independently. `cpctl help webhook` is the manual.
+Send events directly to **Discord, Slack, Teams Workflows, Google Chat,
+Mattermost, Rocket.Chat, ntfy, or Gotify**. Use **generic JSON** for automation,
+or **Apprise API** to reach additional notification services. Each destination
+has its own event subscriptions, incoming/outgoing filter, optional peer filter
+(`-peers bob`), and persistent retries.
+
+For Discord, save the channel's webhook URL in a private `discord.url` file:
+
+```bash
+chmod 600 discord.url
+cpctl webhook add discord -type discord -url-file discord.url \
+  -events '*' -origin both
+cpctl webhook deliveries discord
+```
+
+No signing key is needed for Discord or Slack: their webhook URLs contain the
+credential. Generic webhooks are unsigned by default; add `-secret-file` to
+enable signing. Custom authentication headers can come from `-headers-file`.
+URLs, signing keys, and header values are never printed or returned by the API.
+
+`cpctl webhook types` lists formats and authentication requirements.
+`cpctl help webhook` is the command manual. Chat notifications contain event
+metadata and a command to read the thread, without titles or message bodies.
 
 <details>
 <summary>Example: notify an agent runner when work arrives</summary>
 
-Generate a key and give it securely to your receiver:
+For a receiver that verifies signatures, generate a key and give it securely
+to that receiver:
 
 ```bash
 umask 077
 openssl rand -base64 32 > webhook.key
-cpctl webhook add agent https://runner.example.com/hooks/clanker \
+cpctl webhook add agent https://runner.example.com/hooks/clanker -type generic \
   -secret-file webhook.key \
   -events thread.open,thread.reply,thread.needs-input,thread.resolve,thread.reopen \
   -origin incoming
@@ -86,17 +114,18 @@ cpctl webhook deliveries agent
 ```
 
 The URL must be an existing receiver. It verifies the signature, deduplicates
-notifications, queues work, and promptly returns `2xx`. Its agent uses
-`cpctl show <subject>` to read the current thread before deciding what to do.
+notifications, queues work, and promptly returns `2xx`. Its agent, given an
+agent token (`cpctl token add`), uses `cpctl show <subject>` to read the current
+thread before deciding what to do.
 A notification does not itself launch an agent.
 
 Use `-events '*'` for all current and future event types; `cpctl webhook events`
 lists the fixed subscriptions. Add another named webhook for a different
 receiver, or pause one with `cpctl webhook set agent -enabled=false`.
 
-See [receiver setup and delivery behavior](docs/webhooks.md).
-
 </details>
+
+See [provider setup, authentication, and delivery behavior](docs/webhooks.md). To have an [Amp](https://ampcode.com) agent work your inbox, see [docs/amp.md](docs/amp.md).
 
 ## Updates
 

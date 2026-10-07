@@ -41,7 +41,7 @@ func webhookStore(t *testing.T) *store.Store {
 
 func addHook(t *testing.T, st *store.Store, name, url string) {
 	t.Helper()
-	err := st.CreateWebhook(t.Context(), webhook.Config{Name: name, URL: url, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "outgoing", Enabled: true})
+	err := st.CreateWebhook(t.Context(), webhook.Config{Type: "generic", Name: name, URL: url, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "outgoing", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestWebhookPendingUsesUpdatedDestination(t *testing.T) {
 	c.Secret = base64.StdEncoding.EncodeToString(key)
 	c.URL = receiver.URL
 	c.Enabled = false
-	if err = st.UpdateWebhook(t.Context(), c); err != nil {
+	if _, err = st.UpdateWebhook(t.Context(), c.Name, webhook.Update{URL: new(c.URL), Secret: new(c.Secret), Enabled: new(c.Enabled)}); err != nil {
 		t.Fatal(err)
 	}
 	drainHooks(t, st, t0)
@@ -240,7 +240,7 @@ func TestWebhookPendingUsesUpdatedDestination(t *testing.T) {
 		t.Fatal("paused hook was sent")
 	}
 	c.Enabled = true
-	if err = st.UpdateWebhook(t.Context(), c); err != nil {
+	if _, err = st.UpdateWebhook(t.Context(), c.Name, webhook.Update{URL: new(c.URL), Secret: new(c.Secret), Enabled: new(c.Enabled)}); err != nil {
 		t.Fatal(err)
 	}
 	drainHooks(t, st, t0)
@@ -347,7 +347,7 @@ func TestWebhookChangedURLIgnoresOldReceiverBackpressure(t *testing.T) {
 			return
 		}
 		hook.URL = replacement.URL
-		if err = st.UpdateWebhook(t.Context(), hook); err != nil {
+		if _, err = st.UpdateWebhook(t.Context(), hook.Name, webhook.Update{URL: new(hook.URL)}); err != nil {
 			t.Error(err)
 		}
 		w.Header().Set("Retry-After", "3600")

@@ -6,11 +6,14 @@ info:
     name: MIT
     identifier: MIT
   description: >-
-    One API with three access levels, declared per operation and checked
+    One API with four access levels, declared per operation and checked
     before any handler runs. **owner** (the default): the daemon's owner,
-    with the token in `<dir>/owner.token`; cpctl uses it. **peer**: another
-    daemon, with the secret it shares with this one; it identifies which peer
-    is calling. **public**: no token; only `getHealth` and `requestPeering`.
+    with the token in `<dir>/owner.token`; cpctl uses it. **agent**: a token
+    the owner creates for an agent working for them; it reads and acts on
+    existing threads, follows the stream and reads the owner's name, and
+    nothing else. **peer**: another daemon, with the
+    secret it shares with this one; it identifies which peer is calling.
+    **public**: no token; only `getHealth` and `requestPeering`.
     This spec is the source of truth for `api/rest` (server and client).
 servers:
   - url: /
@@ -28,6 +31,8 @@ tags:
     description: What peers call.
   - name: webhooks
     description: Signed notifications to owner-configured endpoints.
+  - name: tokens
+    description: Agent tokens, limited to working threads, optionally only some peers'.
 paths:
   /api/v1/webhooks:
     get:
@@ -38,7 +43,7 @@ paths:
         List webhooks.
       responses:
         '200':
-          description: Configured endpoints, without signing keys.
+          description: Configured endpoints, without destination credentials.
           content:
             application/json:
               schema:
@@ -60,7 +65,7 @@ paths:
               $ref: '#/components/schemas/WebhookCreate'
       responses:
         '201':
-          description: The new webhook, without its signing key.
+          description: The new webhook, without destination credentials.
           content:
             application/json:
               schema:
@@ -78,29 +83,34 @@ paths:
         Read a webhook.
       responses:
         '200':
-          description: The endpoint settings, without its signing key.
+          description: The endpoint settings, without destination credentials.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Webhook'
         default:
           $ref: '#/components/responses/Problem'
-    put:
+    patch:
       operationId: updateWebhook
       tags: [webhooks]
       summary: Update a webhook
       description: >-
-        Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure backoff (pausedUntil).
+        Changes only supplied settings. The destination type is immutable. Omit
+        url, headers or secret to keep them; an empty secret disables signing and
+        empty headers remove custom headers. Pending deliveries use the current
+        destination and credentials. Disabled webhooks queue no new events and
+        pause existing deliveries; an in-flight request may finish. Any update
+        clears the endpoint's failure backoff (pausedUntil).
       requestBody:
         required: true
-        description: Replacement settings and optional new signing key.
+        description: Settings to change; omitted fields are retained.
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/WebhookUpdate'
       responses:
         '200':
-          description: The updated webhook, without its signing key.
+          description: The updated webhook, without destination credentials.
           content:
             application/json:
               schema:
@@ -179,6 +189,66 @@ paths:
           description: The delivery is queued again.
         default:
           $ref: '#/components/responses/Problem'
+  /api/v1/agent-tokens:
+    get:
+      operationId: listAgentTokens
+      tags: [tokens]
+      summary: List agent tokens
+      description: Every agent token, by name, without the tokens themselves.
+      responses:
+        '200':
+          description: Agent tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTokenList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createAgentToken
+      tags: [tokens]
+      summary: Create an agent token
+      description: >-
+        The token is returned once and only its hash is stored. It may list,
+        read and act on threads, follow the stream and read the owner's name;
+        every other operation refuses it with 403. Fails with 409 when the
+        name is taken, and with 400 when `expiresAt` is not in the future.
+      requestBody:
+        description: The token's name and optional expiry.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTokenInput'
+      responses:
+        '201':
+          description: The new token, shown only here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewAgentToken'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/agent-tokens/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: The agent token's name.
+        schema:
+          $ref: '#/components/schemas/Name'
+    delete:
+      operationId: deleteAgentToken
+      tags: [tokens]
+      summary: Revoke an agent token
+      description: >-
+        The token stops working at once. A stream it opened sends nothing
+        more and closes at its next event or keepalive.
+      responses:
+        '204':
+          description: Revoked.
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/health:
     get:
       operationId: getHealth
@@ -200,6 +270,9 @@ paths:
     get:
       operationId: getMe
       tags: [system]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Read the owner's name and public URL
       description: >-
         The name this daemon offers peers, and the URL it gives them to call back on.
@@ -221,7 +294,7 @@ paths:
         Another daemon asks this one's owner to accept it as a peer, offering
         the secret both will use. Nothing is accepted from it until the owner
         approves. Requests expire after a week; at most 20 wait, and a new
-        one drops the oldest.
+        one drops the oldest. Past 10 requests a minute it answers 503.
       security: []
       requestBody:
         description: The requester and the secret it offers.
@@ -379,8 +452,13 @@ paths:
     get:
       operationId: listThreads
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: List threads
-      description: Newest activity first.
+      description: >-
+        Newest activity first. An agent token limited to peers lists only
+        threads with those peers.
       parameters:
         - name: turn
           in: query
@@ -450,9 +528,15 @@ paths:
     get:
       operationId: getThread
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Read a thread and its events
       description: >-
-        The thread's summary and every event, in the order both daemons replay them.
+        The thread's summary and every event, in the order both daemons replay
+        them. The ref is a thread ID or a unique prefix of one; for an agent
+        token limited to peers, only threads with those peers count, and any
+        other answers 404 as if it did not exist.
       responses:
         '200':
           description: The thread.
@@ -468,10 +552,16 @@ paths:
     post:
       operationId: actOnThread
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Reply to a thread or move it on
       description: >-
         Fails with 409 when the owner may not take the action now; the
-        thread's `actions` lists the ones they may.
+        thread's `actions` lists the ones they may. Each side has room for
+        1000 events and 4 MiB of bodies in a thread; past that, only close,
+        decline or withdraw without a body remain. An agent token limited to
+        peers reaches only threads with those peers, as getThread.
       requestBody:
         description: The action, with an optional body.
         required: true
@@ -492,12 +582,17 @@ paths:
     get:
       operationId: streamEvents
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Stream thread changes
       description: >-
         Server-sent events. `thread`: a `ThreadSummary`, sent whenever a thread
         changes: an event sent or received, or a delivery that succeeded or
         failed. A `: ping` comment keeps idle connections open. Nothing is
-        replayed on connect; list threads first, then follow the stream.
+        replayed on connect; list threads first, then follow the stream. An
+        agent token limited to peers gets only those peers' threads, and its
+        stream ends once the token is revoked or expires.
       responses:
         '200':
           description: Server-sent `thread` events.
@@ -516,8 +611,10 @@ paths:
         The peer's secret says who sent it. Delivering the same event again is
         harmless and answers `duplicate`. Fails with 422 when its thread is
         unknown or not shared with this peer, or its clock is not after the
-        peer's earlier events in the thread; with 503, to retry later, when
-        it is dated more than ten minutes ahead.
+        peer's earlier events in the thread, or the peer has used its room in
+        the thread (1000 events, 4 MiB of bodies; then only close, decline or
+        withdraw without a body), or already has 200 threads open here; with
+        503, to retry later, when it is dated more than ten minutes ahead.
       security:
         - peerSecret: []
       requestBody:
@@ -558,16 +655,24 @@ webhooks:
       tags: [webhooks]
       summary: Receive an event notification
       description: >-
-        Implemented by the configured receiver, not by cpd. Verify the signature
-        and timestamp, deduplicate by Webhook-Id, then durably enqueue before
-        returning 2xx. The payload schema documents the signing algorithm.
+        Implemented by a generic receiver, not by cpd. Signing is opt-in. When
+        configured, verify the signature and timestamp. Deduplicate by Webhook-Id,
+        then durably enqueue before returning 2xx. Other destination types use
+        their provider's message format instead of this payload.
       security:
         - webhookSignature: []
+        - {}
       parameters:
         - name: Webhook-Id
           in: header
           required: true
           description: Stable delivery ID, unchanged across retries.
+          schema:
+            $ref: '#/components/schemas/ID'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Same value as Webhook-Id, for intermediaries that deduplicate retries by it.
           schema:
             $ref: '#/components/schemas/ID'
         - name: Webhook-Timestamp
@@ -580,7 +685,7 @@ webhooks:
             maxLength: 12
       requestBody:
         required: true
-        description: Event metadata, signed as raw bytes.
+        description: Event metadata; signed as raw bytes when a signing key is configured.
         content:
           application/json:
             schema:
@@ -605,6 +710,10 @@ components:
       type: http
       scheme: bearer
       description: The secret shared with one peer.
+    agentToken:
+      type: http
+      scheme: bearer
+      description: An agent token the owner created; limited to working threads, optionally only some peers'.
   parameters:
     WebhookName:
       name: name
@@ -659,6 +768,15 @@ components:
       items:
         type: string
         enum: ['*', thread.open, thread.reply, thread.ack, thread.needs-input, thread.resolve, thread.decline, thread.close, thread.reopen, thread.withdraw, peering.requested]
+    Peers:
+      type: array
+      description: >-
+        The peers this applies to, by name; each must be a peer or a former
+        one. Empty: every peer, including peers added later.
+      maxItems: 50
+      uniqueItems: true
+      items:
+        $ref: '#/components/schemas/Name'
     WebhookOrigin:
       type: string
       description: Incoming events from peers, outgoing owner actions, or both. Peering requests are incoming.
@@ -669,31 +787,72 @@ components:
       enum: [incoming, outgoing]
     WebhookURL:
       type: string
-      format: uri
       description: >-
         A webhook destination: https, or http on a literal loopback address,
-        without credentials or fragment; at most 512 characters (checked by the
-        server; ogen cannot bound a URI). Queries may carry non-secret routing
-        parameters. Any host the daemon can reach is allowed.
-      maxLength: 512
+        without userinfo or fragment. Paths and queries may contain provider
+        credentials, so the entire URL is write-only. Any host the daemon can
+        reach is allowed. At most 2048 bytes. Validation errors never echo the URL.
+      minLength: 1
+      maxLength: 2048
+      writeOnly: true
       examples: ['https://runner.example.com/hooks']
+    WebhookType:
+      type: string
+      description: Destination format. Immutable after creation. Teams uses Workflows Adaptive Cards; apprise sends to a configured Apprise API endpoint.
+      enum: [generic, discord, slack, teams, google-chat, mattermost, rocketchat, ntfy, gotify, apprise]
+    WebhookHeaderName:
+      type: string
+      description: An HTTP header name. Transport, Content-Type, User-Agent, Idempotency-Key, Proxy-* and Webhook-* headers are reserved.
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z0-9!#$%&''*+.^_`|~-]+$'
+    WebhookHeaders:
+      type: array
+      description: Custom headers, including authentication. Names must be unique ignoring case. Values are write-only; empty replaces all headers with none.
+      maxItems: 16
+      items:
+        type: object
+        required: [name, value]
+        properties:
+          name:
+            $ref: '#/components/schemas/WebhookHeaderName'
+          value:
+            type: string
+            minLength: 1
+            maxLength: 4096
+            writeOnly: true
+            description: A single-line value of at most 4096 bytes, without control characters.
     WebhookSecret:
       type: string
-      description: Base64 encoding of a 32-byte signing key. Write-only; never returned or logged.
-      minLength: 44
+      description: Optional base64 encoding of a 32-byte signing key for generic destinations only. Empty disables signing. Write-only; never returned or logged.
       maxLength: 44
-      pattern: '^[A-Za-z0-9+/]{43}=$'
+      pattern: '^([A-Za-z0-9+/]{43}=)?$'
       writeOnly: true
     Webhook:
       type: object
       description: >-
-        Owner-configured signed notifications, without the signing key.
-      required: [name, url, events, origin, enabled]
+        Owner-configured notifications, without destination paths, queries,
+        custom header values or signing keys.
+      required: [name, type, destination, events, origin, peers, enabled, signing, headerNames]
       properties:
         name:
           $ref: '#/components/schemas/Name'
-        url:
-          $ref: '#/components/schemas/WebhookURL'
+        type:
+          $ref: '#/components/schemas/WebhookType'
+        peers:
+          $ref: '#/components/schemas/Peers'
+        destination:
+          type: string
+          maxLength: 2048
+          description: Destination scheme and host only; path and query are never returned.
+        signing:
+          type: boolean
+          description: Whether generic notifications have a configured signing key.
+        headerNames:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/WebhookHeaderName'
         events:
           $ref: '#/components/schemas/WebhookEvents'
         origin:
@@ -711,11 +870,19 @@ components:
     WebhookCreate:
       type: object
       description: >-
-        A new webhook. Secret is supplied by the owner and never returned.
-      required: [name, url, events, origin, enabled, secret]
+        A new webhook. Generic signing is opt-in. Destination URL, custom header
+        values and signing key are write-only. Chat destinations authenticate
+        with their provider URL or custom headers, without a signing key.
+        With peers, only those peers' thread events are sent, and never
+        peering requests, whose names the requester chooses.
+      required: [name, type, url, events, origin, enabled]
       properties:
+        peers:
+          $ref: '#/components/schemas/Peers'
         name:
           $ref: '#/components/schemas/Name'
+        type:
+          $ref: '#/components/schemas/WebhookType'
         url:
           $ref: '#/components/schemas/WebhookURL'
         events:
@@ -726,12 +893,18 @@ components:
           type: boolean
         secret:
           $ref: '#/components/schemas/WebhookSecret'
+        headers:
+          $ref: '#/components/schemas/WebhookHeaders'
     WebhookUpdate:
       type: object
+      additionalProperties: false
       description: >-
-        Full replacement of settings, with an optional signing-key replacement.
-      required: [url, events, origin, enabled]
+        Changes to a destination. Omitted settings are retained. Empty secret
+        disables signing; empty headers remove custom headers; empty peers
+        send every peer's events. Type is immutable.
       properties:
+        peers:
+          $ref: '#/components/schemas/Peers'
         url:
           $ref: '#/components/schemas/WebhookURL'
         events:
@@ -742,6 +915,8 @@ components:
           type: boolean
         secret:
           $ref: '#/components/schemas/WebhookSecret'
+        headers:
+          $ref: '#/components/schemas/WebhookHeaders'
     WebhookList:
       type: object
       description: Configured webhooks, sorted by name.
@@ -804,7 +979,8 @@ components:
         Signed HTTP POST body. Webhook-Id is this delivery id; Webhook-Timestamp is
         the attempt's Unix time in seconds. Webhook-Signature is v1, followed by
         base64 HMAC-SHA256 of id.timestamp.rawBody using the decoded signing key.
-        Verify the raw body, signature, timestamp freshness and duplicate IDs.
+        When signing is enabled, verify the raw body, signature and timestamp
+        freshness. Deduplicate by notification ID with or without signing.
         Treat this as a notification; fetch current state before acting.
         Ignore unknown fields, and unknown types when subscribed to '*'.
         For peering.requested, peer is the name the unauthenticated requester
@@ -861,13 +1037,15 @@ components:
       maxLength: 36
     Title:
       type: string
-      description: A thread's one-line title, at most 200 characters.
+      description: A thread's one-line title, at most 200 characters, without control characters, line separators or bidirectional controls.
       minLength: 1
       maxLength: 200
+      pattern: '^[^\x00-\x1F\x7F-\x9F\u200E\u200F\u2028-\u202E\u2066-\u2069]+$'
     Body:
       type: string
-      description: Markdown, at most 65536 characters.
+      description: Markdown, at most 65536 characters, without control characters but tab and line breaks, and without line separators or bidirectional controls.
       maxLength: 65536
+      pattern: '^[^\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u200E\u200F\u2028-\u202E\u2066-\u2069]*$'
     Note:
       type: string
       description: A message for the other owner.
@@ -926,6 +1104,9 @@ components:
           $ref: '#/components/schemas/DaemonURL'
         version:
           type: string
+        peers:
+          $ref: '#/components/schemas/Peers'
+          description: For an agent token limited to peers, those peers; absent otherwise.
     PeeringRequest:
       description: >-
         One daemon asking another to become peers.
@@ -1023,6 +1204,67 @@ components:
         addedAt:
           type: string
           format: date-time
+    AgentTokenInput:
+      description: >-
+        A new agent token. With peers, it reaches only threads with those
+        peers: it lists and streams only theirs, and others' answer 404.
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        peers:
+          $ref: '#/components/schemas/Peers'
+        expiresAt:
+          type: string
+          format: date-time
+          description: When it stops working. Omitted, it works until revoked.
+    AgentTokenSummary:
+      description: An agent token, without the token.
+      type: object
+      required: [name, peers, createdAt]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        peers:
+          $ref: '#/components/schemas/Peers'
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        usedAt:
+          type: string
+          format: date-time
+          description: Its last use, to the minute.
+    NewAgentToken:
+      description: A new agent token and the token itself, which is never shown again.
+      type: object
+      required: [name, token, peers, createdAt]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        peers:
+          $ref: '#/components/schemas/Peers'
+        token:
+          type: string
+          description: The bearer token. Give it to the agent as CP_TOKEN.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    AgentTokenList:
+      description: Agent tokens, by name.
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentTokenSummary'
     PeerList:
       description: >-
         Peers, by name.
@@ -1122,7 +1364,7 @@ components:
       description: >-
         A thread without its events.
       type: object
-      required: [id, title, kind, labels, sender, recipient, peer, role, state, myTurn, actions, openedAt, updatedAt, events, undelivered, failed]
+      required: [id, title, kind, labels, sender, recipient, peer, role, state, myTurn, actions, openedAt, updatedAt, events, lastFrom, undelivered, failed]
       properties:
         id:
           $ref: '#/components/schemas/ID'
@@ -1152,6 +1394,11 @@ components:
         myTurn:
           type: boolean
           description: The thread is waiting on the owner.
+        lastFrom:
+          $ref: '#/components/schemas/Name'
+          description: >-
+            Who made the latest move to arrive that changed something. With
+            myTurn, the peer here means the owner has not answered it.
         actions:
           type: array
           description: >-

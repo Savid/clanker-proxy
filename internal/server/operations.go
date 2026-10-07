@@ -70,10 +70,19 @@ func (o *operations) NotifyPeeringAccepted(ctx context.Context) error {
 
 // Owner.
 
-func (o *operations) GetMe(context.Context) (*rest.Me, error) {
+func (o *operations) GetMe(ctx context.Context) (*rest.Me, error) {
+	scope, err := scopeOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	me := &rest.Me{Name: rest.Name(o.inbox.Self()), Version: o.version}
 	if u, ok := parseURL(o.inbox.URL()); ok {
 		me.URL = rest.NewOptDaemonURL(u)
+	}
+
+	if scope != nil {
+		me.Peers = toPeers(scope)
 	}
 
 	return me, nil
@@ -143,10 +152,21 @@ func (o *operations) RemovePeer(ctx context.Context, params rest.RemovePeerParam
 }
 
 func (o *operations) ListThreads(ctx context.Context, params rest.ListThreadsParams) (*rest.ThreadList, error) {
+	scope, err := scopeOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	peer := string(params.Peer.Or(""))
+	if peer != "" && !inScope(ctx, peer) {
+		return &rest.ThreadList{Threads: []rest.ThreadSummary{}}, nil
+	}
+
 	sums, err := o.inbox.Threads(ctx, store.Filter{
 		Turn:  string(params.Turn.Or("")),
 		State: thread.State(params.State.Or("")),
-		Peer:  string(params.Peer.Or("")),
+		Peer:  peer,
+		Peers: scope,
 		Label: string(params.Label.Or("")),
 		Limit: int(params.Limit.Or(100)),
 	})
@@ -163,7 +183,12 @@ func (o *operations) ListThreads(ctx context.Context, params rest.ListThreadsPar
 }
 
 func (o *operations) GetThread(ctx context.Context, params rest.GetThreadParams) (*rest.Thread, error) {
-	v, err := o.inbox.Thread(ctx, params.Ref)
+	scope, err := scopeOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	v, err := o.inbox.Thread(ctx, params.Ref, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +211,12 @@ func (o *operations) OpenThread(ctx context.Context, req *rest.NewThread) (*rest
 }
 
 func (o *operations) ActOnThread(ctx context.Context, req *rest.ThreadAction, params rest.ActOnThreadParams) (*rest.ThreadSummary, error) {
-	v, err := o.inbox.Act(ctx, params.Ref, thread.Action(req.Action), string(req.Body.Or("")))
+	scope, err := scopeOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	v, err := o.inbox.Act(ctx, params.Ref, scope, thread.Action(req.Action), string(req.Body.Or("")))
 	if err != nil {
 		return nil, err
 	}
@@ -197,12 +227,16 @@ func (o *operations) ActOnThread(ctx context.Context, req *rest.ThreadAction, pa
 }
 
 // NewError answers every handler and security error: a missing or wrong
-// credential as 401, the caller's fault as its status with the reason,
-// anything else (a security check that failed internally included) as a
-// bare 500.
+// credential as 401, an agent token where the owner's is needed as 403, the
+// caller's fault as its status with the reason, and anything else (a
+// security check that failed internally included) as a bare 500.
 func (o *operations) NewError(ctx context.Context, err error) *rest.ProblemStatusCode {
 	if errors.Is(err, errUnauthorized) || errors.Is(err, ogenerrors.ErrSecurityRequirementIsNotSatisfied) {
 		return problem(http.StatusUnauthorized, errUnauthorized.Error())
+	}
+
+	if errors.Is(err, errAgentForbidden) {
+		return problem(http.StatusForbidden, errAgentForbidden.Error())
 	}
 
 	status, ok := inbox.HTTPStatus(err)

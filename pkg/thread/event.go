@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -24,6 +25,16 @@ const (
 	MaxLabels = 10
 	MaxLabel  = 40
 	MaxClock  = 1_000_000_000
+)
+
+// Each author's room in a thread: at most MaxEvents events and
+// MaxThreadBody bytes of bodies. Counting per author keeps one side from
+// filling a thread for the other. Past its room an author may still end the
+// thread, without a body, up to EndingSlack more times.
+const (
+	MaxEvents     = 1000
+	MaxThreadBody = 4 << 20
+	EndingSlack   = 8
 )
 
 // Action is what an event does to its thread.
@@ -173,8 +184,8 @@ func (e Event) Validate() error {
 		add("action %q: want one of %v", e.Action, Actions())
 	}
 
-	if !utf8.ValidString(e.Body) || utf8.RuneCountInString(e.Body) > MaxBody {
-		add("body: want UTF-8 of at most %d characters", MaxBody)
+	if !utf8.ValidString(e.Body) || utf8.RuneCountInString(e.Body) > MaxBody || strings.ContainsFunc(e.Body, control) {
+		add("body: want UTF-8 of at most %d characters, without control characters but tab and line breaks", MaxBody)
 	}
 
 	if e.Action == ActionOpen {
@@ -194,7 +205,7 @@ func (e Event) validateOpen() []error {
 	}
 
 	if t := strings.TrimSpace(e.Title); t == "" || t != e.Title || !utf8.ValidString(e.Title) ||
-		utf8.RuneCountInString(e.Title) > MaxTitle || strings.ContainsAny(e.Title, "\r\n") {
+		utf8.RuneCountInString(e.Title) > MaxTitle || strings.ContainsFunc(e.Title, func(r rune) bool { return unicode.IsControl(r) || Hidden(r) }) {
 		errs = append(errs, fmt.Errorf("open: title must be one trimmed line of 1 to %d characters", MaxTitle))
 	}
 
@@ -217,4 +228,39 @@ func (e Event) validateOpen() []error {
 	}
 
 	return errs
+}
+
+// control reports a character a body may not hold: a control character
+// other than tab and line breaks, which can rewrite a reader's terminal, or
+// a Hidden one.
+func control(r rune) bool {
+	return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' || Hidden(r)
+}
+
+// Hidden reports a character that changes how text around it reads without
+// showing itself: a line or paragraph separator, or a bidirectional control,
+// which can break or reorder a line so a peer's words pass for something
+// else.
+func Hidden(r rune) bool {
+	return r == '\u2028' || r == '\u2029' || r == '\u200e' || r == '\u200f' ||
+		r >= '\u202a' && r <= '\u202e' || r >= '\u2066' && r <= '\u2069'
+}
+
+// MaxPeers bounds a list of peers that something is limited to.
+const MaxPeers = 50
+
+// ValidPeers checks a list of peers something is limited to: distinct,
+// normalized names, at most MaxPeers.
+func ValidPeers(peers []string) error {
+	if len(peers) > MaxPeers {
+		return fmt.Errorf("at most %d peers", MaxPeers)
+	}
+
+	for i, p := range peers {
+		if n, ok := NormalizeName(p); !ok || n != p || slices.Contains(peers[:i], p) {
+			return fmt.Errorf("peers must be distinct peer names; %q is not", p)
+		}
+	}
+
+	return nil
 }

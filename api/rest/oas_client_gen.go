@@ -25,7 +25,9 @@ type Invoker interface {
 	// ActOnThread invokes actOnThread operation.
 	//
 	// Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-	// they may.
+	// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+	// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+	// those peers, as getThread.
 	//
 	// POST /api/v1/threads/{ref}/events
 	ActOnThread(ctx context.Context, request *ThreadAction, params ActOnThreadParams) (*ThreadSummary, error)
@@ -50,12 +52,27 @@ type Invoker interface {
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, request *Approval, params ApproveRequestParams) (*Peer, error)
+	// CreateAgentToken invokes createAgentToken operation.
+	//
+	// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+	// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+	// the name is taken, and with 400 when `expiresAt` is not in the future.
+	//
+	// POST /api/v1/agent-tokens
+	CreateAgentToken(ctx context.Context, request *AgentTokenInput) (*NewAgentToken, error)
 	// CreateWebhook invokes createWebhook operation.
 	//
 	// Only future matching events are queued; secrets are never returned.
 	//
 	// POST /api/v1/webhooks
 	CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error)
+	// DeleteAgentToken invokes deleteAgentToken operation.
+	//
+	// The token stops working at once. A stream it opened sends nothing more and closes at its next event
+	// or keepalive.
+	//
+	// DELETE /api/v1/agent-tokens/{name}
+	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error
 	// DeleteWebhook invokes deleteWebhook operation.
 	//
 	// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
@@ -67,8 +84,9 @@ type Invoker interface {
 	//
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
 	// `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-	// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-	// than ten minutes ahead.
+	// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+	// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+	// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 	//
 	// POST /api/v1/federation/events
 	DeliverEvent(ctx context.Context, request *Event) (*Receipt, error)
@@ -98,7 +116,9 @@ type Invoker interface {
 	GetPeer(ctx context.Context, params GetPeerParams) (*Peer, error)
 	// GetThread invokes getThread operation.
 	//
-	// The thread's summary and every event, in the order both daemons replay them.
+	// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+	// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+	// and any other answers 404 as if it did not exist.
 	//
 	// GET /api/v1/threads/{ref}
 	GetThread(ctx context.Context, params GetThreadParams) (*Thread, error)
@@ -108,6 +128,12 @@ type Invoker interface {
 	//
 	// GET /api/v1/webhooks/{name}
 	GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error)
+	// ListAgentTokens invokes listAgentTokens operation.
+	//
+	// Every agent token, by name, without the tokens themselves.
+	//
+	// GET /api/v1/agent-tokens
+	ListAgentTokens(ctx context.Context) (*AgentTokenList, error)
 	// ListPeers invokes listPeers operation.
 	//
 	// Every peer, requested or active.
@@ -123,7 +149,7 @@ type Invoker interface {
 	ListRequests(ctx context.Context) (*RequestList, error)
 	// ListThreads invokes listThreads operation.
 	//
-	// Newest activity first.
+	// Newest activity first. An agent token limited to peers lists only threads with those peers.
 	//
 	// GET /api/v1/threads
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
@@ -165,7 +191,7 @@ type Invoker interface {
 	//
 	// Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
 	// Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
-	// and a new one drops the oldest.
+	// and a new one drops the oldest. Past 10 requests a minute it answers 503.
 	//
 	// POST /api/v1/peering-requests
 	RequestPeering(ctx context.Context, request *PeeringRequest) (*RequestReceipt, error)
@@ -179,11 +205,13 @@ type Invoker interface {
 	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
 	// UpdateWebhook invokes updateWebhook operation.
 	//
-	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-	// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+	// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+	// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+	// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+	// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+	// backoff (pausedUntil).
 	//
-	// PUT /api/v1/webhooks/{name}
+	// PATCH /api/v1/webhooks/{name}
 	UpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)
 }
 
@@ -231,7 +259,9 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 // ActOnThread invokes actOnThread operation.
 //
 // Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-// they may.
+// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+// those peers, as getThread.
 //
 // POST /api/v1/threads/{ref}/events
 func (c *Client) ActOnThread(ctx context.Context, request *ThreadAction, params ActOnThreadParams) (*ThreadSummary, error) {
@@ -287,11 +317,23 @@ func (c *Client) sendActOnThread(ctx context.Context, request *ThreadAction, par
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, ActOnThreadOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -516,6 +558,87 @@ func (c *Client) sendApproveRequest(ctx context.Context, request *Approval, para
 	return result, nil
 }
 
+// CreateAgentToken invokes createAgentToken operation.
+//
+// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+// the name is taken, and with 400 when `expiresAt` is not in the future.
+//
+// POST /api/v1/agent-tokens
+func (c *Client) CreateAgentToken(ctx context.Context, request *AgentTokenInput) (*NewAgentToken, error) {
+	res, err := c.sendCreateAgentToken(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendCreateAgentToken(ctx context.Context, request *AgentTokenInput) (res *NewAgentToken, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/agent-tokens"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeCreateAgentTokenRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, CreateAgentTokenOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeCreateAgentTokenResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // CreateWebhook invokes createWebhook operation.
 //
 // Only future matching events are queued; secrets are never returned.
@@ -588,6 +711,104 @@ func (c *Client) sendCreateWebhook(ctx context.Context, request *WebhookCreate) 
 	}()
 
 	result, err := decodeCreateWebhookResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteAgentToken invokes deleteAgentToken operation.
+//
+// The token stops working at once. A stream it opened sends nothing more and closes at its next event
+// or keepalive.
+//
+// DELETE /api/v1/agent-tokens/{name}
+func (c *Client) DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error {
+	_, err := c.sendDeleteAgentToken(ctx, params)
+	return err
+}
+
+func (c *Client) sendDeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) (res *DeleteAgentTokenNoContent, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/agent-tokens/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, DeleteAgentTokenOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeDeleteAgentTokenResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -697,8 +918,9 @@ func (c *Client) sendDeleteWebhook(ctx context.Context, params DeleteWebhookPara
 //
 // The peer's secret says who sent it. Delivering the same event again is harmless and answers
 // `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-// than ten minutes ahead.
+// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 //
 // POST /api/v1/federation/events
 func (c *Client) DeliverEvent(ctx context.Context, request *Event) (*Receipt, error) {
@@ -951,11 +1173,23 @@ func (c *Client) sendGetMe(ctx context.Context) (res *Me, err error) {
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, GetMeOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1090,7 +1324,9 @@ func (c *Client) sendGetPeer(ctx context.Context, params GetPeerParams) (res *Pe
 
 // GetThread invokes getThread operation.
 //
-// The thread's summary and every event, in the order both daemons replay them.
+// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+// and any other answers 404 as if it did not exist.
 //
 // GET /api/v1/threads/{ref}
 func (c *Client) GetThread(ctx context.Context, params GetThreadParams) (*Thread, error) {
@@ -1142,11 +1378,23 @@ func (c *Client) sendGetThread(ctx context.Context, params GetThreadParams) (res
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, GetThreadOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1272,6 +1520,82 @@ func (c *Client) sendGetWebhook(ctx context.Context, params GetWebhookParams) (r
 	}()
 
 	result, err := decodeGetWebhookResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListAgentTokens invokes listAgentTokens operation.
+//
+// Every agent token, by name, without the tokens themselves.
+//
+// GET /api/v1/agent-tokens
+func (c *Client) ListAgentTokens(ctx context.Context) (*AgentTokenList, error) {
+	res, err := c.sendListAgentTokens(ctx)
+	return res, err
+}
+
+func (c *Client) sendListAgentTokens(ctx context.Context) (res *AgentTokenList, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/agent-tokens"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, ListAgentTokensOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeListAgentTokensResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -1434,7 +1758,7 @@ func (c *Client) sendListRequests(ctx context.Context) (res *RequestList, err er
 
 // ListThreads invokes listThreads operation.
 //
-// Newest activity first.
+// Newest activity first. An agent token limited to peers lists only threads with those peers.
 //
 // GET /api/v1/threads
 func (c *Client) ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error) {
@@ -1562,11 +1886,23 @@ func (c *Client) sendListThreads(ctx context.Context, params ListThreadsParams) 
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, ListThreadsOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -2090,7 +2426,7 @@ func (c *Client) sendRemovePeer(ctx context.Context, params RemovePeerParams) (r
 //
 // Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
 // Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
-// and a new one drops the oldest.
+// and a new one drops the oldest. Past 10 requests a minute it answers 503.
 //
 // POST /api/v1/peering-requests
 func (c *Client) RequestPeering(ctx context.Context, request *PeeringRequest) (*RequestReceipt, error) {
@@ -2258,11 +2594,13 @@ func (c *Client) sendRetryWebhookDelivery(ctx context.Context, params RetryWebho
 
 // UpdateWebhook invokes updateWebhook operation.
 //
-// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+// backoff (pausedUntil).
 //
-// PUT /api/v1/webhooks/{name}
+// PATCH /api/v1/webhooks/{name}
 func (c *Client) UpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error) {
 	res, err := c.sendUpdateWebhook(ctx, request, params)
 	return res, err
@@ -2296,7 +2634,7 @@ func (c *Client) sendUpdateWebhook(ctx context.Context, request *WebhookUpdate, 
 	}
 	uri.AddPathParts(u, pathParts[:]...)
 
-	r, err := ht.NewRequest(ctx, "PUT", u)
+	r, err := ht.NewRequest(ctx, "PATCH", u)
 	if err != nil {
 		return res, errors.Wrap(err, "create request")
 	}

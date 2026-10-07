@@ -81,7 +81,7 @@ func TestWebhookRunHoldsEndpointAfterStoreError(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
 	// Nothing listens on port 1, so the released attempt fails fast.
-	hook := webhook.Config{Name: "agent", URL: "http://127.0.0.1:1/", Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "both", Enabled: true}
+	hook := webhook.Config{Type: "generic", Name: "agent", URL: "http://127.0.0.1:1/", Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "both", Enabled: true}
 	if err = st.CreateWebhook(t.Context(), hook); err != nil {
 		t.Fatal(err)
 	}
@@ -105,5 +105,18 @@ func TestWebhookRunHoldsEndpointAfterStoreError(t *testing.T) {
 	workers.Wait()
 	if len(r.active) != 1 || len(r.held) != 0 {
 		t.Fatal("endpoint stayed held after its hold ended")
+	}
+}
+
+func TestSetQueryKeepsOwnerPairs(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		"":                                  "wait=true",
+		"thread_id=1&wait=false&tok=a%2fb+": "thread_id=1&tok=a%2fb+&wait=true",
+		"z=1&&a=2&w%61it=no":                "z=1&a=2&wait=true",
+	} {
+		if got := setQuery(raw, map[string]string{"wait": "true"}); got != want {
+			t.Errorf("%q: got %q, want %q", raw, got, want)
+		}
 	}
 }

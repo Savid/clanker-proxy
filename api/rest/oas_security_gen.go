@@ -13,6 +13,9 @@ import (
 
 // SecurityHandler is handler for security parameters.
 type SecurityHandler interface {
+	// HandleAgentToken handles agentToken security.
+	// An agent token the owner created; limited to working threads, optionally only some peers'.
+	HandleAgentToken(ctx context.Context, operationName OperationName, t AgentToken) (context.Context, error)
 	// HandleOwnerToken handles ownerToken security.
 	// The owner token, from `<dir>/owner.token`.
 	HandleOwnerToken(ctx context.Context, operationName OperationName, t OwnerToken) (context.Context, error)
@@ -36,18 +39,50 @@ func findAuthorization(h http.Header, prefix string) (string, bool) {
 	return "", false
 }
 
+// operationRolesAgentToken is a private map storing roles per operation.
+var operationRolesAgentToken = map[string][]string{
+	ActOnThreadOperation: []string{},
+	GetMeOperation:       []string{},
+	GetThreadOperation:   []string{},
+	ListThreadsOperation: []string{},
+}
+
+// GetRolesForAgentToken returns the required roles for the given operation.
+//
+// This is useful for authorization scenarios where you need to know which roles
+// are required for an operation.
+//
+// Example:
+//
+//	requiredRoles := GetRolesForAgentToken(AddPetOperation)
+//
+// Returns nil if the operation has no role requirements or if the operation is unknown.
+func GetRolesForAgentToken(operation string) []string {
+	roles, ok := operationRolesAgentToken[operation]
+	if !ok {
+		return nil
+	}
+	// Return a copy to prevent external modification
+	result := make([]string, len(roles))
+	copy(result, roles)
+	return result
+}
+
 // operationRolesOwnerToken is a private map storing roles per operation.
 var operationRolesOwnerToken = map[string][]string{
 	ActOnThreadOperation:           []string{},
 	AddPeerOperation:               []string{},
 	ApproveRequestOperation:        []string{},
+	CreateAgentTokenOperation:      []string{},
 	CreateWebhookOperation:         []string{},
+	DeleteAgentTokenOperation:      []string{},
 	DeleteWebhookOperation:         []string{},
 	DenyRequestOperation:           []string{},
 	GetMeOperation:                 []string{},
 	GetPeerOperation:               []string{},
 	GetThreadOperation:             []string{},
 	GetWebhookOperation:            []string{},
+	ListAgentTokensOperation:       []string{},
 	ListPeersOperation:             []string{},
 	ListRequestsOperation:          []string{},
 	ListThreadsOperation:           []string{},
@@ -107,6 +142,23 @@ func GetRolesForPeerSecret(operation string) []string {
 	return result
 }
 
+func (s *Server) securityAgentToken(ctx context.Context, operationName OperationName, req *http.Request) (context.Context, bool, error) {
+	var t AgentToken
+	token, ok := findAuthorization(req.Header, "Bearer")
+	if !ok {
+		return ctx, false, nil
+	}
+	t.Token = token
+	t.Roles = operationRolesAgentToken[operationName]
+	rctx, err := s.sec.HandleAgentToken(ctx, operationName, t)
+	if errors.Is(err, ogenerrors.ErrSkipServerSecurity) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
+	}
+	return rctx, true, err
+}
+
 func (s *Server) securityOwnerToken(ctx context.Context, operationName OperationName, req *http.Request) (context.Context, bool, error) {
 	var t OwnerToken
 	token, ok := findAuthorization(req.Header, "Bearer")
@@ -143,6 +195,9 @@ func (s *Server) securityPeerSecret(ctx context.Context, operationName Operation
 
 // SecuritySource is provider of security values (tokens, passwords, etc.).
 type SecuritySource interface {
+	// AgentToken provides agentToken security value.
+	// An agent token the owner created; limited to working threads, optionally only some peers'.
+	AgentToken(ctx context.Context, operationName OperationName) (AgentToken, error)
 	// OwnerToken provides ownerToken security value.
 	// The owner token, from `<dir>/owner.token`.
 	OwnerToken(ctx context.Context, operationName OperationName) (OwnerToken, error)
@@ -151,6 +206,14 @@ type SecuritySource interface {
 	PeerSecret(ctx context.Context, operationName OperationName) (PeerSecret, error)
 }
 
+func (s *Client) securityAgentToken(ctx context.Context, operationName OperationName, req *http.Request) error {
+	t, err := s.sec.AgentToken(ctx, operationName)
+	if err != nil {
+		return errors.Wrap(err, "security source \"AgentToken\"")
+	}
+	req.Header.Set("Authorization", "Bearer "+t.Token)
+	return nil
+}
 func (s *Client) securityOwnerToken(ctx context.Context, operationName OperationName, req *http.Request) error {
 	t, err := s.sec.OwnerToken(ctx, operationName)
 	if err != nil {

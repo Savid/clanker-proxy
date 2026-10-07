@@ -19,7 +19,7 @@ func (b *Inbox) Webhooks(ctx context.Context) ([]webhook.Config, error) {
 	return hooks, err
 }
 
-// Webhook returns one destination. API serialization must omit its signing key.
+// Webhook returns one destination. API serialization must omit its credentials.
 func (b *Inbox) Webhook(ctx context.Context, name string) (webhook.Config, error) {
 	c, err := b.store.Webhook(ctx, name)
 	return b.pause(c), webhookError(err)
@@ -38,26 +38,21 @@ func (b *Inbox) CreateWebhook(ctx context.Context, c webhook.Config) (webhook.Co
 	if err := c.Validate(); err != nil {
 		return c, errorf(KindInvalid, "%v", err)
 	}
+	if err := b.knownPeers(ctx, c.Peers); err != nil {
+		return c, err
+	}
 	return c, webhookError(b.store.CreateWebhook(ctx, c))
 }
 
-// UpdateWebhook replaces filters and destination, retaining an omitted signing key.
-func (b *Inbox) UpdateWebhook(ctx context.Context, c webhook.Config) (webhook.Config, error) {
-	old, err := b.Webhook(ctx, c.Name)
-	if err != nil {
-		return c, err
+// UpdateWebhook applies partial settings atomically with validation.
+func (b *Inbox) UpdateWebhook(ctx context.Context, name string, change webhook.Update) (webhook.Config, error) {
+	if change.Peers != nil {
+		if err := b.knownPeers(ctx, *change.Peers); err != nil {
+			return webhook.Config{}, err
+		}
 	}
-	check := c
-	if check.Secret == "" {
-		check.Secret = old.Secret
-	}
-	if err = check.Validate(); err != nil {
-		return c, errorf(KindInvalid, "%v", err)
-	}
-	if err = b.store.UpdateWebhook(ctx, c); err != nil {
-		return c, webhookError(err)
-	}
-	return b.Webhook(ctx, c.Name)
+	c, err := b.store.UpdateWebhook(ctx, name, change)
+	return c, webhookError(err)
 }
 
 // DeleteWebhook removes a destination and its delivery history.
@@ -100,6 +95,7 @@ func (b *Inbox) RetryWebhook(ctx context.Context, name, id string) error {
 }
 
 func webhookError(err error) error {
+	var invalid *store.InvalidWebhookError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return errorf(KindNotFound, "webhook not found")
@@ -107,6 +103,8 @@ func webhookError(err error) error {
 		return errorf(KindConflict, "webhook name already exists")
 	case errors.Is(err, store.ErrWebhookRetry):
 		return errorf(KindConflict, "only failed deliveries of enabled webhooks can be retried")
+	case errors.As(err, &invalid):
+		return errorf(KindInvalid, "%v", invalid.Err)
 	default:
 		return err
 	}

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ogen-go/ogen/ogenerrors"
@@ -18,16 +17,30 @@ import (
 	"github.com/savid/clanker-proxy/api/rest"
 )
 
-// ownerSource presents the owner token, and nothing for peer operations,
-// which cpctl never calls.
-type ownerSource string
+// tokenSource presents cpctl's token, the owner's or an agent's, under the
+// owner scheme: both are bearer tokens and cpd tells them apart by prefix.
+// cpctl never calls peer operations.
+type tokenSource string
 
-func (s ownerSource) OwnerToken(context.Context, rest.OperationName) (rest.OwnerToken, error) {
+func (s tokenSource) OwnerToken(context.Context, rest.OperationName) (rest.OwnerToken, error) {
 	return rest.OwnerToken{Token: string(s)}, nil
 }
 
-func (ownerSource) PeerSecret(context.Context, rest.OperationName) (rest.PeerSecret, error) {
+func (tokenSource) AgentToken(context.Context, rest.OperationName) (rest.AgentToken, error) {
+	return rest.AgentToken{}, ogenerrors.ErrSkipClientSecurity
+}
+
+func (tokenSource) PeerSecret(context.Context, rest.OperationName) (rest.PeerSecret, error) {
 	return rest.PeerSecret{}, ogenerrors.ErrSkipClientSecurity
+}
+
+// agentPrefix marks agent tokens, which cpd limits to threads. It must
+// match inbox.AgentPrefix, which cpctl cannot import; a test checks it.
+const agentPrefix = "cpa_"
+
+// agent reports whether cpctl holds an agent token rather than the owner's.
+func (a *app) agent() bool {
+	return strings.HasPrefix(a.token, agentPrefix)
 }
 
 // defaultToken is $CP_TOKEN, else the owner token cpd wrote on its first run
@@ -84,7 +97,7 @@ func newClient(baseURL, token string) (*rest.Client, error) {
 		return nil, err
 	}
 
-	c, err := rest.NewClient(baseURL, ownerSource(token), rest.WithClient(ownerHTTPClient(requestTimeout)))
+	c, err := rest.NewClient(baseURL, tokenSource(token), rest.WithClient(ownerHTTPClient(requestTimeout)))
 	if err != nil {
 		return nil, fmt.Errorf("client: %w", err)
 	}
@@ -92,7 +105,7 @@ func newClient(baseURL, token string) (*rest.Client, error) {
 	return c, nil
 }
 
-// checkTransport refuses to send the owner token in the clear to another
+// checkTransport refuses to send a token in the clear to another
 // host: plain http is for loopback only.
 func checkTransport(baseURL string) error {
 	u, err := url.Parse(baseURL)
@@ -109,7 +122,7 @@ func checkTransport(baseURL string) error {
 			return nil
 		}
 
-		return fmt.Errorf("-url %s: the owner token would cross the network unencrypted; use https", baseURL)
+		return fmt.Errorf("-url %s: the token would cross the network unencrypted; use https", baseURL)
 	default:
 		return fmt.Errorf("-url %s: want http(s)://host[:port]", baseURL)
 	}
@@ -138,10 +151,10 @@ func (a *app) classify(err error, cmd *command) *failure {
 	}
 
 	if p, ok := errors.AsType[*rest.ProblemStatusCode](err); ok {
-		return problemFailure(p, cmd, a.ref)
+		return problemFailure(p, cmd, a.ref, a.agent())
 	}
 
-	if errors.Is(err, syscall.ECONNREFUSED) || isDialError(err) {
+	if isUnreachable(err) {
 		return &failure{
 			exit: exitUnreachable, msg: fmt.Sprintf("cannot reach cpd at %s: %v", a.url, err),
 			hint: "start cpd, or set CP_URL (or -url) to where it listens",
@@ -151,7 +164,7 @@ func (a *app) classify(err error, cmd *command) *failure {
 	return &failure{exit: exitError, msg: err.Error()}
 }
 
-func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failure {
+func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string, agent bool) *failure {
 	f := &failure{exit: exitError, status: p.StatusCode, msg: p.Response.Detail.Or(p.Response.Title)}
 
 	name := ""
@@ -161,9 +174,14 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 
 	switch p.StatusCode {
 	case http.StatusBadRequest:
-		f.exit, f.hint = exitUsage, "cpctl help "+name
+		f.exit, f.hint = exitUsage, badInputHint(name, f.msg)
 	case http.StatusUnauthorized:
-		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp)"
+		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp), or to an agent token from cpctl token add"
+		if agent {
+			f.hint = "this agent token was revoked, has expired or is unknown; ask the owner for a new one"
+		}
+	case http.StatusForbidden:
+		f.exit, f.hint = exitRefused, "this is an agent token: it runs me, inbox, ls, show, wait, watch and the thread actions (reply, ack, needs-input, resolve, decline, close, reopen, withdraw); ask the owner for anything else"
 	case http.StatusNotFound:
 		f.exit, f.hint = exitNotFound, notFoundHint(name)
 	case http.StatusConflict, http.StatusUnprocessableEntity:
@@ -171,8 +189,10 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 		switch {
 		case name == "webhook add":
 			f.hint = "choose another name, or change the existing one with cpctl webhook set <name>"
+		case name == "token add":
+			f.hint = "choose another name, or revoke the existing one with cpctl token rm <name>"
 		case name == "webhook retry":
-			f.hint = "only failed deliveries of enabled webhooks can be retried; cpctl webhook deliveries <name> -status failed lists them, and cpctl webhook set <name> -enabled=true resumes a paused webhook"
+			f.hint = "cpctl webhook deliveries <name> -status failed lists failed deliveries; cpctl webhook set <name> -enabled=true enables a disabled webhook"
 		case ref != "":
 			f.hint = "cpctl show " + ref + " lists what you can do now, as commands"
 		}
@@ -183,7 +203,27 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 	return f
 }
 
+// badInputHint points at what lists valid input, where cpd's message alone
+// does not.
+func badInputHint(cmd, msg string) string {
+	switch {
+	case strings.Contains(msg, "matches more than one thread"):
+		return "give more of the thread ID; cpctl ls shows them"
+	case cmd == "approve" || cmd == "deny":
+		return "cpctl requests lists request IDs"
+	case cmd == "webhook retry":
+		return "cpctl webhook deliveries <name> -status failed lists delivery IDs"
+	case cmd == "webhook add" || cmd == "webhook set":
+		return "cpctl webhook events and cpctl webhook types list valid values; cpctl help " + cmd
+	default:
+		return "cpctl help " + cmd
+	}
+}
+
 func notFoundHint(cmd string) string {
+	if strings.HasPrefix(cmd, "token ") {
+		return "cpctl token ls lists agent tokens"
+	}
 	if strings.HasPrefix(cmd, "webhook ") {
 		return "cpctl webhook ls lists webhook names; cpctl webhook deliveries <name> lists recent delivery IDs"
 	}

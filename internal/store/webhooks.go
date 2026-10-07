@@ -23,12 +23,19 @@ const WebhookTTL = 7 * 24 * time.Hour
 // ErrWebhookRetry means a delivery is not failed, or its webhook is disabled.
 var ErrWebhookRetry = errors.New("only failed deliveries of enabled webhooks can be retried")
 
-const webhookColumns = `name, url, events, origin, enabled, secret, retry_after, failures`
+// InvalidWebhookError is a validation failure inside an atomic settings update.
+type InvalidWebhookError struct{ Err error }
+
+func (e *InvalidWebhookError) Error() string { return e.Err.Error() }
+
+func (e *InvalidWebhookError) Unwrap() error { return e.Err }
+
+const webhookColumns = `name, type, url, events, origin, peers, enabled, secret, headers, retry_after, failures`
 
 func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
 	var c webhook.Config
-	var events, paused string
-	if err := row.Scan(&c.Name, &c.URL, &events, &c.Origin, &c.Enabled, &c.Secret, &paused, &c.Failures); err != nil {
+	var events, peers, headers, paused string
+	if err := row.Scan(&c.Name, &c.Type, &c.URL, &events, &c.Origin, &peers, &c.Enabled, &c.Secret, &headers, &paused, &c.Failures); err != nil {
 		return c, err
 	}
 	if paused != "" {
@@ -37,7 +44,22 @@ func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
 			return c, err
 		}
 	}
+	if err := json.Unmarshal([]byte(headers), &c.Headers); err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal([]byte(peers), &c.Peers); err != nil {
+		return c, err
+	}
 	return c, json.Unmarshal([]byte(events), &c.Events)
+}
+
+// peerList encodes a peer list, always as an array, so SQL can count it.
+func peerList(peers []string) string {
+	if len(peers) == 0 {
+		return "[]"
+	}
+	data, _ := json.Marshal(peers) //nolint:errchkjson // a []string always encodes
+	return string(data)
 }
 
 // Webhooks lists destinations; secrets are for internal delivery only.
@@ -73,23 +95,59 @@ func (s *Store) CreateWebhook(ctx context.Context, c webhook.Config) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO webhooks (name, url, events, origin, enabled, secret) VALUES (?,?,?,?,?,?)`, c.Name, c.URL, string(events), c.Origin, c.Enabled, c.Secret)
+	headers, err := json.Marshal(c.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO webhooks (name, type, url, events, origin, peers, enabled, secret, headers) VALUES (?,?,?,?,?,?,?,?,?)`, c.Name, c.Type, c.URL, string(events), c.Origin, peerList(c.Peers), c.Enabled, c.Secret, string(headers))
 	if isConstraint(err) {
 		return ErrExists
 	}
 	return err
 }
 
-// UpdateWebhook replaces settings. An empty secret retains the existing key.
-// An owner update is the signal that the receiver may be fixed, so it also
-// clears the endpoint's backoff.
-func (s *Store) UpdateWebhook(ctx context.Context, c webhook.Config) error {
-	events, err := json.Marshal(c.Events)
-	if err != nil {
-		return err
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, enabled=?, secret=CASE WHEN ?='' THEN secret ELSE ? END WHERE name=?`, c.URL, string(events), c.Origin, c.Enabled, c.Secret, c.Secret, c.Name)
-	return webhookChanged(res, err)
+// UpdateWebhook merges and validates under the write lock, so unrelated edits
+// cannot undo credential rotation or overwrite a deleted and recreated name.
+// An owner update also clears backoff to resume a repaired destination.
+func (s *Store) UpdateWebhook(ctx context.Context, name string, change webhook.Update) (webhook.Config, error) {
+	var out webhook.Config
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		c, err := scanWebhook(tx.QueryRowContext(ctx, `SELECT `+webhookColumns+` FROM webhooks WHERE name=?`, name))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		c = change.Apply(c)
+		if err = c.Validate(); err != nil {
+			return &InvalidWebhookError{Err: err}
+		}
+		events, err := json.Marshal(c.Events)
+		if err != nil {
+			return err
+		}
+		headers, err := json.Marshal(c.Headers)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, peers=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, peerList(c.Peers), c.Enabled, c.Secret, string(headers), name); err != nil {
+			return err
+		}
+		// What is queued must fit the new peers, or a webhook narrowed to
+		// one peer would still deliver another's notifications.
+		if len(c.Peers) > 0 {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND sending=0
+ AND (event='peering.requested' OR json_extract(payload, '$.peer') NOT IN (SELECT value FROM json_each(?)))`, name, peerList(c.Peers)); err != nil {
+				return err
+			}
+		}
+		c.PausedUntil = time.Time{}
+		c.Failures = 0
+		out = c
+		return nil
+	})
+	return out, err
 }
 
 // DeleteWebhook also deletes queued deliveries through the foreign key.
@@ -114,8 +172,12 @@ func webhookChanged(res sql.Result, err error) error {
 
 // queueWebhooks shares the source mutation's transaction: either both commit or neither does.
 func queueWebhooks(ctx context.Context, tx *sql.Tx, p webhook.Payload) error {
+	// A webhook with peers takes only those peers' thread events: a peering
+	// request carries a name its sender chose.
 	rows, err := tx.QueryContext(ctx, `SELECT name FROM webhooks WHERE enabled=1 AND (origin='both' OR origin=?)
- AND EXISTS (SELECT 1 FROM json_each(events) WHERE value='*' OR value=?)`, p.Origin, p.Type)
+ AND EXISTS (SELECT 1 FROM json_each(events) WHERE value='*' OR value=?)
+ AND (json_array_length(peers)=0 OR (?<>'peering.requested' AND EXISTS (SELECT 1 FROM json_each(peers) WHERE value=?)))`,
+		p.Origin, p.Type, p.Type, p.Peer)
 	if err != nil {
 		return err
 	}
@@ -133,6 +195,21 @@ func queueWebhooks(ctx context.Context, tx *sql.Tx, p webhook.Payload) error {
 		return err
 	}
 	for _, name := range names {
+		// A notification not yet delivered is replaced by a newer one of the
+		// same kind about the same thread, and peering notifications by the
+		// newest one, so a flood of events queues one notification, not one
+		// each. Payloads are metadata; receivers read current state.
+		// One being sent is left alone: its outcome still has to be
+		// recorded, and its endpoint's backoff with it.
+		replaced := `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND sending=0 AND event=? AND origin=? AND subject=?`
+		args := []any{name, p.Type, p.Origin, p.Subject}
+		if p.Type == "peering.requested" {
+			replaced = `DELETE FROM webhook_deliveries WHERE webhook=? AND status='pending' AND sending=0 AND event=?`
+			args = args[:2]
+		}
+		if _, err = tx.ExecContext(ctx, replaced, args...); err != nil {
+			return fmt.Errorf("replace webhook: %w", err)
+		}
 		p.ID = uuid.NewString()
 		payload, encodeErr := json.Marshal(p)
 		if encodeErr != nil {
@@ -232,6 +309,13 @@ func (s *Store) DueWebhooks(ctx context.Context, now time.Time) ([]WebhookDelive
  WHERE w.enabled=1 AND w.retry_after<=? ORDER BY d.next_attempt_at,d.seq`, at, at, at)
 }
 
+// StartWebhook marks a delivery as being sent, so a newer notification
+// does not replace it mid-request.
+func (s *Store) StartWebhook(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE webhook_deliveries SET sending=1 WHERE id=? AND status='pending'`, id)
+	return err
+}
+
 // FinishWebhook records one attempt without overwriting a deleted delivery.
 // A delivered attempt proves the endpoint works and resets its failure count.
 func (s *Store) FinishWebhook(ctx context.Context, id, status, message string, next, now time.Time) error {
@@ -240,7 +324,7 @@ func (s *Store) FinishWebhook(ctx context.Context, id, status, message string, n
 		finished = formatTime(now)
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE webhook_deliveries SET status=?,attempts=attempts+1,last_error=?,next_attempt_at=?,finished_at=? WHERE id=? AND status='pending'`, status, message, formatTime(next), finished, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE webhook_deliveries SET status=?,attempts=attempts+1,last_error=?,next_attempt_at=?,finished_at=?,sending=0 WHERE id=? AND status='pending'`, status, message, formatTime(next), finished, id); err != nil {
 			return err
 		}
 		if status != "delivered" {
@@ -296,7 +380,7 @@ func (s *Store) MaintainWebhooks(ctx context.Context, now time.Time, active []st
 // WebhookDestination resolves a still-queued delivery to its current destination.
 // A deleted and recreated name must never receive the deleted hook's in-flight work.
 func (s *Store) WebhookDestination(ctx context.Context, id string) (webhook.Config, error) {
-	c, err := scanWebhook(s.db.QueryRowContext(ctx, `SELECT w.name,w.url,w.events,w.origin,w.enabled,w.secret,w.retry_after,w.failures FROM webhooks w JOIN webhook_deliveries d ON d.webhook=w.name WHERE d.id=? AND d.status='pending'`, id))
+	c, err := scanWebhook(s.db.QueryRowContext(ctx, `SELECT `+webhookColumns+` FROM webhooks WHERE name=(SELECT webhook FROM webhook_deliveries WHERE id=? AND status='pending')`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -304,9 +388,17 @@ func (s *Store) WebhookDestination(ctx context.Context, id string) (webhook.Conf
 }
 
 // DeferWebhook records a retryable endpoint failure and holds all pending work
-// at that endpoint until the given time. The URL guard keeps a failure of a
-// replaced destination from pausing the new one.
-func (s *Store) DeferWebhook(ctx context.Context, id, requestedURL string, until time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after=max(retry_after,?), failures=failures+1 WHERE name=(SELECT webhook FROM webhook_deliveries WHERE id=?) AND url=?`, formatTime(until), id, requestedURL)
+// at that endpoint until the given time. It applies only while the endpoint
+// still has the URL, signing key and headers the request was sent with, so a
+// request that fails after an owner update cannot pause the repaired
+// destination.
+func (s *Store) DeferWebhook(ctx context.Context, id string, sent webhook.Config, until time.Time) error {
+	headers, err := json.Marshal(sent.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after=max(retry_after,?), failures=failures+1
+ WHERE name=(SELECT webhook FROM webhook_deliveries WHERE id=?) AND url=? AND secret=? AND headers=?`,
+		formatTime(until), id, sent.URL, sent.Secret, string(headers))
 	return err
 }

@@ -65,6 +65,11 @@ type Inbox struct {
 	// peer is saved, so they cannot race the callback's response.
 	confirmation *confirmation
 
+	// requestTimes are when recent peering requests arrived, for the
+	// rate limit on that public operation.
+	requestMu    sync.Mutex
+	requestTimes []time.Time
+
 	subMu sync.Mutex
 	subs  map[chan store.Summary]struct{}
 
@@ -109,6 +114,10 @@ type Receipt struct {
 	Duplicate bool
 }
 
+// MaxOpenThreadsFromPeer bounds the threads one peer may have open here at
+// once, so one peer cannot bury the owner's inbox and notifications.
+const MaxOpenThreadsFromPeer = 200
+
 // Receive stores an event peer delivered. e's From and To are ignored: the
 // peer sent it, to the owner.
 func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Receipt, error) {
@@ -137,12 +146,28 @@ func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Recei
 		return Receipt{ID: e.ID, Duplicate: dup}, err
 	}
 
+	if e.Action == thread.ActionOpen {
+		n, countErr := b.store.OpenThreadsFrom(ctx, peer)
+		if countErr != nil {
+			return Receipt{}, countErr
+		}
+
+		if n >= MaxOpenThreadsFromPeer {
+			return Receipt{}, errorf(KindUnprocessable, "%s already has %d threads open here; end some first", peer, n)
+		}
+	}
+
 	t, err := b.next(ctx, &e, false)
 	if err != nil {
 		return Receipt{}, err
 	}
 
-	if err = b.store.AddEvent(ctx, store.Event{Event: e, StoredAt: b.now().UTC()}, false, store.Projection(t, b.self)); err != nil {
+	p, quiet, err := b.projection(ctx, t, e)
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	if err = b.store.AddEvent(ctx, store.Event{Event: e, StoredAt: b.now().UTC(), Quiet: quiet}, false, p); err != nil {
 		return Receipt{}, err
 	}
 
@@ -180,13 +205,14 @@ func (b *Inbox) Open(ctx context.Context, n NewThread) (View, error) {
 	})
 }
 
-// Act takes an action on the thread ref names, as the owner.
-func (b *Inbox) Act(ctx context.Context, ref string, action thread.Action, body string) (View, error) {
+// Act takes an action on the thread ref names, as the owner, among threads
+// with the peers in scope (nil: every peer).
+func (b *Inbox) Act(ctx context.Context, ref string, scope []string, action thread.Action, body string) (View, error) {
 	if action == thread.ActionOpen {
 		return View{}, errorf(KindInvalid, "open a thread by opening it, not as an action")
 	}
 
-	id, err := b.resolve(ctx, ref)
+	id, err := b.resolve(ctx, ref, scope)
 	if err != nil {
 		return View{}, err
 	}
@@ -217,7 +243,7 @@ func (b *Inbox) delivered(ctx context.Context, id string) error {
 
 	for _, e := range events {
 		if e.ID == id && e.Delivery != nil && e.Delivery.Status == store.DeliveryFailed {
-			return errorf(KindConflict, "%s never received this thread (%s); send a new one", e.To, e.Delivery.LastError)
+			return errorf(KindConflict, "%s never received this thread (%q); send a new one", e.To, e.Delivery.LastError)
 		}
 	}
 
@@ -240,7 +266,12 @@ func (b *Inbox) submit(ctx context.Context, e thread.Event) (View, error) {
 		return View{}, errorf(KindInvalid, "%v", err)
 	}
 
-	err = b.store.AddEvent(ctx, store.Event{Event: e, StoredAt: b.now().UTC()}, true, store.Projection(t, b.self))
+	p, _, err := b.projection(ctx, t, e)
+	if err != nil {
+		return View{}, err
+	}
+
+	err = b.store.AddEvent(ctx, store.Event{Event: e, StoredAt: b.now().UTC()}, true, p)
 	if errors.Is(err, store.ErrNotFound) {
 		return View{}, errorf(KindNotFound, "%s is not a peer", e.To)
 	}
@@ -278,6 +309,30 @@ func (b *Inbox) duplicate(ctx context.Context, e thread.Event) (bool, error) {
 	return true, nil
 }
 
+// projection is t's listing row once e is stored. Its LastFrom is who made
+// the latest move to arrive that changed something: replay order can put a
+// concurrent peer reply before the owner's ack, and a move that had no
+// effect answers nothing. quiet reports that e had no effect.
+func (b *Inbox) projection(ctx context.Context, t thread.Thread, e thread.Event) (store.Summary, bool, error) {
+	p := store.Projection(t, b.self)
+
+	quiet := slices.ContainsFunc(t.Events, func(a thread.Applied) bool { return a.ID == e.ID && a.Ignored != "" })
+	if !quiet || e.Action == thread.ActionOpen {
+		p.LastFrom = e.From
+
+		return p, quiet, nil
+	}
+
+	was, err := b.store.Summary(ctx, t.ID)
+	if err != nil {
+		return p, quiet, err
+	}
+
+	p.LastFrom = was.LastFrom
+
+	return p, quiet, nil
+}
+
 // next replays e onto its thread. The event must be between the thread's
 // participants. own marks the owner's event: it must apply, and it is given
 // the thread's next clock, so it replays after everything the owner saw. A
@@ -312,6 +367,14 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 
 	if _, ok := t.RoleOf(e.From); !ok || t.Peer(e.From) != e.To {
 		return thread.Thread{}, errorf(KindUnprocessable, "thread %s is not between %s and %s", e.Thread, e.From, e.To)
+	}
+
+	if err = t.Room(*e); err != nil {
+		if own {
+			return thread.Thread{}, errorf(KindConflict, "%v; open a new thread to go on", err)
+		}
+
+		return thread.Thread{}, errorf(KindUnprocessable, "%v", err)
 	}
 
 	if own {
@@ -367,9 +430,10 @@ type ViewEvent struct {
 	Ignored string
 }
 
-// Thread returns the thread ref names: an ID or a unique prefix.
-func (b *Inbox) Thread(ctx context.Context, ref string) (View, error) {
-	id, err := b.resolve(ctx, ref)
+// Thread returns the thread ref names: an ID or a unique prefix, among
+// threads with the peers in scope (nil: every peer).
+func (b *Inbox) Thread(ctx context.Context, ref string, scope []string) (View, error) {
+	id, err := b.resolve(ctx, ref, scope)
 	if err != nil {
 		return View{}, err
 	}
@@ -377,14 +441,14 @@ func (b *Inbox) Thread(ctx context.Context, ref string) (View, error) {
 	return b.view(ctx, id)
 }
 
-func (b *Inbox) resolve(ctx context.Context, ref string) (string, error) {
-	id, err := b.store.ResolveThread(ctx, ref)
+func (b *Inbox) resolve(ctx context.Context, ref string, scope []string) (string, error) {
+	id, err := b.store.ResolveThread(ctx, ref, scope)
 
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return "", errorf(KindNotFound, "no thread matches %q", ref)
 	case errors.Is(err, store.ErrAmbiguous):
-		return "", errorf(KindConflict, "%q matches more than one thread; give more of its ID", ref)
+		return "", errorf(KindInvalid, "%q matches more than one thread; give more of its ID", ref)
 	default:
 		return id, err
 	}

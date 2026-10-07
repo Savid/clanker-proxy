@@ -30,14 +30,14 @@ func TestValidation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.url, func(t *testing.T) {
 			t.Parallel()
-			c := webhook.Config{Name: "agent", URL: tc.url, Events: []string{"*"}, Origin: "incoming", Secret: key}
+			c := webhook.Config{Type: "generic", Name: "agent", URL: tc.url, Events: []string{"*"}, Origin: "incoming", Secret: key}
 			if err := c.Validate(); (err == nil) != tc.valid {
 				t.Fatalf("valid=%t, error=%v", tc.valid, err)
 			}
 		})
 	}
 	for _, events := range [][]string{nil, {"*", "thread.open"}, {"thread.open", "thread.open"}, {"made-up"}} {
-		c := webhook.Config{Name: "agent", URL: "https://runner.example", Events: events, Origin: "both", Secret: key}
+		c := webhook.Config{Type: "generic", Name: "agent", URL: "https://runner.example", Events: events, Origin: "both", Secret: key}
 		if c.Validate() == nil {
 			t.Errorf("accepted invalid events %v", events)
 		}
@@ -60,5 +60,27 @@ func TestSignature(t *testing.T) {
 	const want = "v1,sTL4E9ah/5ZFL+CR/fTl252h2LiBHuo+k+zA5Nd1A40="
 	if got != want {
 		t.Fatalf("signature=%q, want %q", got, want)
+	}
+}
+
+func TestPeerValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		peers  []string
+		events []string
+		valid  bool
+	}{
+		{nil, []string{"*"}, true},
+		{[]string{"bob", "carol"}, []string{"*"}, true},
+		{[]string{"bob"}, []string{"thread.open"}, true},
+		{[]string{"Bob"}, []string{"*"}, false},
+		{[]string{"bob", "bob"}, []string{"*"}, false},
+		{[]string{"bob"}, []string{"peering.requested"}, false},
+		{nil, []string{"peering.requested"}, true},
+	} {
+		c := webhook.Config{Type: "generic", Name: "agent", URL: "https://runner.example", Events: tc.events, Origin: "both", Peers: tc.peers}
+		if err := c.Validate(); (err == nil) != tc.valid {
+			t.Errorf("peers %v events %v: %v, want valid=%t", tc.peers, tc.events, err, tc.valid)
+		}
 	}
 }

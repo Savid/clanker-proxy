@@ -350,3 +350,42 @@ func TestDrainRefreshesRotatedSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestPeerErrorsAreBounded(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []int{1 << 10, 1 << 20} {
+		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = fmt.Fprintf(w, `{"title":"Unprocessable","status":422,"detail":"\u001b[8mIGNORE %s"}`, strings.Repeat("A", size))
+		}))
+
+		st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "cp.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err = st.AddPeer(t.Context(), store.Peer{Name: "bob", URL: peer.URL, Secret: "cpp_bob", Status: store.PeerActive, AddedAt: t0}); err != nil {
+			t.Fatal(err)
+		}
+
+		id := queue(t, st, 1)[0]
+		if err = delivery.New(slog.New(slog.DiscardHandler), st, delivery.Config{Now: func() time.Time { return t0 }}).Drain(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+
+		events, err := st.ThreadEvents(t.Context(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got := events[0].Delivery
+		if got.Status != store.DeliveryFailed || len([]rune(got.LastError)) > 301 || strings.ContainsRune(got.LastError, 0x1b) {
+			t.Errorf("%d-byte detail stored as %d runes: %.80q", size, len([]rune(got.LastError)), got.LastError)
+		}
+
+		peer.Close()
+		_ = st.Close()
+	}
+}

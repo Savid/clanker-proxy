@@ -92,16 +92,31 @@ func TestThreads(t *testing.T) {
 		}
 	}
 
-	if id, err := st.ResolveThread(ctx, "BBBB"); err != nil || id[:4] != "bbbb" {
+	if id, err := st.ResolveThread(ctx, "BBBB", nil); err != nil || id[:4] != "bbbb" {
 		t.Errorf("resolve unique prefix = %q, %v", id, err)
 	}
 
-	if _, err := st.ResolveThread(ctx, "aaaa"); !errors.Is(err, store.ErrAmbiguous) {
+	if _, err := st.ResolveThread(ctx, "aaaa", nil); !errors.Is(err, store.ErrAmbiguous) {
 		t.Errorf("resolve ambiguous: %v", err)
 	}
 
-	if _, err := st.ResolveThread(ctx, "aa%"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.ResolveThread(ctx, "aa%", nil); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("resolve with a wildcard: %v", err)
+	}
+
+	// A scope keeps other peers' threads out of the match entirely.
+	if err := st.AddPeer(ctx, store.Peer{Name: "carol", URL: "http://carol", Secret: "cpp_carol", Status: store.PeerActive, AddedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+
+	addThread(t, st, "bbbb2222-0000-4000-8000-000000000004", "carol", "me", nil, t0)
+
+	if id, err := st.ResolveThread(ctx, "bbbb", []string{"bob"}); err != nil || id[:8] != "bbbb0000" {
+		t.Errorf("resolve in scope = %q, %v", id, err)
+	}
+
+	if _, err := st.ResolveThread(ctx, "bbbb2222", []string{"bob"}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("resolve out of scope: %v", err)
 	}
 }
 

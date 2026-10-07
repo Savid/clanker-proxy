@@ -10,7 +10,7 @@ import (
 	"github.com/savid/clanker-proxy/pkg/webhook"
 )
 
-// ErrExists is returned when a peer or webhook of that name already exists.
+// ErrExists is returned when a peer, webhook or agent token of that name already exists.
 var ErrExists = errors.New("already exists")
 
 // Peer statuses.
@@ -343,4 +343,17 @@ func (s *Store) DeleteRequest(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+// KnownPeer reports whether name is a peer, or was one whose threads remain.
+func (s *Store) KnownPeer(ctx context.Context, name string) (bool, error) {
+	var known bool
+
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM peers WHERE name = ?1)
+		OR EXISTS (SELECT 1 FROM former_peers WHERE name = ?1)`, name).Scan(&known)
+	if err != nil {
+		return false, fmt.Errorf("read peer %s: %w", name, err)
+	}
+
+	return known, nil
 }

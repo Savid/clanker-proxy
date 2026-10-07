@@ -31,7 +31,9 @@ func recordError(string, error) {}
 // handleActOnThreadRequest handles actOnThread operation.
 //
 // Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
-// they may.
+// they may. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close,
+// decline or withdraw without a body remain. An agent token limited to peers reaches only threads with
+// those peers, as getThread.
 //
 // POST /api/v1/threads/{ref}/events
 func (s *Server) handleActOnThreadRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -67,11 +69,30 @@ func (s *Server) handleActOnThreadRequest(args [1]string, argsEscaped bool, w ht
 				ctx = sctx
 			}
 		}
+		{
+			sctx, ok, err := s.securityAgentToken(ctx, ActOnThreadOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "AgentToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:AgentToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 1
+				ctx = sctx
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -491,6 +512,149 @@ func (s *Server) handleApproveRequestRequest(args [1]string, argsEscaped bool, w
 	}
 }
 
+// handleCreateAgentTokenRequest handles createAgentToken operation.
+//
+// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+// the name is taken, and with 400 when `expiresAt` is not in the future.
+//
+// POST /api/v1/agent-tokens
+func (s *Server) handleCreateAgentTokenRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
+	statusWriter := &codeRecorder{ResponseWriter: w}
+	w = statusWriter
+	ctx := r.Context()
+
+	var (
+		err          error
+		opErrContext = ogenerrors.OperationContext{
+			Name: CreateAgentTokenOperation,
+			ID:   "createAgentToken",
+		}
+	)
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			sctx, ok, err := s.securityOwnerToken(ctx, CreateAgentTokenOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "OwnerToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:OwnerToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 0
+				ctx = sctx
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			err = &ogenerrors.SecurityError{
+				OperationContext: opErrContext,
+				Err:              ogenerrors.ErrSecurityRequirementIsNotSatisfied,
+			}
+			if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+				defer recordError("Security", err)
+			}
+			return
+		}
+	}
+
+	var rawBody []byte
+	request, rawBody, close, err := s.decodeCreateAgentTokenRequest(r)
+	if err != nil {
+		err = &ogenerrors.DecodeRequestError{
+			OperationContext: opErrContext,
+			Err:              err,
+		}
+		defer recordError("DecodeRequest", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+	defer func() {
+		if err := close(); err != nil {
+			recordError("CloseRequest", err)
+		}
+	}()
+
+	var response *NewAgentToken
+	if m := s.cfg.Middleware; m != nil {
+		mreq := middleware.Request{
+			Context:          ctx,
+			OperationName:    CreateAgentTokenOperation,
+			OperationSummary: "Create an agent token",
+			OperationID:      "createAgentToken",
+			Body:             request,
+			RawBody:          rawBody,
+			Params:           middleware.Parameters{},
+			Raw:              r,
+		}
+
+		type (
+			Request  = *AgentTokenInput
+			Params   = struct{}
+			Response = *NewAgentToken
+		)
+		response, err = middleware.HookMiddleware[
+			Request,
+			Params,
+			Response,
+		](
+			m,
+			mreq,
+			nil,
+			func(ctx context.Context, request Request, params Params) (response Response, err error) {
+				response, err = s.h.CreateAgentToken(ctx, request)
+				return response, err
+			},
+		)
+	} else {
+		response, err = s.h.CreateAgentToken(ctx, request)
+	}
+	if err != nil {
+		if errRes, ok := errors.Into[*ProblemStatusCode](err); ok {
+			if err := encodeErrorResponse(errRes, w); err != nil {
+				defer recordError("Internal", err)
+			}
+			return
+		}
+		if errors.Is(err, ht.ErrNotImplemented) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+			return
+		}
+		if err := encodeErrorResponse(s.h.NewError(ctx, err), w); err != nil {
+			defer recordError("Internal", err)
+		}
+		return
+	}
+
+	if err := encodeCreateAgentTokenResponse(response, w); err != nil {
+		defer recordError("EncodeResponse", err)
+		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+		}
+		return
+	}
+}
+
 // handleCreateWebhookRequest handles createWebhook operation.
 //
 // Only future matching events are queued; secrets are never returned.
@@ -624,6 +788,148 @@ func (s *Server) handleCreateWebhookRequest(args [0]string, argsEscaped bool, w 
 	}
 
 	if err := encodeCreateWebhookResponse(response, w); err != nil {
+		defer recordError("EncodeResponse", err)
+		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+		}
+		return
+	}
+}
+
+// handleDeleteAgentTokenRequest handles deleteAgentToken operation.
+//
+// The token stops working at once. A stream it opened sends nothing more and closes at its next event
+// or keepalive.
+//
+// DELETE /api/v1/agent-tokens/{name}
+func (s *Server) handleDeleteAgentTokenRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
+	statusWriter := &codeRecorder{ResponseWriter: w}
+	w = statusWriter
+	ctx := r.Context()
+
+	var (
+		err          error
+		opErrContext = ogenerrors.OperationContext{
+			Name: DeleteAgentTokenOperation,
+			ID:   "deleteAgentToken",
+		}
+	)
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			sctx, ok, err := s.securityOwnerToken(ctx, DeleteAgentTokenOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "OwnerToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:OwnerToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 0
+				ctx = sctx
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			err = &ogenerrors.SecurityError{
+				OperationContext: opErrContext,
+				Err:              ogenerrors.ErrSecurityRequirementIsNotSatisfied,
+			}
+			if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+				defer recordError("Security", err)
+			}
+			return
+		}
+	}
+	params, err := decodeDeleteAgentTokenParams(args, argsEscaped, r)
+	if err != nil {
+		err = &ogenerrors.DecodeParamsError{
+			OperationContext: opErrContext,
+			Err:              err,
+		}
+		defer recordError("DecodeParams", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	var rawBody []byte
+
+	var response *DeleteAgentTokenNoContent
+	if m := s.cfg.Middleware; m != nil {
+		mreq := middleware.Request{
+			Context:          ctx,
+			OperationName:    DeleteAgentTokenOperation,
+			OperationSummary: "Revoke an agent token",
+			OperationID:      "deleteAgentToken",
+			Body:             nil,
+			RawBody:          rawBody,
+			Params: middleware.Parameters{
+				{
+					Name: "name",
+					In:   "path",
+				}: params.Name,
+			},
+			Raw: r,
+		}
+
+		type (
+			Request  = struct{}
+			Params   = DeleteAgentTokenParams
+			Response = *DeleteAgentTokenNoContent
+		)
+		response, err = middleware.HookMiddleware[
+			Request,
+			Params,
+			Response,
+		](
+			m,
+			mreq,
+			unpackDeleteAgentTokenParams,
+			func(ctx context.Context, request Request, params Params) (response Response, err error) {
+				err = s.h.DeleteAgentToken(ctx, params)
+				return response, err
+			},
+		)
+	} else {
+		err = s.h.DeleteAgentToken(ctx, params)
+	}
+	if err != nil {
+		if errRes, ok := errors.Into[*ProblemStatusCode](err); ok {
+			if err := encodeErrorResponse(errRes, w); err != nil {
+				defer recordError("Internal", err)
+			}
+			return
+		}
+		if errors.Is(err, ht.ErrNotImplemented) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+			return
+		}
+		if err := encodeErrorResponse(s.h.NewError(ctx, err), w); err != nil {
+			defer recordError("Internal", err)
+		}
+		return
+	}
+
+	if err := encodeDeleteAgentTokenResponse(response, w); err != nil {
 		defer recordError("EncodeResponse", err)
 		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
 			s.cfg.ErrorHandler(ctx, w, r, err)
@@ -778,8 +1084,9 @@ func (s *Server) handleDeleteWebhookRequest(args [1]string, argsEscaped bool, w 
 //
 // The peer's secret says who sent it. Delivering the same event again is harmless and answers
 // `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
-// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
-// than ten minutes ahead.
+// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
+// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or already has 200
+// threads open here; with 503, to retry later, when it is dated more than ten minutes ahead.
 //
 // POST /api/v1/federation/events
 func (s *Server) handleDeliverEventRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -1173,11 +1480,30 @@ func (s *Server) handleGetMeRequest(args [0]string, argsEscaped bool, w http.Res
 				ctx = sctx
 			}
 		}
+		{
+			sctx, ok, err := s.securityAgentToken(ctx, GetMeOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "AgentToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:AgentToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 1
+				ctx = sctx
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1404,7 +1730,9 @@ func (s *Server) handleGetPeerRequest(args [1]string, argsEscaped bool, w http.R
 
 // handleGetThreadRequest handles getThread operation.
 //
-// The thread's summary and every event, in the order both daemons replay them.
+// The thread's summary and every event, in the order both daemons replay them. The ref is a thread ID
+// or a unique prefix of one; for an agent token limited to peers, only threads with those peers count,
+// and any other answers 404 as if it did not exist.
 //
 // GET /api/v1/threads/{ref}
 func (s *Server) handleGetThreadRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -1440,11 +1768,30 @@ func (s *Server) handleGetThreadRequest(args [1]string, argsEscaped bool, w http
 				ctx = sctx
 			}
 		}
+		{
+			sctx, ok, err := s.securityAgentToken(ctx, GetThreadOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "AgentToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:AgentToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 1
+				ctx = sctx
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1676,6 +2023,132 @@ func (s *Server) handleGetWebhookRequest(args [1]string, argsEscaped bool, w htt
 	}
 
 	if err := encodeGetWebhookResponse(response, w); err != nil {
+		defer recordError("EncodeResponse", err)
+		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+		}
+		return
+	}
+}
+
+// handleListAgentTokensRequest handles listAgentTokens operation.
+//
+// Every agent token, by name, without the tokens themselves.
+//
+// GET /api/v1/agent-tokens
+func (s *Server) handleListAgentTokensRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
+	statusWriter := &codeRecorder{ResponseWriter: w}
+	w = statusWriter
+	ctx := r.Context()
+
+	var (
+		err          error
+		opErrContext = ogenerrors.OperationContext{
+			Name: ListAgentTokensOperation,
+			ID:   "listAgentTokens",
+		}
+	)
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+			sctx, ok, err := s.securityOwnerToken(ctx, ListAgentTokensOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "OwnerToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:OwnerToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 0
+				ctx = sctx
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			err = &ogenerrors.SecurityError{
+				OperationContext: opErrContext,
+				Err:              ogenerrors.ErrSecurityRequirementIsNotSatisfied,
+			}
+			if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+				defer recordError("Security", err)
+			}
+			return
+		}
+	}
+
+	var rawBody []byte
+
+	var response *AgentTokenList
+	if m := s.cfg.Middleware; m != nil {
+		mreq := middleware.Request{
+			Context:          ctx,
+			OperationName:    ListAgentTokensOperation,
+			OperationSummary: "List agent tokens",
+			OperationID:      "listAgentTokens",
+			Body:             nil,
+			RawBody:          rawBody,
+			Params:           middleware.Parameters{},
+			Raw:              r,
+		}
+
+		type (
+			Request  = struct{}
+			Params   = struct{}
+			Response = *AgentTokenList
+		)
+		response, err = middleware.HookMiddleware[
+			Request,
+			Params,
+			Response,
+		](
+			m,
+			mreq,
+			nil,
+			func(ctx context.Context, request Request, params Params) (response Response, err error) {
+				response, err = s.h.ListAgentTokens(ctx)
+				return response, err
+			},
+		)
+	} else {
+		response, err = s.h.ListAgentTokens(ctx)
+	}
+	if err != nil {
+		if errRes, ok := errors.Into[*ProblemStatusCode](err); ok {
+			if err := encodeErrorResponse(errRes, w); err != nil {
+				defer recordError("Internal", err)
+			}
+			return
+		}
+		if errors.Is(err, ht.ErrNotImplemented) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+			return
+		}
+		if err := encodeErrorResponse(s.h.NewError(ctx, err), w); err != nil {
+			defer recordError("Internal", err)
+		}
+		return
+	}
+
+	if err := encodeListAgentTokensResponse(response, w); err != nil {
 		defer recordError("EncodeResponse", err)
 		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
 			s.cfg.ErrorHandler(ctx, w, r, err)
@@ -1939,7 +2412,7 @@ func (s *Server) handleListRequestsRequest(args [0]string, argsEscaped bool, w h
 
 // handleListThreadsRequest handles listThreads operation.
 //
-// Newest activity first.
+// Newest activity first. An agent token limited to peers lists only threads with those peers.
 //
 // GET /api/v1/threads
 func (s *Server) handleListThreadsRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -1975,11 +2448,30 @@ func (s *Server) handleListThreadsRequest(args [0]string, argsEscaped bool, w ht
 				ctx = sctx
 			}
 		}
+		{
+			sctx, ok, err := s.securityAgentToken(ctx, ListThreadsOperation, r)
+			if err != nil {
+				err = &ogenerrors.SecurityError{
+					OperationContext: opErrContext,
+					Security:         "AgentToken",
+					Err:              err,
+				}
+				if encodeErr := encodeErrorResponse(s.h.NewError(ctx, err), w); encodeErr != nil {
+					defer recordError("Security:AgentToken", err)
+				}
+				return
+			}
+			if ok {
+				satisfied[0] |= 1 << 1
+				ctx = sctx
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -2789,7 +3281,7 @@ func (s *Server) handleRemovePeerRequest(args [1]string, argsEscaped bool, w htt
 //
 // Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
 // Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
-// and a new one drops the oldest.
+// and a new one drops the oldest. Past 10 requests a minute it answers 503.
 //
 // POST /api/v1/peering-requests
 func (s *Server) handleRequestPeeringRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -3031,11 +3523,13 @@ func (s *Server) handleRetryWebhookDeliveryRequest(args [2]string, argsEscaped b
 
 // handleUpdateWebhookRequest handles updateWebhook operation.
 //
-// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+// backoff (pausedUntil).
 //
-// PUT /api/v1/webhooks/{name}
+// PATCH /api/v1/webhooks/{name}
 func (s *Server) handleUpdateWebhookRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
 	statusWriter := &codeRecorder{ResponseWriter: w}
 	w = statusWriter

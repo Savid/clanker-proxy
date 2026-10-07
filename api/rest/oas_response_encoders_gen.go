@@ -49,6 +49,19 @@ func encodeApproveRequestResponse(response *Peer, w http.ResponseWriter) error {
 	return nil
 }
 
+func encodeCreateAgentTokenResponse(response *NewAgentToken, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(201)
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
 func encodeCreateWebhookResponse(response *Webhook, w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(201)
@@ -58,6 +71,12 @@ func encodeCreateWebhookResponse(response *Webhook, w http.ResponseWriter) error
 	if _, err := e.WriteTo(w); err != nil {
 		return errors.Wrap(err, "write")
 	}
+
+	return nil
+}
+
+func encodeDeleteAgentTokenResponse(response *DeleteAgentTokenNoContent, w http.ResponseWriter) error {
+	w.WriteHeader(204)
 
 	return nil
 }
@@ -140,6 +159,19 @@ func encodeGetThreadResponse(response *Thread, w http.ResponseWriter) error {
 }
 
 func encodeGetWebhookResponse(response *Webhook, w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
+func encodeListAgentTokensResponse(response *AgentTokenList, w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
 

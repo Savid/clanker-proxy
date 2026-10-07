@@ -70,8 +70,13 @@ func summary(s store.Summary, self string) rest.ThreadSummary {
 	th := thread.Thread{Sender: s.Sender, Recipient: s.Recipient, State: s.State}
 	role, _ := th.RoleOf(self)
 
-	actions := make([]rest.Action, 0, len(thread.Actions()))
-	for _, a := range th.Allowed(self) {
+	allowed := th.Allowed(self)
+	if s.Spent {
+		allowed = thread.EndingOnly(allowed)
+	}
+
+	actions := make([]rest.Action, 0, len(allowed))
+	for _, a := range allowed {
 		actions = append(actions, rest.Action(a))
 	}
 
@@ -80,7 +85,7 @@ func summary(s store.Summary, self string) rest.ThreadSummary {
 		Sender: rest.Name(s.Sender), Recipient: rest.Name(s.Recipient), Peer: rest.Name(s.Peer),
 		Role: rest.ThreadSummaryRole(role), State: rest.ThreadState(s.State), MyTurn: s.Turn != "" && s.Turn == self,
 		Actions: actions, OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
-		Events: count(s.Events), Undelivered: count(s.Undelivered), Failed: count(s.Failed),
+		Events: count(s.Events), LastFrom: rest.Name(s.LastFrom), Undelivered: count(s.Undelivered), Failed: count(s.Failed),
 	}
 	if s.Turn != "" {
 		out.Turn = rest.NewOptName(rest.Name(s.Turn))
@@ -96,7 +101,7 @@ func threadView(v inbox.View, self string) *rest.Thread {
 		Sender: s.Sender, Recipient: s.Recipient, Peer: s.Peer, Role: rest.ThreadRole(s.Role),
 		State: s.State, Turn: s.Turn, MyTurn: s.MyTurn, Actions: s.Actions,
 		OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
-		Events: s.Events, Undelivered: s.Undelivered, Failed: s.Failed,
+		Events: s.Events, LastFrom: s.LastFrom, Undelivered: s.Undelivered, Failed: s.Failed,
 		Log: make([]rest.ThreadEvent, 0, len(v.Events)),
 	}
 
@@ -138,6 +143,24 @@ func delivery(d store.Delivery) rest.Delivery {
 
 	if !d.DeliveredAt.IsZero() {
 		out.DeliveredAt = rest.NewOptDateTime(d.DeliveredAt)
+	}
+
+	return out
+}
+
+func peerNames(in rest.Peers) []string {
+	out := make([]string, 0, len(in))
+	for _, p := range in {
+		out = append(out, string(p))
+	}
+
+	return out
+}
+
+func toPeers(in []string) rest.Peers {
+	out := make(rest.Peers, 0, len(in))
+	for _, p := range in {
+		out = append(out, rest.Name(p))
 	}
 
 	return out

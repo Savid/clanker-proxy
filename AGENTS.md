@@ -42,10 +42,15 @@ CP_DIR=/tmp/a CP_URL=http://127.0.0.1:18471 build/bin/cpctl peer add bob http://
   implement it on `operations` in `internal/server` (the build fails until
   you do), add a test. Never hand-edit `api/rest`; commit it with the spec.
 - Access is declared in the spec: owner token by default,
-  `security: [peerSecret: []]` for peers, `security: []` for public.
-  `internal/server/security.go` enforces it before handlers;
-  `TestAccessLevels` checks every operation. Never check credentials in a
-  handler; only the hand-routed stream checks the owner token itself.
+  `security: [ownerToken: [], agentToken: []]` where agent tokens may act
+  too, `security: [peerSecret: []]` for peers, `security: []` for public.
+  `internal/server/security.go` enforces it before handlers, using ogen's
+  generated tables; `TestAccessLevels` checks every operation. Never check
+  credentials in a handler; only the hand-routed stream checks its tokens
+  itself. Security records who called in the context: the peer for a peer
+  secret, the owner or an agent token with its peers otherwise. Thread
+  operations take the scope from `scopeOf`, which fails when no caller was
+  recorded, and pass it down, so out-of-scope threads never match.
 - ogen cannot serve `text/event-stream`, so the stream is hand-routed in
   `internal/server/stream.go` and read in `cmd/cpctl/stream.go`.
 - Paths under `/api/v1/`, camelCase JSON, UTC times. Every operation's only

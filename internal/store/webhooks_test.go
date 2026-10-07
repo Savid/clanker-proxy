@@ -15,7 +15,7 @@ import (
 )
 
 func hook(name, origin string, events ...string) webhook.Config {
-	return webhook.Config{Name: name, URL: "https://runner.example/hooks", Events: events, Origin: origin, Enabled: true, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	return webhook.Config{Type: "generic", Name: name, URL: "https://runner.example/hooks", Events: events, Origin: origin, Enabled: true, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32))}
 }
 
 func deliveries(t *testing.T, st *store.Store, name string, n int) []store.WebhookDelivery {
@@ -37,6 +37,9 @@ func TestWebhookFiltersAndPersistence(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	configs := []webhook.Config{hook("all", "both", "*"), hook("incoming", "incoming", "thread.open", "thread.reply"), hook("outgoing", "outgoing", "thread.open"), hook("requests", "incoming", "peering.requested"), hook("paused", "both", "*")}
 	configs[4].Enabled = false
+	configs[0].Type = "slack"
+	configs[0].Secret = ""
+	configs[0].Headers = []webhook.Header{{Name: "Authorization", Value: "Bearer private"}}
 	for _, c := range configs {
 		if err = st.CreateWebhook(t.Context(), c); err != nil {
 			t.Fatal(err)
@@ -82,6 +85,10 @@ func TestWebhookFiltersAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	deliveries(t, st, "all", 4)
+	got, err := st.Webhook(t.Context(), "all")
+	if err != nil || got.Type != "slack" || len(got.Headers) != 1 || got.Headers[0].Value != "Bearer private" || got.Secret != "" {
+		t.Fatal("provider configuration did not persist")
+	}
 }
 
 func TestWebhookPauseDeleteAndRetry(t *testing.T) {
@@ -95,7 +102,7 @@ func TestWebhookPauseDeleteAndRetry(t *testing.T) {
 	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
 	d := deliveries(t, st, "agent", 1)[0]
 	c.Enabled = false
-	if err := st.UpdateWebhook(ctx, c); err != nil {
+	if _, err := st.UpdateWebhook(ctx, c.Name, webhook.Update{Enabled: new(c.Enabled)}); err != nil {
 		t.Fatal(err)
 	}
 	due, err := st.DueWebhooks(ctx, t0)
@@ -111,7 +118,7 @@ func TestWebhookPauseDeleteAndRetry(t *testing.T) {
 		t.Fatalf("retry disabled: %v", err)
 	}
 	c.Enabled = true
-	if err = st.UpdateWebhook(ctx, c); err != nil {
+	if _, err = st.UpdateWebhook(ctx, c.Name, webhook.Update{Enabled: new(c.Enabled)}); err != nil {
 		t.Fatal(err)
 	}
 	if err = st.RetryWebhook(ctx, c.Name, d.ID, t0.Add(store.WebhookTTL)); err != nil {
@@ -180,5 +187,91 @@ func TestWebhookExpiryWaitsForActiveAttempt(t *testing.T) {
 	}
 	if got := deliveries(t, st, "agent", 1)[0]; got.Status != "delivered" || got.Attempts != 1 {
 		t.Fatal("successful in-flight response was lost to expiry")
+	}
+}
+
+func TestWebhookDeferIgnoresReplacedCredentials(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	c := hook("agent", "incoming", "*")
+	c.Secret = ""
+	c.Headers = []webhook.Header{{Name: "Authorization", Value: "Bearer stale"}}
+	if err := st.CreateWebhook(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	d := deliveries(t, st, "agent", 1)[0]
+	sent, err := st.WebhookDestination(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := []webhook.Header{{Name: "Authorization", Value: "Bearer fixed"}}
+	if _, err = st.UpdateWebhook(ctx, c.Name, webhook.Update{Headers: &fixed}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DeferWebhook(ctx, d.ID, sent, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Webhook(ctx, c.Name); !got.PausedUntil.IsZero() || got.Failures != 0 {
+		t.Fatalf("stale request paused the updated endpoint until %v", got.PausedUntil)
+	}
+	current, err := st.WebhookDestination(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DeferWebhook(ctx, d.ID, current, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Webhook(ctx, c.Name); !got.PausedUntil.Equal(t0.Add(time.Hour)) || got.Failures != 1 {
+		t.Fatalf("current failure not recorded: %v, %d", got.PausedUntil, got.Failures)
+	}
+}
+
+func TestWebhookPeerFilter(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	scoped := hook("bob-only", "incoming", "*")
+	scoped.Peers = []string{"bob"}
+	for _, c := range []webhook.Config{scoped, hook("everyone", "incoming", "*")} {
+		if err := st.CreateWebhook(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000002", "carol", "me", nil, t0)
+	if _, err := st.AddRequest(ctx, store.Request{ID: "12345678", Name: "bob", URL: "http://bob", Secret: "private", At: t0}, 20, t0.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, st, "bob-only", 1)[0]; got.Event != "thread.open" || got.Subject != "aaaa0000-0000-4000-8000-000000000001" {
+		t.Fatalf("bob-only got %s %s", got.Event, got.Subject)
+	}
+	deliveries(t, st, "everyone", 3)
+	got, err := st.Webhook(ctx, "bob-only")
+	if err != nil || len(got.Peers) != 1 || got.Peers[0] != "bob" {
+		t.Fatalf("peers did not persist: %v %v", got.Peers, err)
+	}
+}
+
+func TestNarrowingPeersDropsTheirQueue(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	if err := st.CreateWebhook(ctx, hook("chat", "incoming", "*")); err != nil {
+		t.Fatal(err)
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000002", "carol", "me", nil, t0)
+	if _, err := st.AddRequest(ctx, store.Request{ID: "12345678", Name: "dave", URL: "http://dave", Secret: "private", At: t0}, 20, t0.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	deliveries(t, st, "chat", 3)
+	bob := []string{"bob"}
+	if _, err := st.UpdateWebhook(ctx, "chat", webhook.Update{Peers: &bob}); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, st, "chat", 1)[0]; got.Subject != "aaaa0000-0000-4000-8000-000000000001" {
+		t.Fatalf("kept %s %s", got.Event, got.Subject)
 	}
 }

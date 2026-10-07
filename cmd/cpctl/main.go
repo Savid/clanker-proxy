@@ -45,7 +45,9 @@ Common tasks:
   read a thread                cpctl show <ref>
   wait for their answer        cpctl wait <ref> -timeout 30m
   act on a thread              cpctl show <ref>, then one of its "next:" commands
-  notify an HTTP receiver      cpctl help webhook add
+  choose a notification type   cpctl webhook types
+  notify chat or HTTP          cpctl help webhook add
+  give an agent thread access  cpctl token add <name> -o <file>
   inspect notification errors  cpctl webhook deliveries <name> -status failed
   check for a release          cpctl update -check
   update both local binaries   cpctl update
@@ -67,6 +69,9 @@ Threads:
             everything they need in the body.
   reply     works in any state and adds a message; it never ends or reopens a
             thread. The sender's reply to needs-input hands the thread back.
+  room      each side may add 1000 events and 4 MiB of bodies to a thread;
+            past that only close, decline or withdraw without a body remain,
+            and a thread's actions say so.
   queued    "(1 event queued for delivery)": the peer's daemon has not stored
             that event yet; cpd retries on its own, for up to a week.
 
@@ -74,14 +79,20 @@ Output: text, ending with "next:" lines. -json prints cpd's API response
 instead, one JSON object per line (schemas: <cpd-url>/openapi.yaml), and
 errors as {"error":{...}} on stderr. A command's flags may come before or
 after its arguments, and so may -json; -url and -token go before the command.
-For update, -json prints {current,latest,available,installed} locally, and
-for webhook events, {events}.
+For update, -json prints {current,latest,available,installed} locally; for
+webhook events, {events}; for webhook types, {types}; for commands that only
+remove or queue something, {}. In -json actions and in refusals, cpd's
+comment action is cpctl reply.
+
+With an agent token (cpctl token add), only me, inbox, ls, show, wait, watch
+and the thread actions work; the rest are the owner's.
 
 Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
-4 not found, 5 not allowed now or conflicts, 6 bad token, 7 cpd unreachable.
+4 not found, 5 not allowed now, conflicts, or an agent token refused,
+6 bad token, 7 cpd unreachable.
 
-Environment: CP_URL (default http://127.0.0.1:8080); CP_TOKEN (default: the
-owner.token in CP_DIR, else ~/.cp). CP_NO_UPDATE_CHECK=1 disables daily
+Environment: CP_URL (default http://127.0.0.1:8080); CP_TOKEN, the owner token
+or an agent token (default: the owner.token in CP_DIR, else ~/.cp). CP_NO_UPDATE_CHECK=1 disables daily
 release notices. Notices go to stderr; -json and CI skip automatic checks.
 Updates replace local cpd and cpctl together; restart cpd to use the new version.
 Use cpd's direct URL: redirects are refused.
@@ -162,7 +173,7 @@ func (a *app) dispatch(args []string) (*command, []string, error) {
 	fs := flag.NewFlagSet("cpctl", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&a.url, "url", defaultURL(), "cpd's URL (env CP_URL)")
-	fs.StringVar(&a.token, "token", "", "the owner token (default: $CP_TOKEN, else owner.token in $CP_DIR or ~/.cp)")
+	fs.StringVar(&a.token, "token", "", "the owner token or an agent token (default: $CP_TOKEN, else owner.token in $CP_DIR or ~/.cp)")
 	fs.BoolVar(&a.json, "json", false, "print JSON instead of text")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 
@@ -276,6 +287,11 @@ func unknown(words []string) *failure {
 
 	f := usageError("no command %q", words[0])
 	f.hint = "cpctl help lists every command"
+
+	// cpd names this action comment, in -json actions and refusals.
+	if words[0] == "comment" {
+		f.hint = "the comment action is cpctl reply <ref> -m <text>"
+	}
 
 	return f
 }
