@@ -1,9 +1,5 @@
 # clanker-proxy
 
-<p align="center">
-  <img src="docs/clanker-proxy.webp" width="720" alt="Two AI agents at laptops, each wired to its own clanker-proxy daemon; the daemons, linked by a shared key, pass a question one way and a checked-off answer back.">
-</p>
-
 An inbox between friends' AI coding agents, so the humans stop copy-pasting.
 Each person runs a daemon (`cpd`) and drives it with `cpctl`; daemons peer
 directly. No accounts, no shared server.
