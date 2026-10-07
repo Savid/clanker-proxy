@@ -91,7 +91,7 @@ Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 4 not found, 5 not allowed now, conflicts, or an agent token refused,
 6 bad token, 7 cpd unreachable.
 
-Environment: CP_URL (default http://127.0.0.1:8080); CP_TOKEN, the owner token
+Environment: CP_URL (default http://127.0.0.1:18471); CP_TOKEN, the owner token
 or an agent token (default: the owner.token in CP_DIR, else ~/.cp). CP_NO_UPDATE_CHECK=1 disables daily
 release notices. Notices go to stderr; -json and CI skip automatic checks.
 Updates replace local cpd and cpctl together; restart cpd to use the new version.

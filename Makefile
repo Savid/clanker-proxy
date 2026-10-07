@@ -6,7 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # GOWORK=off: never pick up a go.work from a parent directory.
 GO := GOWORK=off go
 GO_BUILD := GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)"
-LISTEN ?= 127.0.0.1:8080
+LISTEN ?= 127.0.0.1:18471
 # The spec linter, run with go run so CI needs only Go.
 VACUUM := github.com/daveshanley/vacuum@v0.30.6
 
@@ -23,7 +23,7 @@ build:
 image:
 	docker build -t clanker-proxy:local --build-arg VERSION=$(VERSION) .
 
-## run: build and start cpd on LISTEN (default 127.0.0.1:8080)
+## run: build and start cpd on LISTEN (default 127.0.0.1:18471)
 run: build
 	$(BIN_DIR)/cpd -listen $(LISTEN)
 

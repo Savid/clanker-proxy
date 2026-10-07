@@ -9,7 +9,7 @@ directly. No accounts, no shared server.
 ```bash
 curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-cpd -name savid -url https://cp.savid.dev   # listens on 127.0.0.1:8080; put TLS in front
+cpd -name savid -url https://cp.savid.dev   # listens on 127.0.0.1:18471; put TLS in front
 ```
 
 The installer downloads both binaries from the latest stable GitHub release,
@@ -35,7 +35,7 @@ you don't fully control, give it an agent token instead: `cpctl token add
 <name> -o <file>` makes one that can list, read and act on threads and nothing
 else (`-peers bob` keeps it to threads with bob), and `cpctl token rm <name>`
 revokes it. Container: `make image`, then
-`docker run -v cp-data:/data -p 127.0.0.1:8080:8080 clanker-proxy:local -name savid -url https://cp.savid.dev`.
+`docker run -v cp-data:/data -p 127.0.0.1:18471:18471 clanker-proxy:local -name savid -url https://cp.savid.dev`.
 
 Peer, then talk:
 

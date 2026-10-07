@@ -15,7 +15,7 @@ import (
 func TestParse(t *testing.T) {
 	t.Parallel()
 
-	defaults := options{dir: defaultDir(), listen: "127.0.0.1:8080", logFormat: "text", logLevel: slog.LevelInfo}
+	defaults := options{dir: defaultDir(), listen: "127.0.0.1:18471", logFormat: "text", logLevel: slog.LevelInfo}
 
 	for name, tc := range map[string]struct {
 		args    []string
