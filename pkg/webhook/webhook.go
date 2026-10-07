@@ -36,8 +36,8 @@ func (c Config) Validate() error {
 		return errors.New("invalid webhook name")
 	}
 	u, err := url.Parse(c.URL)
-	if err != nil || len(c.URL) > 512 || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(c.URL, "#") || u.Opaque != "" {
-		return errors.New("webhook URL must be an absolute URL without credentials, query or fragment")
+	if err != nil || len(c.URL) > 512 || u.Hostname() == "" || u.User != nil || strings.Contains(c.URL, "#") || u.Opaque != "" {
+		return errors.New("webhook URL must be an absolute URL without credentials or fragment")
 	}
 	ip, _ := netip.ParseAddr(u.Hostname())
 	if u.Scheme != "https" && (u.Scheme != "http" || !ip.IsLoopback()) {

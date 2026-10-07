@@ -20,7 +20,7 @@ func hook(name, origin string, events ...string) webhook.Config {
 
 func deliveries(t *testing.T, st *store.Store, name string, n int) []store.WebhookDelivery {
 	t.Helper()
-	ds, err := st.WebhookDeliveries(t.Context(), name)
+	ds, err := st.WebhookDeliveries(t.Context(), name, store.WebhookFilter{})
 	if err != nil || len(ds) != n {
 		t.Fatalf("%s: count=%d want=%d err=%v", name, len(ds), n, err)
 	}
@@ -104,7 +104,7 @@ func TestWebhookPauseDeleteAndRetry(t *testing.T) {
 	}
 	addThread(t, st, "aaaa0000-0000-4000-8000-000000000002", "bob", "me", nil, t0)
 	deliveries(t, st, "agent", 1)
-	if err = st.MaintainWebhooks(ctx, t0.Add(store.WebhookTTL)); err != nil {
+	if err = st.MaintainWebhooks(ctx, t0.Add(store.WebhookTTL), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = st.RetryWebhook(ctx, c.Name, d.ID, t0.Add(store.WebhookTTL)); !errors.Is(err, store.ErrWebhookRetry) {
@@ -136,28 +136,49 @@ func TestWebhookPauseDeleteAndRetry(t *testing.T) {
 	deliveries(t, st, "agent", 0)
 }
 
-func TestWebhookLimitAndRetention(t *testing.T) {
+func TestWebhookRetention(t *testing.T) {
 	t.Parallel()
 	st := open(t)
 	ctx := t.Context()
-	for i := range store.MaxWebhooks {
+	for i := range 32 {
 		if err := st.CreateWebhook(ctx, hook(fmt.Sprintf("h%d", i), "incoming", "*")); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := st.CreateWebhook(ctx, hook("extra", "both", "*")); !errors.Is(err, store.ErrWebhookLimit) {
-		t.Fatalf("limit: %v", err)
 	}
 	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
 	d := deliveries(t, st, "h0", 1)[0]
 	if err := st.FinishWebhook(ctx, d.ID, "delivered", "", t0, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.MaintainWebhooks(ctx, t0.Add(store.WebhookTTL+time.Second)); err != nil {
+	if err := st.MaintainWebhooks(ctx, t0.Add(store.WebhookTTL+time.Second), nil); err != nil {
 		t.Fatal(err)
 	}
 	deliveries(t, st, "h0", 0)
 	if got := deliveries(t, st, "h1", 1)[0]; got.Status != "failed" {
 		t.Fatal("expired pending delivery remained pending")
+	}
+}
+
+func TestWebhookExpiryWaitsForActiveAttempt(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	if err := st.CreateWebhook(ctx, hook("agent", "incoming", "*")); err != nil {
+		t.Fatal(err)
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	d := deliveries(t, st, "agent", 1)[0]
+	now := t0.Add(store.WebhookTTL)
+	if err := st.MaintainWebhooks(ctx, now, []string{d.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RetryWebhook(ctx, "agent", d.ID, now); !errors.Is(err, store.ErrWebhookRetry) {
+		t.Fatalf("retried active attempt: %v", err)
+	}
+	if err := st.FinishWebhook(ctx, d.ID, "delivered", "", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, st, "agent", 1)[0]; got.Status != "delivered" || got.Attempts != 1 {
+		t.Fatal("successful in-flight response was lost to expiry")
 	}
 }

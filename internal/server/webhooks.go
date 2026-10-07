@@ -2,6 +2,10 @@ package server
 
 import (
 	"context"
+	"strconv"
+
+	"github.com/savid/clanker-proxy/internal/inbox"
+	"github.com/savid/clanker-proxy/internal/store"
 
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/pkg/webhook"
@@ -65,11 +69,23 @@ func (o *operations) DeleteWebhook(ctx context.Context, p rest.DeleteWebhookPara
 }
 
 func (o *operations) ListWebhookDeliveries(ctx context.Context, p rest.ListWebhookDeliveriesParams) (*rest.WebhookDeliveryList, error) {
-	ds, err := o.inbox.WebhookDeliveries(ctx, string(p.Name))
+	f := store.WebhookFilter{Limit: int(p.Limit.Or(100)) + 1, Status: string(p.Status.Or(""))}
+	if cursor := p.Cursor.Or(""); cursor != "" {
+		before, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || before <= 0 {
+			return nil, &inbox.Error{Kind: inbox.KindInvalid, Msg: "invalid delivery cursor"}
+		}
+		f.Before = before
+	}
+	ds, err := o.inbox.WebhookDeliveries(ctx, string(p.Name), f)
 	if err != nil {
 		return nil, err
 	}
 	out := &rest.WebhookDeliveryList{Deliveries: make([]rest.WebhookDelivery, 0, len(ds))}
+	if len(ds) == f.Limit {
+		ds = ds[:len(ds)-1]
+		out.NextCursor = rest.NewOptString(strconv.FormatInt(ds[len(ds)-1].Seq, 10))
+	}
 	for _, d := range ds {
 		r := rest.WebhookDelivery{ID: rest.ID(d.ID), Event: rest.WebhookEventType(d.Event), Origin: rest.WebhookOrigin(d.Origin), Status: rest.WebhookDeliveryStatus(d.Status), Attempts: count(d.Attempts), CreatedAt: d.CreatedAt, LastError: d.LastError}
 		if d.Status == "pending" {

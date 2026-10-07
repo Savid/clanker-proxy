@@ -421,6 +421,19 @@ func (s ListThreadsTurn) Validate() error {
 	}
 }
 
+func (s ListWebhookDeliveriesStatus) Validate() error {
+	switch s {
+	case "pending":
+		return nil
+	case "delivered":
+		return nil
+	case "failed":
+		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
+}
+
 func (s *Me) Validate() error {
 	if s == nil {
 		return validate.ErrNilPointer
@@ -1830,6 +1843,36 @@ func (s *WebhookDeliveryList) Validate() error {
 
 	var failures []validate.FieldError
 	if err := func() error {
+		if value, ok := s.NextCursor.Get(); ok {
+			if err := func() error {
+				if err := (validate.String{
+					MinLength:     0,
+					MinLengthSet:  false,
+					MaxLength:     19,
+					MaxLengthSet:  true,
+					Email:         false,
+					Hostname:      false,
+					Regex:         regexMap["^[0-9]{1,19}$"],
+					MinNumeric:    0,
+					MinNumericSet: false,
+					MaxNumeric:    0,
+					MaxNumericSet: false,
+				}).Validate(string(value)); err != nil {
+					return errors.Wrap(err, "string")
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "nextCursor",
+			Error: err,
+		})
+	}
+	if err := func() error {
 		if s.Deliveries == nil {
 			return errors.New("nil is invalid value")
 		}
@@ -1985,14 +2028,6 @@ func (s *WebhookList) Validate() error {
 	if err := func() error {
 		if s.Webhooks == nil {
 			return errors.New("nil is invalid value")
-		}
-		if err := (validate.Array{
-			MinLength:    0,
-			MinLengthSet: false,
-			MaxLength:    32,
-			MaxLengthSet: true,
-		}).ValidateLength(len(s.Webhooks)); err != nil {
-			return errors.Wrap(err, "array")
 		}
 		var failures []validate.FieldError
 		for i, elem := range s.Webhooks {

@@ -20,7 +20,7 @@ func webhookCommands() []*command {
 		{
 			name: "webhook add", args: "<name> <url> -secret-file <path>", minArgs: 2, maxArgs: 2,
 			summary: "notify an HTTP endpoint about selected events",
-			about:   "Requires HTTPS, or HTTP on literal loopback. Generate a signing key with: umask 077; openssl rand -base64 32 > webhook.key. Give that file to your receiver securely; cpctl never prints the key. Defaults: all events, incoming only, enabled. Only future events are queued. At most 32 endpoints.",
+			about:   "Requires HTTPS, or HTTP on literal loopback. Generate a signing key with: umask 077; openssl rand -base64 32 > webhook.key. Give that file to your receiver securely; cpctl never prints the key. Defaults: all events, incoming only, enabled. Only future events are queued. The receiver payload and signing contract are in <cpd-url>/openapi.yaml (WebhookPayload).",
 			example: "cpctl webhook add agent https://runner.example.com/hooks -secret-file webhook.key -events thread.open,thread.reply -origin incoming", flags: webhookAddFlags,
 		},
 		{name: "webhook ls", summary: "list configured webhooks", example: "cpctl webhook ls", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhooks }},
@@ -32,14 +32,14 @@ func webhookCommands() []*command {
 		},
 		{name: "webhook rm", args: "<name>", minArgs: 1, maxArgs: 1, summary: "delete a webhook and its queued deliveries", about: "Deletes delivery history too. A request already in flight may finish.", example: "cpctl webhook rm agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRemove }},
 		{
-			name: "webhook deliveries", args: "<name>", minArgs: 1, maxArgs: 1, summary: "show the latest 100 deliveries",
-			about:   "2xx succeeds. Connection failures, 408, 429 and 5xx retry with backoff for up to seven days; other statuses fail immediately. Completed history is kept for seven days. Delivery order is not guaranteed and retries can duplicate notifications. Inspect lastError, then retry failed deliveries after fixing the receiver.",
-			example: "cpctl webhook deliveries agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookDeliveries },
+			name: "webhook deliveries", args: "<name>", minArgs: 1, maxArgs: 1, summary: "page through delivery history",
+			about:   "2xx succeeds. Connection failures, 408, 429 and 5xx retry with jittered backoff for up to seven days (429/503 respect Retry-After and pause that endpoint); other statuses fail immediately. Completed history is kept for seven days. Delivery order is not guaranteed and retries can duplicate notifications. Use -status failed to find errors and -cursor to read older pages. Inspect lastError, then retry failed deliveries after fixing the receiver.",
+			example: "cpctl webhook deliveries agent", flags: webhookDeliveryFlags,
 		},
 		{name: "webhook retry", args: "<name> <delivery-id>", minArgs: 2, maxArgs: 2, summary: "retry a failed delivery", about: "Requires an enabled webhook and a failed delivery. Preserves its ID and payload; starts a new seven-day retry window.", example: "cpctl webhook retry agent 765a0b0c-0000-4000-8000-000000000001", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRetry }},
 		{
 			name: "webhook events", summary: "list supported event subscriptions", local: true,
-			about:   "Use '*' alone for all current and future types, or comma-separated types for a fixed subscription. Origin is incoming (peer events), outgoing (owner actions), or both. peering.requested is incoming. Replies notify even when the turn stays the same. Retries and delivery status changes never produce notifications.",
+			about:   "Use '*' alone for all current and future types, or comma-separated types for a fixed subscription. Origin is incoming (peer events), outgoing (owner actions), or both. peering.requested is incoming. Replies notify even when the turn stays the same. Only the newest 100 peering-request notifications per endpoint are retained, including unsent ones. Retries and delivery status changes never produce notifications.",
 			example: "cpctl webhook events", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookEvents },
 		},
 	}
@@ -203,8 +203,27 @@ func runWebhookRemove(a *app, pos []string) error {
 	})
 }
 
-func runWebhookDeliveries(a *app, pos []string) error {
-	ds, err := a.client.ListWebhookDeliveries(a.ctx, rest.ListWebhookDeliveriesParams{Name: rest.Name(pos[0])})
+func webhookDeliveryFlags(fs *flag.FlagSet) func(*app, []string) error {
+	limit := fs.Int("limit", 100, "records per page (1–100)")
+	cursor := fs.String("cursor", "", "nextCursor from the preceding page")
+	status := fs.String("status", "", "pending, delivered or failed (default: all)")
+	return func(a *app, pos []string) error {
+		if *limit < 1 || *limit > 100 {
+			return usageError("-limit must be between 1 and 100")
+		}
+		p := rest.ListWebhookDeliveriesParams{Name: rest.Name(pos[0]), Limit: rest.NewOptInt32(int32(*limit))}
+		if *cursor != "" {
+			p.Cursor = rest.NewOptString(*cursor)
+		}
+		if *status != "" {
+			p.Status = rest.NewOptListWebhookDeliveriesStatus(rest.ListWebhookDeliveriesStatus(*status))
+		}
+		return runWebhookDeliveries(a, p)
+	}
+}
+
+func runWebhookDeliveries(a *app, p rest.ListWebhookDeliveriesParams) error {
+	ds, err := a.client.ListWebhookDeliveries(a.ctx, p)
 	if err != nil {
 		return err
 	}
@@ -215,7 +234,14 @@ func runWebhookDeliveries(a *app, pos []string) error {
 		for _, d := range ds.Deliveries {
 			fmt.Fprintf(w, "%s  %s  %s  attempts: %d  %s\n", d.ID, d.Event, d.Status, d.Attempts, d.LastError)
 		}
-		next(w, step{"cpctl webhook retry " + pos[0] + " <delivery-id>", "retry a failed delivery after fixing its receiver"})
+		if cursor, ok := ds.NextCursor.Get(); ok {
+			command := "cpctl webhook deliveries " + string(p.Name) + " -cursor " + cursor + " -limit " + strconv.Itoa(int(p.Limit.Or(100)))
+			if status, filtered := p.Status.Get(); filtered {
+				command += " -status " + string(status)
+			}
+			next(w, step{command, "read older deliveries"})
+		}
+		next(w, step{"cpctl webhook retry " + string(p.Name) + " <delivery-id>", "retry a failed delivery after fixing its receiver"})
 	})
 }
 

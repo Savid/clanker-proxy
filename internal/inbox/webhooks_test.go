@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savid/clanker-proxy/internal/store"
 	"github.com/savid/clanker-proxy/internal/testutil/inboxtest"
 	"github.com/savid/clanker-proxy/pkg/thread"
 	"github.com/savid/clanker-proxy/pkg/webhook"
@@ -29,7 +30,7 @@ func TestWebhookReceiveDeduplicatesAndFiltersOrigin(t *testing.T) {
 	if _, err := ib.Act(t.Context(), e.Thread, thread.ActionAck, ""); err != nil {
 		t.Fatal(err)
 	}
-	ds, err := ib.WebhookDeliveries(t.Context(), "agent")
+	ds, err := ib.WebhookDeliveries(t.Context(), "agent", store.WebhookFilter{})
 	if err != nil || len(ds) != 1 {
 		t.Fatalf("notifications=%d error=%v", len(ds), err)
 	}
@@ -42,7 +43,7 @@ func TestWebhookReceiveDeduplicatesAndFiltersOrigin(t *testing.T) {
 	if _, err = ib.Receive(t.Context(), "bob", e); err != nil {
 		t.Fatal(err)
 	}
-	ds, err = ib.WebhookDeliveries(t.Context(), "agent")
+	ds, err = ib.WebhookDeliveries(t.Context(), "agent", store.WebhookFilter{})
 	if err != nil || len(ds) != 2 || ds[0].Event != "thread.reply" {
 		t.Fatal("reply did not notify while still owner's turn")
 	}

@@ -23,7 +23,7 @@ func TestValidation(t *testing.T) {
 		{"http://public.example", false},
 		{"http://localhost", false},
 		{"https://user:password@runner.example", false},
-		{"https://runner.example?secret=abc", false},
+		{"https://runner.example?project=example", true},
 		{"https://runner.example#fragment", false},
 		{"file:///etc/passwd", false},
 	}

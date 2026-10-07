@@ -50,11 +50,11 @@ func (b *Inbox) DeleteWebhook(ctx context.Context, name string) error {
 }
 
 // WebhookDeliveries returns recent delivery metadata.
-func (b *Inbox) WebhookDeliveries(ctx context.Context, name string) ([]store.WebhookDelivery, error) {
+func (b *Inbox) WebhookDeliveries(ctx context.Context, name string, f store.WebhookFilter) ([]store.WebhookDelivery, error) {
 	if _, err := b.Webhook(ctx, name); err != nil {
 		return nil, err
 	}
-	return b.store.WebhookDeliveries(ctx, name)
+	return b.store.WebhookDeliveries(ctx, name, f)
 }
 
 // RetryWebhook explicitly retries a terminal failure.
@@ -68,8 +68,6 @@ func webhookError(err error) error {
 		return errorf(KindNotFound, "webhook or delivery not found")
 	case errors.Is(err, store.ErrExists):
 		return errorf(KindConflict, "webhook name already exists")
-	case errors.Is(err, store.ErrWebhookLimit):
-		return errorf(KindConflict, "at most %d webhooks; remove one first", store.MaxWebhooks)
 	case errors.Is(err, store.ErrWebhookRetry):
 		return errorf(KindConflict, "only failed deliveries of enabled webhooks can be retried")
 	default:

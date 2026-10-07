@@ -351,6 +351,7 @@ func TestRefusals(t *testing.T) {
 		t.Fatalf("resolve without a body = %v", err)
 	}
 
+	bob.waitTurn(t, "")
 	if _, err = bob.try(t, "wait", sent.ID[:8], "-timeout", "50ms"); err != nil {
 		t.Fatalf("wait on a thread already waiting on bob = %v", err)
 	}

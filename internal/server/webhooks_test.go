@@ -26,7 +26,7 @@ func TestWebhookInputAndSecretRedaction(t *testing.T) {
 		return rec
 	}
 	body := map[string]any{"name": "agent", "url": "https://runner.example/hooks", "secret": key, "events": []string{"*"}, "origin": "incoming", "enabled": true}
-	for _, url := range []string{"http://example.com", "https://runner.example/?secret=private", "https://user:private@runner.example", "https://runner.example/" + strings.Repeat("x", 512)} {
+	for _, url := range []string{"http://example.com", "https://user:private@runner.example", "https://runner.example/" + strings.Repeat("x", 512)} {
 		body["url"] = url
 		rec := post(body)
 		if rec.Code != http.StatusBadRequest {

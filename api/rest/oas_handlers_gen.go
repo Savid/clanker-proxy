@@ -493,7 +493,7 @@ func (s *Server) handleApproveRequestRequest(args [1]string, argsEscaped bool, w
 
 // handleCreateWebhookRequest handles createWebhook operation.
 //
-// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+// Only future matching events are queued; secrets are never returned.
 //
 // POST /api/v1/webhooks
 func (s *Server) handleCreateWebhookRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -2096,8 +2096,9 @@ func (s *Server) handleListThreadsRequest(args [0]string, argsEscaped bool, w ht
 
 // handleListWebhookDeliveriesRequest handles listWebhookDeliveries operation.
 //
-// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
-// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+// Newest-first delivery history with cursor pagination. Pending deliveries retry for up to seven days;
+// terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is
+// not guaranteed.
 //
 // GET /api/v1/webhooks/{name}/deliveries
 func (s *Server) handleListWebhookDeliveriesRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -2181,6 +2182,18 @@ func (s *Server) handleListWebhookDeliveriesRequest(args [1]string, argsEscaped 
 			Body:             nil,
 			RawBody:          rawBody,
 			Params: middleware.Parameters{
+				{
+					Name: "limit",
+					In:   "query",
+				}: params.Limit,
+				{
+					Name: "cursor",
+					In:   "query",
+				}: params.Cursor,
+				{
+					Name: "status",
+					In:   "query",
+				}: params.Status,
 				{
 					Name: "name",
 					In:   "path",

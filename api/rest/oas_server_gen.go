@@ -38,7 +38,7 @@ type Handler interface {
 	ApproveRequest(ctx context.Context, req *Approval, params ApproveRequestParams) (*Peer, error)
 	// CreateWebhook implements createWebhook operation.
 	//
-	// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+	// Only future matching events are queued; secrets are never returned.
 	//
 	// POST /api/v1/webhooks
 	CreateWebhook(ctx context.Context, req *WebhookCreate) (*Webhook, error)
@@ -115,8 +115,9 @@ type Handler interface {
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
 	// ListWebhookDeliveries implements listWebhookDeliveries operation.
 	//
-	// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
-	// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+	// Newest-first delivery history with cursor pagination. Pending deliveries retry for up to seven days;
+	// terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is
+	// not guaranteed.
 	//
 	// GET /api/v1/webhooks/{name}/deliveries
 	ListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (*WebhookDeliveryList, error)

@@ -52,7 +52,7 @@ type Invoker interface {
 	ApproveRequest(ctx context.Context, request *Approval, params ApproveRequestParams) (*Peer, error)
 	// CreateWebhook invokes createWebhook operation.
 	//
-	// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+	// Only future matching events are queued; secrets are never returned.
 	//
 	// POST /api/v1/webhooks
 	CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error)
@@ -129,8 +129,9 @@ type Invoker interface {
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
 	// ListWebhookDeliveries invokes listWebhookDeliveries operation.
 	//
-	// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
-	// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+	// Newest-first delivery history with cursor pagination. Pending deliveries retry for up to seven days;
+	// terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is
+	// not guaranteed.
 	//
 	// GET /api/v1/webhooks/{name}/deliveries
 	ListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (*WebhookDeliveryList, error)
@@ -516,7 +517,7 @@ func (c *Client) sendApproveRequest(ctx context.Context, request *Approval, para
 
 // CreateWebhook invokes createWebhook operation.
 //
-// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+// Only future matching events are queued; secrets are never returned.
 //
 // POST /api/v1/webhooks
 func (c *Client) CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error) {
@@ -1602,8 +1603,9 @@ func (c *Client) sendListThreads(ctx context.Context, params ListThreadsParams) 
 
 // ListWebhookDeliveries invokes listWebhookDeliveries operation.
 //
-// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
-// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+// Newest-first delivery history with cursor pagination. Pending deliveries retry for up to seven days;
+// terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is
+// not guaranteed.
 //
 // GET /api/v1/webhooks/{name}/deliveries
 func (c *Client) ListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (*WebhookDeliveryList, error) {
@@ -1639,6 +1641,60 @@ func (c *Client) sendListWebhookDeliveries(ctx context.Context, params ListWebho
 	}
 	pathParts[2] = "/deliveries"
 	uri.AddPathParts(u, pathParts[:]...)
+
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.Int32ToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "status" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "status",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Status.Get(); ok {
+				return e.EncodeValue(conv.StringToString(string(val)))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
 
 	r, err := ht.NewRequest(ctx, "GET", u)
 	if err != nil {

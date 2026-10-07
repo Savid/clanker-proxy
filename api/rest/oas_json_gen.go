@@ -4954,6 +4954,12 @@ func (s *WebhookDeliveryList) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *WebhookDeliveryList) encodeFields(e *jx.Encoder) {
 	{
+		if s.NextCursor.Set {
+			e.FieldStart("nextCursor")
+			s.NextCursor.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("deliveries")
 		e.ArrStart()
 		for _, elem := range s.Deliveries {
@@ -4963,8 +4969,9 @@ func (s *WebhookDeliveryList) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfWebhookDeliveryList = [1]string{
-	0: "deliveries",
+var jsonFieldsNameOfWebhookDeliveryList = [2]string{
+	0: "nextCursor",
+	1: "deliveries",
 }
 
 // Decode decodes WebhookDeliveryList from json.
@@ -4976,8 +4983,18 @@ func (s *WebhookDeliveryList) Decode(d *jx.Decoder) error {
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
+		case "nextCursor":
+			if err := func() error {
+				s.NextCursor.Reset()
+				if err := s.NextCursor.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"nextCursor\"")
+			}
 		case "deliveries":
-			requiredBitSet[0] |= 1 << 0
+			requiredBitSet[0] |= 1 << 1
 			if err := func() error {
 				s.Deliveries = make([]WebhookDelivery, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -5004,7 +5021,7 @@ func (s *WebhookDeliveryList) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000001,
+		0b00000010,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

@@ -25,13 +25,20 @@ means the action was stored; concurrent events can leave an action unapplied
 by the workflow. Fetch the current thread and its available actions before
 acting. Transport retries and delivery-status changes generate no notifications.
 
+Public peering requests are bounded separately: each endpoint retains only its
+newest 100 peering-request notifications, including pending deliveries. Older
+ones can be dropped during a flood, just as old requests leave the bounded
+pending-request inbox. Receivers should read `cpctl requests` for current work.
+Thread notifications are unaffected by this limit.
+
 ## Receiving
 
 Destinations require HTTPS, except literal loopback addresses such as
 `http://127.0.0.1:9000/hooks` for a receiver running beside the daemon. A remote
 `cpctl` configures the daemon's destination: loopback refers to the daemon's
-machine or container, not the CLI's. URL credentials, query strings, and
-fragments are refused. Redirects are never followed.
+machine or container, not the CLI's. URL credentials and fragments are refused.
+Non-secret query parameters can select a project or route; use the signing key
+for authentication. Redirects are never followed.
 
 The notification contains metadata, without message bodies, titles, owner
 tokens, peer secrets, or signing keys:
@@ -77,22 +84,27 @@ configured owner credential for `cpctl`; the webhook signing key grants no API a
 ## Delivery and management
 
 Notifications are queued atomically with their source event. Each endpoint has
-independent retry state; a failing delivery does not hold later notifications
-until it succeeds. Up to four endpoints send concurrently.
+independent retry state. Transient delivery errors can be retried while later
+notifications proceed; endpoint backpressure pauses all its deliveries. Up to
+four endpoints send concurrently.
 
 - `2xx`: delivered.
-- Connection failures, `408`, `429`, and `5xx`: retry, starting after 15 seconds
-  and doubling to a one-hour maximum, for up to seven days.
+- Connection failures, `408`, `429`, and `5xx`: retry, starting with a 15-second delay
+  and doubling to a one-hour base delay, with up to 25% jitter, for up to seven days.
+  `429` and `503` pause the endpoint's other deliveries too; valid `Retry-After`
+  delays (seconds or HTTP-date) are respected within that retry window.
 - Other statuses, including redirects: failed immediately.
 
 Delivery is best effort with persistent retries: it can duplicate, and it can
-fail permanently. `cpctl webhook deliveries <name>` shows the newest 100
-records. Completed and failed records are retained for seven days. After fixing
-a receiver, use `cpctl webhook retry <name> <delivery-id>` to retry a failed
-record with its original ID and body and a fresh seven-day retry window.
+fail permanently. `cpctl webhook deliveries <name>` shows a page of up to 100
+records. Use `-status failed` to find errors and pass the returned `nextCursor`
+with `-cursor` to read older pages. Completed and failed records are retained for
+seven days. After fixing a receiver, use `cpctl webhook retry <name> <delivery-id>`
+to retry a failed record with its original ID and body and a fresh seven-day
+retry window.
 
-There are at most 32 configured endpoints. New endpoints receive only future
-matching events. Changing event or origin filters affects future events;
+New endpoints receive only future matching events. Changing event or origin
+filters affects future events;
 existing queued deliveries remain. Changing URL or signing key affects pending
 deliveries too. Omitting `-secret-file` on `webhook set` keeps the existing key.
 

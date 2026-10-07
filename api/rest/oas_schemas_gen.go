@@ -473,6 +473,54 @@ func (s *ListThreadsTurn) UnmarshalText(data []byte) error {
 	}
 }
 
+type ListWebhookDeliveriesStatus string
+
+const (
+	ListWebhookDeliveriesStatusPending   ListWebhookDeliveriesStatus = "pending"
+	ListWebhookDeliveriesStatusDelivered ListWebhookDeliveriesStatus = "delivered"
+	ListWebhookDeliveriesStatusFailed    ListWebhookDeliveriesStatus = "failed"
+)
+
+// AllValues returns all ListWebhookDeliveriesStatus values.
+func (ListWebhookDeliveriesStatus) AllValues() []ListWebhookDeliveriesStatus {
+	return []ListWebhookDeliveriesStatus{
+		ListWebhookDeliveriesStatusPending,
+		ListWebhookDeliveriesStatusDelivered,
+		ListWebhookDeliveriesStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ListWebhookDeliveriesStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ListWebhookDeliveriesStatusPending:
+		return []byte(s), nil
+	case ListWebhookDeliveriesStatusDelivered:
+		return []byte(s), nil
+	case ListWebhookDeliveriesStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ListWebhookDeliveriesStatus) UnmarshalText(data []byte) error {
+	switch ListWebhookDeliveriesStatus(data) {
+	case ListWebhookDeliveriesStatusPending:
+		*s = ListWebhookDeliveriesStatusPending
+		return nil
+	case ListWebhookDeliveriesStatusDelivered:
+		*s = ListWebhookDeliveriesStatusDelivered
+		return nil
+	case ListWebhookDeliveriesStatusFailed:
+		*s = ListWebhookDeliveriesStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // The daemon's owner, as peers see them.
 // Ref: #/components/schemas/Me
 type Me struct {
@@ -894,6 +942,52 @@ func (o OptListThreadsTurn) Get() (v ListThreadsTurn, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptListThreadsTurn) Or(d ListThreadsTurn) ListThreadsTurn {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptListWebhookDeliveriesStatus returns new OptListWebhookDeliveriesStatus with value set to v.
+func NewOptListWebhookDeliveriesStatus(v ListWebhookDeliveriesStatus) OptListWebhookDeliveriesStatus {
+	return OptListWebhookDeliveriesStatus{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptListWebhookDeliveriesStatus is optional ListWebhookDeliveriesStatus.
+type OptListWebhookDeliveriesStatus struct {
+	Value ListWebhookDeliveriesStatus
+	Set   bool
+}
+
+// IsSet returns true if OptListWebhookDeliveriesStatus was set.
+func (o OptListWebhookDeliveriesStatus) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptListWebhookDeliveriesStatus) Reset() {
+	var v ListWebhookDeliveriesStatus
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptListWebhookDeliveriesStatus) SetTo(v ListWebhookDeliveriesStatus) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptListWebhookDeliveriesStatus) Get() (v ListWebhookDeliveriesStatus, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptListWebhookDeliveriesStatus) Or(d ListWebhookDeliveriesStatus) ListWebhookDeliveriesStatus {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -2490,8 +2584,8 @@ func (s *ThreadSummaryRole) UnmarshalText(data []byte) error {
 
 type Title string
 
-// Owner-configured signed notifications. HTTPS, or HTTP on literal loopback. No URL credentials, query
-// or fragment. At most 32 endpoints.
+// Owner-configured signed notifications. HTTPS, or HTTP on literal loopback. No URL credentials or
+// fragment. Queries may contain non-secret routing parameters.
 // Ref: #/components/schemas/Webhook
 type Webhook struct {
 	Name    Name          `json:"name"`
@@ -2719,12 +2813,24 @@ func (s *WebhookDelivery) SetLastError(val string) {
 // Recent deliveries, newest first.
 // Ref: #/components/schemas/WebhookDeliveryList
 type WebhookDeliveryList struct {
+	// Pass as cursor to fetch older records; omitted on the last page.
+	NextCursor OptString         `json:"nextCursor"`
 	Deliveries []WebhookDelivery `json:"deliveries"`
+}
+
+// GetNextCursor returns the value of NextCursor.
+func (s *WebhookDeliveryList) GetNextCursor() OptString {
+	return s.NextCursor
 }
 
 // GetDeliveries returns the value of Deliveries.
 func (s *WebhookDeliveryList) GetDeliveries() []WebhookDelivery {
 	return s.Deliveries
+}
+
+// SetNextCursor sets the value of NextCursor.
+func (s *WebhookDeliveryList) SetNextCursor(val OptString) {
+	s.NextCursor = val
 }
 
 // SetDeliveries sets the value of Deliveries.
@@ -2781,7 +2887,8 @@ func (s *WebhookDeliveryStatus) UnmarshalText(data []byte) error {
 }
 
 // Thread actions emit once when stored, including replies that do not change turns. Peering requests
-// emit when first stored. Delivery attempts do not emit events.
+// emit when first stored; only the newest 100 such notifications per endpoint are retained, including
+// unsent ones. Delivery attempts do not emit events.
 // Ref: #/components/schemas/WebhookEventType
 type WebhookEventType string
 

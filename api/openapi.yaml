@@ -50,7 +50,7 @@ paths:
       tags: [webhooks]
       summary: Create a webhook
       description: >-
-        At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+        Only future matching events are queued; secrets are never returned.
       requestBody:
         required: true
         description: Settings and signing key for the new endpoint.
@@ -126,7 +126,30 @@ paths:
       tags: [webhooks]
       summary: List recent webhook deliveries
       description: >-
-        The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+        Newest-first delivery history with cursor pagination. Pending deliveries retry for up to seven days; terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum records per page.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 100
+        - name: cursor
+          in: query
+          description: The preceding page's nextCursor.
+          schema:
+            type: string
+            pattern: '^[0-9]{1,19}$'
+            maxLength: 19
+        - name: status
+          in: query
+          description: Filter by delivery status.
+          schema:
+            type: string
+            enum: [pending, delivered, failed]
       responses:
         '200':
           description: List recent webhook deliveries.
@@ -625,7 +648,7 @@ components:
       type: string
       description: >-
         Thread actions emit once when stored, including replies that do not change turns.
-        Peering requests emit when first stored. Delivery attempts do not emit events.
+        Peering requests emit when first stored; only the newest 100 such notifications per endpoint are retained, including unsent ones. Delivery attempts do not emit events.
       enum: [thread.open, thread.reply, thread.ack, thread.needs-input, thread.resolve, thread.decline, thread.close, thread.reopen, thread.withdraw, peering.requested]
     WebhookEvents:
       type: array
@@ -650,7 +673,7 @@ components:
     Webhook:
       type: object
       description: >-
-        Owner-configured signed notifications. HTTPS, or HTTP on literal loopback. No URL credentials, query or fragment. At most 32 endpoints.
+        Owner-configured signed notifications. HTTPS, or HTTP on literal loopback. No URL credentials or fragment. Queries may contain non-secret routing parameters.
       required: [name, url, events, origin, enabled]
       properties:
         name:
@@ -704,7 +727,6 @@ components:
       properties:
         webhooks:
           type: array
-          maxItems: 32
           items:
             $ref: '#/components/schemas/Webhook'
     WebhookDelivery:
@@ -737,6 +759,11 @@ components:
       description: Recent deliveries, newest first.
       required: [deliveries]
       properties:
+        nextCursor:
+          type: string
+          description: Pass as cursor to fetch older records; omitted on the last page.
+          pattern: '^[0-9]{1,19}$'
+          maxLength: 19
         deliveries:
           type: array
           maxItems: 100

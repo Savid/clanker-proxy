@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS webhooks (
  events TEXT NOT NULL,
  origin TEXT NOT NULL,
  enabled INTEGER NOT NULL,
+ retry_after TEXT NOT NULL DEFAULT '',
  secret TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
@@ -99,7 +100,10 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
  finished_at TEXT,
  last_error TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries(webhook, status, next_attempt_at, seq);
+CREATE INDEX IF NOT EXISTS webhook_expiry ON webhook_deliveries(status, retry_until);
+CREATE INDEX IF NOT EXISTS webhook_finished ON webhook_deliveries(finished_at) WHERE status != 'pending';
+CREATE INDEX IF NOT EXISTS webhook_peering ON webhook_deliveries(webhook, event, seq);
 CREATE INDEX IF NOT EXISTS webhook_history ON webhook_deliveries(webhook, seq);
 `
 

@@ -168,7 +168,9 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 		f.exit, f.hint = exitNotFound, notFoundHint(name)
 	case http.StatusConflict, http.StatusUnprocessableEntity:
 		f.exit = exitRefused
-		if ref != "" {
+		if strings.HasPrefix(name, "webhook ") {
+			f.hint = "cpctl webhook ls lists names and enabled state; cpctl webhook deliveries <name> lists delivery status; only failed deliveries of enabled webhooks can be retried"
+		} else if ref != "" {
 			f.hint = "cpctl show " + ref + " lists what you can do now, as commands"
 		}
 	case http.StatusBadGateway:
@@ -179,6 +181,9 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 }
 
 func notFoundHint(cmd string) string {
+	if strings.HasPrefix(cmd, "webhook ") {
+		return "cpctl webhook ls lists webhook names; cpctl webhook deliveries <name> lists recent delivery IDs"
+	}
 	switch cmd {
 	case "approve", "deny":
 		return "cpctl requests lists pending requests and their IDs"

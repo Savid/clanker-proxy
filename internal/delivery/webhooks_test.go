@@ -49,7 +49,7 @@ func addHook(t *testing.T, st *store.Store, name, url string) {
 
 func history(t *testing.T, st *store.Store, name string) []store.WebhookDelivery {
 	t.Helper()
-	ds, err := st.WebhookDeliveries(t.Context(), name)
+	ds, err := st.WebhookDeliveries(t.Context(), name, store.WebhookFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestWebhookRetriesAndSignatures(t *testing.T) {
 		t.Fatal("signature verification failed")
 	}
 	ds := history(t, st, "agent")
-	if ds[0].Status != "pending" || ds[0].Attempts != 1 || !ds[0].NextAttemptAt.Equal(t0.Add(15*time.Second)) {
+	if ds[0].Status != "pending" || ds[0].Attempts != 1 || (ds[0].NextAttemptAt.Before(t0.Add(15*time.Second)) || ds[0].NextAttemptAt.After(t0.Add(19*time.Second))) {
 		t.Fatal("incorrect backoff")
 	}
 	drainHooks(t, st, t0)
@@ -101,7 +101,7 @@ func TestWebhookRetriesAndSignatures(t *testing.T) {
 	}
 	status.Store(http.StatusNoContent)
 	// A new worker resumes the database queue without in-memory state.
-	drainHooks(t, st, t0.Add(15*time.Second))
+	drainHooks(t, st, ds[0].NextAttemptAt)
 	second := <-attempts
 	if second.id != first.id || !bytes.Equal(second.body, first.body) || second.timestamp == first.timestamp {
 		t.Fatal("retry identity or timestamp is wrong")
@@ -249,5 +249,146 @@ func TestWebhookPendingUsesUpdatedDestination(t *testing.T) {
 	_, _ = mac.Write(append([]byte(a.id+"."+a.timestamp+"."), a.body...))
 	if a.signature != "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
 		t.Fatal("pending delivery used old signing key")
+	}
+}
+
+func TestWebhookRunRefillsWhileAnotherEndpointIsSlow(t *testing.T) {
+	t.Parallel()
+	st := webhookStore(t)
+	release := make(chan struct{})
+	fast := make(chan struct{}, 4)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-release; w.WriteHeader(http.StatusNoContent) }))
+	defer slow.Close()
+	quick := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fast <- struct{}{}; w.WriteHeader(http.StatusNoContent) }))
+	defer quick.Close()
+	addHook(t, st, "slow", slow.URL)
+	addHook(t, st, "quick", quick.URL)
+	queue(t, st, 2)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	d := delivery.NewWebhooks(slog.New(slog.DiscardHandler), st, delivery.Config{Now: func() time.Time { return t0 }})
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	waitCtx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	for range 2 {
+		select {
+		case <-fast:
+		case <-waitCtx.Done():
+			t.Error("healthy endpoint waited for unrelated slow request")
+		}
+	}
+	cancel()
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWebhookRetryAfterPausesEndpoint(t *testing.T) {
+	t.Parallel()
+	for _, header := range []string{"120", t0.Add(2 * time.Minute).Format(http.TimeFormat)} {
+		t.Run(header, func(t *testing.T) {
+			testWebhookEndpointPause(t, header)
+		})
+	}
+}
+
+func testWebhookEndpointPause(t *testing.T, header string) {
+	t.Helper()
+	t.Parallel()
+	st := webhookStore(t)
+	var calls atomic.Int32
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", header)
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer receiver.Close()
+	addHook(t, st, "agent", receiver.URL)
+	queue(t, st, 2)
+	drainHooks(t, st, t0)
+	ds := history(t, st, "agent")
+	if !ds[1].NextAttemptAt.Equal(t0.Add(2 * time.Minute)) {
+		t.Fatal("Retry-After was ignored")
+	}
+	drainHooks(t, st, t0.Add(time.Minute))
+	if calls.Load() != 1 {
+		t.Fatal("later notification bypassed endpoint backpressure")
+	}
+	drainHooks(t, st, t0.Add(2*time.Minute))
+	drainHooks(t, st, t0.Add(2*time.Minute))
+	if calls.Load() != 3 {
+		t.Fatal("endpoint did not resume")
+	}
+	for _, d := range history(t, st, "agent") {
+		if d.Status != "delivered" {
+			t.Fatal("notification did not complete")
+		}
+	}
+}
+
+func TestWebhookChangedURLIgnoresOldReceiverBackpressure(t *testing.T) {
+	t.Parallel()
+	st := webhookStore(t)
+	var calls atomic.Int32
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer replacement.Close()
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hook, err := st.Webhook(t.Context(), "agent")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		hook.URL = replacement.URL
+		if err = st.UpdateWebhook(t.Context(), hook); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Retry-After", "3600")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer old.Close()
+	addHook(t, st, "agent", old.URL)
+	queue(t, st, 2)
+	drainHooks(t, st, t0)
+	drainHooks(t, st, t0)
+	if calls.Load() != 1 {
+		t.Fatal("old receiver paused the replacement destination")
+	}
+}
+
+func TestWebhookBackpressureEndsWithRetryWindow(t *testing.T) {
+	t.Parallel()
+	st := webhookStore(t)
+	var calls atomic.Int32
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer receiver.Close()
+	addHook(t, st, "agent", receiver.URL)
+	queue(t, st, 2)
+	ds := history(t, st, "agent")
+	nearExpiry := t0.Add(store.WebhookTTL - time.Second)
+	// Give the newer delivery a fresh retry window while the older one is about to expire.
+	if err := st.FinishWebhook(t.Context(), ds[0].ID, "failed", "HTTP 400", t0, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RetryWebhook(t.Context(), "agent", ds[0].ID, nearExpiry); err != nil {
+		t.Fatal(err)
+	}
+	drainHooks(t, st, nearExpiry)
+	drainHooks(t, st, t0.Add(store.WebhookTTL))
+	if calls.Load() != 2 {
+		t.Fatal("expired delivery's backoff held up fresh work")
 	}
 }
