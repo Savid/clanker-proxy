@@ -41,7 +41,7 @@ func webhookStore(t *testing.T) *store.Store {
 
 func addHook(t *testing.T, st *store.Store, name, url string) {
 	t.Helper()
-	err := st.CreateWebhook(t.Context(), webhook.Config{Name: name, URL: url, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "outgoing", Enabled: true})
+	err := st.CreateWebhook(t.Context(), webhook.Config{Type: "generic", Name: name, URL: url, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "outgoing", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

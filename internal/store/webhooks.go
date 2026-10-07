@@ -23,12 +23,12 @@ const WebhookTTL = 7 * 24 * time.Hour
 // ErrWebhookRetry means a delivery is not failed, or its webhook is disabled.
 var ErrWebhookRetry = errors.New("only failed deliveries of enabled webhooks can be retried")
 
-const webhookColumns = `name, url, events, origin, enabled, secret, retry_after, failures`
+const webhookColumns = `name, type, url, events, origin, enabled, secret, headers, retry_after, failures`
 
 func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
 	var c webhook.Config
-	var events, paused string
-	if err := row.Scan(&c.Name, &c.URL, &events, &c.Origin, &c.Enabled, &c.Secret, &paused, &c.Failures); err != nil {
+	var events, headers, paused string
+	if err := row.Scan(&c.Name, &c.Type, &c.URL, &events, &c.Origin, &c.Enabled, &c.Secret, &headers, &paused, &c.Failures); err != nil {
 		return c, err
 	}
 	if paused != "" {
@@ -36,6 +36,9 @@ func scanWebhook(row interface{ Scan(...any) error }) (webhook.Config, error) {
 		if c.PausedUntil, err = parseTime(paused); err != nil {
 			return c, err
 		}
+	}
+	if err := json.Unmarshal([]byte(headers), &c.Headers); err != nil {
+		return c, err
 	}
 	return c, json.Unmarshal([]byte(events), &c.Events)
 }
@@ -73,14 +76,18 @@ func (s *Store) CreateWebhook(ctx context.Context, c webhook.Config) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO webhooks (name, url, events, origin, enabled, secret) VALUES (?,?,?,?,?,?)`, c.Name, c.URL, string(events), c.Origin, c.Enabled, c.Secret)
+	headers, err := json.Marshal(c.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO webhooks (name, type, url, events, origin, enabled, secret, headers) VALUES (?,?,?,?,?,?,?,?)`, c.Name, c.Type, c.URL, string(events), c.Origin, c.Enabled, c.Secret, string(headers))
 	if isConstraint(err) {
 		return ErrExists
 	}
 	return err
 }
 
-// UpdateWebhook replaces settings. An empty secret retains the existing key.
+// UpdateWebhook replaces validated settings; Type is immutable.
 // An owner update is the signal that the receiver may be fixed, so it also
 // clears the endpoint's backoff.
 func (s *Store) UpdateWebhook(ctx context.Context, c webhook.Config) error {
@@ -88,7 +95,11 @@ func (s *Store) UpdateWebhook(ctx context.Context, c webhook.Config) error {
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, enabled=?, secret=CASE WHEN ?='' THEN secret ELSE ? END WHERE name=?`, c.URL, string(events), c.Origin, c.Enabled, c.Secret, c.Secret, c.Name)
+	headers, err := json.Marshal(c.Headers)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after='', failures=0, url=?, events=?, origin=?, enabled=?, secret=?, headers=? WHERE name=?`, c.URL, string(events), c.Origin, c.Enabled, c.Secret, string(headers), c.Name)
 	return webhookChanged(res, err)
 }
 
@@ -296,7 +307,7 @@ func (s *Store) MaintainWebhooks(ctx context.Context, now time.Time, active []st
 // WebhookDestination resolves a still-queued delivery to its current destination.
 // A deleted and recreated name must never receive the deleted hook's in-flight work.
 func (s *Store) WebhookDestination(ctx context.Context, id string) (webhook.Config, error) {
-	c, err := scanWebhook(s.db.QueryRowContext(ctx, `SELECT w.name,w.url,w.events,w.origin,w.enabled,w.secret,w.retry_after,w.failures FROM webhooks w JOIN webhook_deliveries d ON d.webhook=w.name WHERE d.id=? AND d.status='pending'`, id))
+	c, err := scanWebhook(s.db.QueryRowContext(ctx, `SELECT w.name,w.type,w.url,w.events,w.origin,w.enabled,w.secret,w.headers,w.retry_after,w.failures FROM webhooks w JOIN webhook_deliveries d ON d.webhook=w.name WHERE d.id=? AND d.status='pending'`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}

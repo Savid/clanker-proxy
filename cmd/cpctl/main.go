@@ -45,7 +45,8 @@ Common tasks:
   read a thread                cpctl show <ref>
   wait for their answer        cpctl wait <ref> -timeout 30m
   act on a thread              cpctl show <ref>, then one of its "next:" commands
-  notify an HTTP receiver      cpctl help webhook add
+  choose a notification type  cpctl webhook types
+  notify chat or HTTP          cpctl help webhook add
   inspect notification errors  cpctl webhook deliveries <name> -status failed
   check for a release          cpctl update -check
   update both local binaries   cpctl update

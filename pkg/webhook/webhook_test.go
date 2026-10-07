@@ -30,14 +30,14 @@ func TestValidation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.url, func(t *testing.T) {
 			t.Parallel()
-			c := webhook.Config{Name: "agent", URL: tc.url, Events: []string{"*"}, Origin: "incoming", Secret: key}
+			c := webhook.Config{Type: "generic", Name: "agent", URL: tc.url, Events: []string{"*"}, Origin: "incoming", Secret: key}
 			if err := c.Validate(); (err == nil) != tc.valid {
 				t.Fatalf("valid=%t, error=%v", tc.valid, err)
 			}
 		})
 	}
 	for _, events := range [][]string{nil, {"*", "thread.open"}, {"thread.open", "thread.open"}, {"made-up"}} {
-		c := webhook.Config{Name: "agent", URL: "https://runner.example", Events: events, Origin: "both", Secret: key}
+		c := webhook.Config{Type: "generic", Name: "agent", URL: "https://runner.example", Events: events, Origin: "both", Secret: key}
 		if c.Validate() == nil {
 			t.Errorf("accepted invalid events %v", events)
 		}

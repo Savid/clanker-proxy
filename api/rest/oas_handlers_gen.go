@@ -3031,11 +3031,13 @@ func (s *Server) handleRetryWebhookDeliveryRequest(args [2]string, argsEscaped b
 
 // handleUpdateWebhookRequest handles updateWebhook operation.
 //
-// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+// backoff (pausedUntil).
 //
-// PUT /api/v1/webhooks/{name}
+// PATCH /api/v1/webhooks/{name}
 func (s *Server) handleUpdateWebhookRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
 	statusWriter := &codeRecorder{ResponseWriter: w}
 	w = statusWriter

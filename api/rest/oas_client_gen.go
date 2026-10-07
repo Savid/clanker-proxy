@@ -179,11 +179,13 @@ type Invoker interface {
 	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
 	// UpdateWebhook invokes updateWebhook operation.
 	//
-	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-	// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+	// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+	// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+	// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+	// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+	// backoff (pausedUntil).
 	//
-	// PUT /api/v1/webhooks/{name}
+	// PATCH /api/v1/webhooks/{name}
 	UpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)
 }
 
@@ -2258,11 +2260,13 @@ func (c *Client) sendRetryWebhookDelivery(ctx context.Context, params RetryWebho
 
 // UpdateWebhook invokes updateWebhook operation.
 //
-// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+// backoff (pausedUntil).
 //
-// PUT /api/v1/webhooks/{name}
+// PATCH /api/v1/webhooks/{name}
 func (c *Client) UpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error) {
 	res, err := c.sendUpdateWebhook(ctx, request, params)
 	return res, err
@@ -2296,7 +2300,7 @@ func (c *Client) sendUpdateWebhook(ctx context.Context, request *WebhookUpdate, 
 	}
 	uri.AddPathParts(u, pathParts[:]...)
 
-	r, err := ht.NewRequest(ctx, "PUT", u)
+	r, err := ht.NewRequest(ctx, "PATCH", u)
 	if err != nil {
 		return res, errors.Wrap(err, "create request")
 	}

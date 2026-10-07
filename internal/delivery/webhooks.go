@@ -1,7 +1,6 @@
 package delivery
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -214,42 +213,35 @@ func latest(a, b time.Time) time.Time {
 }
 
 func (d *Webhooks) postWebhook(ctx context.Context, hook webhook.Config, job store.WebhookDelivery) (string, string, time.Time) {
-	timestamp := strconv.FormatInt(d.now().Unix(), 10)
-	sig, err := webhook.Signature(hook.Secret, job.ID, timestamp, job.Payload)
+	req, err := webhookRequest(ctx, hook, job, d.now())
 	if err != nil {
-		return "failed", "invalid signing key", time.Time{}
+		return "failed", err.Error(), time.Time{}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, hook.URL, bytes.NewReader(job.Payload))
-	if err != nil {
-		return "failed", "invalid destination", time.Time{}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "cpd")
-	req.Header.Set("Webhook-Id", job.ID)
-	req.Header.Set("Webhook-Timestamp", timestamp)
-	req.Header.Set("Webhook-Signature", sig)
 	resp, err := d.http.Do(req)
 	if err != nil {
 		return "pending", transportError(err), time.Time{}
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return "delivered", "", time.Time{}
 	}
 	message := fmt.Sprintf("HTTP %d", resp.StatusCode)
-	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 ||
+		(hook.Type == "apprise" && resp.StatusCode == http.StatusFailedDependency) {
 		var cooldown time.Time
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			cooldown = webhookRetryAfter(resp.Header.Get("Retry-After"), d.now().UTC(), job.RetryUntil)
+		}
+		if hook.Type == "discord" && resp.StatusCode == http.StatusTooManyRequests {
+			cooldown = latest(cooldown, discordRetryAfter(body, d.now().UTC(), job.RetryUntil))
 		}
 		return "pending", message, cooldown
 	}
 	return "failed", message, time.Time{}
 }
 
-// transportError names the failure class without the URL, which may carry
-// routing parameters the owner considers private.
+// transportError omits URLs and response bodies, which can contain credentials.
 func transportError(err error) string {
 	var dnsErr *net.DNSError
 	var certErr *tls.CertificateVerificationError

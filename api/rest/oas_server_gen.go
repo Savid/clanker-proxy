@@ -165,11 +165,13 @@ type Handler interface {
 	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
 	// UpdateWebhook implements updateWebhook operation.
 	//
-	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
-	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-	// finish. Any update clears the endpoint's failure backoff (pausedUntil).
+	// Changes only supplied settings. The destination type is immutable. Omit url, headers or secret to
+	// keep them; an empty secret disables signing and empty headers remove custom headers. Pending
+	// deliveries use the current destination and credentials. Disabled webhooks queue no new events and
+	// pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure
+	// backoff (pausedUntil).
 	//
-	// PUT /api/v1/webhooks/{name}
+	// PATCH /api/v1/webhooks/{name}
 	UpdateWebhook(ctx context.Context, req *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)
 	// NewError creates *ProblemStatusCode from error returned by handler.
 	//

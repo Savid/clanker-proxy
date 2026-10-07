@@ -19,7 +19,7 @@ func (b *Inbox) Webhooks(ctx context.Context) ([]webhook.Config, error) {
 	return hooks, err
 }
 
-// Webhook returns one destination. API serialization must omit its signing key.
+// Webhook returns one destination. API serialization must omit its credentials.
 func (b *Inbox) Webhook(ctx context.Context, name string) (webhook.Config, error) {
 	c, err := b.store.Webhook(ctx, name)
 	return b.pause(c), webhookError(err)
@@ -41,17 +41,14 @@ func (b *Inbox) CreateWebhook(ctx context.Context, c webhook.Config) (webhook.Co
 	return c, webhookError(b.store.CreateWebhook(ctx, c))
 }
 
-// UpdateWebhook replaces filters and destination, retaining an omitted signing key.
-func (b *Inbox) UpdateWebhook(ctx context.Context, c webhook.Config) (webhook.Config, error) {
-	old, err := b.Webhook(ctx, c.Name)
+// UpdateWebhook validates the merged settings before replacing them.
+func (b *Inbox) UpdateWebhook(ctx context.Context, name string, change webhook.Update) (webhook.Config, error) {
+	c, err := b.Webhook(ctx, name)
 	if err != nil {
 		return c, err
 	}
-	check := c
-	if check.Secret == "" {
-		check.Secret = old.Secret
-	}
-	if err = check.Validate(); err != nil {
+	c = change.Apply(c)
+	if err = c.Validate(); err != nil {
 		return c, errorf(KindInvalid, "%v", err)
 	}
 	if err = b.store.UpdateWebhook(ctx, c); err != nil {

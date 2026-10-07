@@ -55,7 +55,7 @@ var (
 	rn12AllowedHeaders = map[string]string{
 		"DELETE": "Authorization",
 		"GET":    "Authorization",
-		"PUT":    "Authorization,Content-Type",
+		"PATCH":  "Authorization,Content-Type",
 	}
 	rn20AllowedHeaders = map[string]string{
 		"GET": "Authorization",
@@ -549,16 +549,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							s.handleGetWebhookRequest([1]string{
 								args[0],
 							}, elemIsEscaped, w, r)
-						case "PUT":
+						case "PATCH":
 							s.handleUpdateWebhookRequest([1]string{
 								args[0],
 							}, elemIsEscaped, w, r)
 						default:
 							s.notAllowed(w, r, notAllowedParams{
-								allowedMethods: "DELETE,GET,PUT",
+								allowedMethods: "DELETE,GET,PATCH",
 								allowedHeaders: rn12AllowedHeaders,
 								acceptPost:     "",
-								acceptPatch:    "",
+								acceptPatch:    "application/json",
 							})
 						}
 
@@ -1214,7 +1214,7 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 							r.args = args
 							r.count = 1
 							return r, true
-						case "PUT":
+						case "PATCH":
 							r.name = UpdateWebhookOperation
 							r.summary = "Update a webhook"
 							r.operationID = "updateWebhook"

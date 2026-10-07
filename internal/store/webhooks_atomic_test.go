@@ -19,7 +19,7 @@ func TestWebhookQueueFailureRollsBackSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err = st.CreateWebhook(ctx, webhook.Config{Name: "test", Events: []string{"*"}, Origin: "both", Enabled: true}); err != nil {
+	if err = st.CreateWebhook(ctx, webhook.Config{Type: "generic", Name: "test", Events: []string{"*"}, Origin: "both", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = st.db.ExecContext(ctx, `CREATE TRIGGER reject_webhook BEFORE INSERT ON webhook_deliveries BEGIN SELECT RAISE(ABORT, 'injected write failure'); END`); err != nil {
@@ -59,7 +59,7 @@ func TestPublicPeeringNotificationsAreBounded(t *testing.T) {
 	defer st.Close()
 	ctx := t.Context()
 	for i := range 32 {
-		if err = st.CreateWebhook(ctx, webhook.Config{Name: fmt.Sprintf("h%d", i), URL: "https://runner.example", Origin: "incoming", Events: []string{"*"}, Enabled: true}); err != nil {
+		if err = st.CreateWebhook(ctx, webhook.Config{Type: "generic", Name: fmt.Sprintf("h%d", i), URL: "https://runner.example", Origin: "incoming", Events: []string{"*"}, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

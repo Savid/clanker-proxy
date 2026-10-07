@@ -81,7 +81,7 @@ func TestWebhookRunHoldsEndpointAfterStoreError(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
 	// Nothing listens on port 1, so the released attempt fails fast.
-	hook := webhook.Config{Name: "agent", URL: "http://127.0.0.1:1/", Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "both", Enabled: true}
+	hook := webhook.Config{Type: "generic", Name: "agent", URL: "http://127.0.0.1:1/", Secret: base64.StdEncoding.EncodeToString(make([]byte, 32)), Events: []string{"*"}, Origin: "both", Enabled: true}
 	if err = st.CreateWebhook(t.Context(), hook); err != nil {
 		t.Fatal(err)
 	}

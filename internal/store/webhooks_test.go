@@ -15,7 +15,7 @@ import (
 )
 
 func hook(name, origin string, events ...string) webhook.Config {
-	return webhook.Config{Name: name, URL: "https://runner.example/hooks", Events: events, Origin: origin, Enabled: true, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	return webhook.Config{Type: "generic", Name: name, URL: "https://runner.example/hooks", Events: events, Origin: origin, Enabled: true, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32))}
 }
 
 func deliveries(t *testing.T, st *store.Store, name string, n int) []store.WebhookDelivery {
@@ -37,6 +37,9 @@ func TestWebhookFiltersAndPersistence(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	configs := []webhook.Config{hook("all", "both", "*"), hook("incoming", "incoming", "thread.open", "thread.reply"), hook("outgoing", "outgoing", "thread.open"), hook("requests", "incoming", "peering.requested"), hook("paused", "both", "*")}
 	configs[4].Enabled = false
+	configs[0].Type = "slack"
+	configs[0].Secret = ""
+	configs[0].Headers = []webhook.Header{{Name: "Authorization", Value: "Bearer private"}}
 	for _, c := range configs {
 		if err = st.CreateWebhook(t.Context(), c); err != nil {
 			t.Fatal(err)
@@ -82,6 +85,10 @@ func TestWebhookFiltersAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	deliveries(t, st, "all", 4)
+	got, err := st.Webhook(t.Context(), "all")
+	if err != nil || got.Type != "slack" || len(got.Headers) != 1 || got.Headers[0].Value != "Bearer private" || got.Secret != "" {
+		t.Fatal("provider configuration did not persist")
+	}
 }
 
 func TestWebhookPauseDeleteAndRetry(t *testing.T) {

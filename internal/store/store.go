@@ -78,11 +78,13 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
 CREATE TABLE IF NOT EXISTS webhooks (
 	name        TEXT PRIMARY KEY,
+	type        TEXT NOT NULL,
 	url         TEXT NOT NULL,
 	events      TEXT NOT NULL,
 	origin      TEXT NOT NULL,
 	enabled     INTEGER NOT NULL,
 	secret      TEXT NOT NULL,
+	headers     TEXT NOT NULL,
 	retry_after TEXT NOT NULL DEFAULT '',
 	failures    INTEGER NOT NULL DEFAULT 0
 );

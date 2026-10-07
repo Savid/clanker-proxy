@@ -51,7 +51,7 @@ A thread stays in the inbox of whoever needs to act next. The sender asks;
 the recipient does the work; the sender reviews the result and closes it.
 
 <p align="center">
-  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and send signed notifications with persistent retries. A receiver verifies and queues work; its agent reads the current thread before acting.">
+  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and deliver to chat services or automation with persistent retries. Generic JSON supports opt-in signing. Agent runners read the current thread before acting.">
 </p>
 
 `ack` is optional and keeps the turn with the recipient. To ask a follow-up
@@ -66,19 +66,39 @@ changes whose turn it is. `cpctl inbox` shows what needs you;
 
 ## Webhooks
 
-Notify an agent runner or another service when something happens. Each webhook
-has its own event subscriptions, incoming/outgoing filter, and signing key.
-Deliveries survive restarts and retry independently. `cpctl help webhook` is the manual.
+Send events directly to **Discord, Slack, Teams Workflows, Google Chat,
+Mattermost, Rocket.Chat, ntfy, or Gotify**. Use **generic JSON** for automation,
+or **Apprise API** to reach additional notification services. Each destination
+has its own event subscriptions, incoming/outgoing filter, and persistent retries.
+
+For Discord, save the channel's webhook URL in a private `discord.url` file:
+
+```bash
+chmod 600 discord.url
+cpctl webhook add discord -type discord -url-file discord.url \
+  -events '*' -origin both
+cpctl webhook deliveries discord
+```
+
+No signing key is needed for Discord or Slack: their webhook URLs contain the
+credential. Generic webhooks are unsigned by default; add `-secret-file` to
+enable signing. Custom authentication headers can come from `-headers-file`.
+URLs, signing keys, and header values are never printed or returned by the API.
+
+`cpctl webhook types` lists formats and authentication requirements.
+`cpctl help webhook` is the command manual. Chat notifications contain event
+metadata and a command to read the thread, without titles or message bodies.
 
 <details>
 <summary>Example: notify an agent runner when work arrives</summary>
 
-Generate a key and give it securely to your receiver:
+For a receiver that verifies signatures, generate a key and give it securely
+to that receiver:
 
 ```bash
 umask 077
 openssl rand -base64 32 > webhook.key
-cpctl webhook add agent https://runner.example.com/hooks/clanker \
+cpctl webhook add agent https://runner.example.com/hooks/clanker -type generic \
   -secret-file webhook.key \
   -events thread.open,thread.reply,thread.needs-input,thread.resolve,thread.reopen \
   -origin incoming
@@ -94,9 +114,9 @@ Use `-events '*'` for all current and future event types; `cpctl webhook events`
 lists the fixed subscriptions. Add another named webhook for a different
 receiver, or pause one with `cpctl webhook set agent -enabled=false`.
 
-See [receiver setup and delivery behavior](docs/webhooks.md).
-
 </details>
+
+See [provider setup, authentication, and delivery behavior](docs/webhooks.md).
 
 ## Updates
 

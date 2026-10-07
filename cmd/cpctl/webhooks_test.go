@@ -66,6 +66,80 @@ func TestWebhookCLI(t *testing.T) {
 	}
 }
 
+func TestWebhookProviderCLI(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t, "alice")
+	dir := t.TempDir()
+	urlFile := filepath.Join(dir, "discord.url")
+	headersFile := filepath.Join(dir, "headers.json")
+	if err := os.WriteFile(urlFile, []byte("https://discord.com/api/webhooks/private-path?token=private-query\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(headersFile, []byte(`{"Authorization":"Bearer private-header"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := p.cp(t, "webhook", "add", "discord", "-type", "discord", "-url-file", urlFile, "-headers-file", headersFile, "-origin", "both")
+	if strings.Contains(output, "private-") || !strings.Contains(output, "discord") || !strings.Contains(output, "next:") {
+		t.Fatal("unsafe or incomplete provider output")
+	}
+	var h rest.Webhook
+	p.json(t, &h, "webhook", "show", "discord")
+	if h.Type != "discord" || h.Signing || h.Destination != "https://discord.com" || len(h.HeaderNames) != 1 || h.Origin != "both" {
+		t.Fatal("incorrect provider settings")
+	}
+	p.cp(t, "webhook", "set", "discord", "-enabled=false")
+	if output = p.cp(t, "-json", "webhook", "ls"); strings.Contains(output, "private-") {
+		t.Fatal("provider credentials exposed")
+	}
+	if err := os.WriteFile(headersFile, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.cp(t, "webhook", "set", "discord", "-headers-file", headersFile)
+	p.json(t, &h, "webhook", "show", "discord")
+	if len(h.HeaderNames) != 0 || h.Enabled || h.Type != "discord" {
+		t.Fatal("clearing headers changed other settings")
+	}
+	output = p.cp(t, "webhook", "types")
+	for _, name := range []string{"generic", "discord", "slack", "teams", "google-chat", "mattermost", "rocketchat", "ntfy", "gotify", "apprise", "next:"} {
+		if !strings.Contains(output, name) {
+			t.Fatalf("provider help missing %s", name)
+		}
+	}
+}
+
+func TestWebhookSigningOptIn(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t, "alice")
+	p.cp(t, "webhook", "add", "agent", "https://runner.example/hook")
+	var h rest.Webhook
+	p.json(t, &h, "webhook", "show", "agent")
+	if h.Signing || h.Type != "generic" {
+		t.Fatal("generic should default to unsigned")
+	}
+	key := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(key, []byte(base64.StdEncoding.EncodeToString(make([]byte, 32))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.cp(t, "webhook", "set", "agent", "-secret-file", key)
+	p.json(t, &h, "webhook", "show", "agent")
+	if !h.Signing {
+		t.Fatal("key did not enable signing")
+	}
+	p.cp(t, "webhook", "set", "agent", "-enabled=false")
+	p.json(t, &h, "webhook", "show", "agent")
+	if !h.Signing {
+		t.Fatal("omitting the key disabled signing")
+	}
+	p.cp(t, "webhook", "set", "agent", "-signing=false")
+	p.json(t, &h, "webhook", "show", "agent")
+	if h.Signing {
+		t.Fatal("signing was not disabled")
+	}
+	if _, err := p.try(t, "webhook", "add", "discord", "https://discord.com/api/webhooks/id/token", "-type", "discord", "-secret-file", key); err == nil {
+		t.Fatal("Discord accepted a generic signing key")
+	}
+}
+
 func TestWebhookDeliveryPagination(t *testing.T) {
 	t.Parallel()
 	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")

@@ -34,6 +34,84 @@ func TestWebhookCatalogMatchesSpec(t *testing.T) {
 	if err := events.Validate(); err != nil {
 		t.Fatalf("the spec refuses a subscription to every type: %v", err)
 	}
+	var providers []string
+	for _, p := range webhook.Providers() {
+		providers = append(providers, p.Type)
+	}
+	var wireProviders []string
+	for _, p := range rest.WebhookType("").AllValues() {
+		wireProviders = append(wireProviders, string(p))
+	}
+	if !slices.Equal(providers, wireProviders) {
+		t.Fatalf("provider catalog differs: %v / %v", providers, wireProviders)
+	}
+}
+
+func TestWebhookPrivateDestinationAndUpdates(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+f.owner)
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+		for _, secret := range []string{"private-path", "private-query", "private-header"} {
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Fatal("response exposes a destination credential")
+			}
+		}
+		return rec
+	}
+	created := call(http.MethodPost, "/api/v1/webhooks", `{"name":"discord","type":"discord","url":"https://discord.com/api/webhooks/private-path?token=private-query","events":["*"],"origin":"both","enabled":true,"headers":[{"name":"Authorization","value":"Bearer private-header"}]}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	patched := call(http.MethodPatch, "/api/v1/webhooks/discord", `{"enabled":false}`)
+	if patched.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", patched.Code, patched.Body.String())
+	}
+	var h rest.Webhook
+	if err := json.Unmarshal(patched.Body.Bytes(), &h); err != nil {
+		t.Fatal(err)
+	}
+	if h.Type != "discord" || h.Destination != "https://discord.com" || h.Signing || h.Enabled || h.Origin != "both" || len(h.HeaderNames) != 1 {
+		t.Fatal("partial update changed omitted fields")
+	}
+	for _, path := range []string{"/api/v1/webhooks", "/api/v1/webhooks/discord"} {
+		if rec := call(http.MethodGet, path, ""); rec.Code != http.StatusOK {
+			t.Fatal("read failed")
+		}
+	}
+	patched = call(http.MethodPatch, "/api/v1/webhooks/discord", `{"headers":[]}`)
+	if patched.Code != http.StatusOK {
+		t.Fatal("could not clear headers")
+	}
+	h = rest.Webhook{}
+	if err := json.Unmarshal(patched.Body.Bytes(), &h); err != nil || len(h.HeaderNames) != 0 {
+		t.Fatal("headers were not cleared")
+	}
+}
+
+func TestWebhookCredentialValidation(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for _, headers := range []string{
+		`[{"name":"Authorization","value":"private-header\r\nInjected: yes"}]`,
+		`[{"name":"Authorization","value":"private-header"},{"name":"authorization","value":"duplicate"}]`,
+		`[{"name":"Webhook-Signature","value":"private-header"}]`,
+		`[{"name":"Content-Type","value":"private-header"}]`,
+	} {
+		body := `{"name":"bad","type":"generic","url":"https://example.com/private-path","events":["*"],"origin":"incoming","enabled":true,"headers":` + headers + `}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/webhooks", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+f.owner)
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "private-") {
+			t.Fatal("invalid credential accepted or exposed")
+		}
+	}
 }
 
 func TestWebhookInputAndSecretRedaction(t *testing.T) {
@@ -52,8 +130,8 @@ func TestWebhookInputAndSecretRedaction(t *testing.T) {
 		f.h.ServeHTTP(rec, req)
 		return rec
 	}
-	body := map[string]any{"name": "agent", "url": "https://runner.example/hooks", "secret": key, "events": []string{"*"}, "origin": "incoming", "enabled": true}
-	for _, url := range []string{"http://example.com", "https://user:private@runner.example", "https://runner.example/" + strings.Repeat("x", 512)} {
+	body := map[string]any{"name": "agent", "type": "generic", "url": "https://runner.example/hooks", "secret": key, "events": []string{"*"}, "origin": "incoming", "enabled": true}
+	for _, url := range []string{"http://example.com", "https://user:private@runner.example", "https://runner.example/" + strings.Repeat("x", 2048)} {
 		body["url"] = url
 		rec := post(body)
 		if rec.Code != http.StatusBadRequest {

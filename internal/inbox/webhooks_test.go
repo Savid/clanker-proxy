@@ -14,7 +14,7 @@ func TestWebhookReceiveDeduplicatesAndFiltersOrigin(t *testing.T) {
 	t.Parallel()
 	ib := inboxtest.New(t)
 	ib.ActivePeer(t, "bob")
-	c := webhook.Config{Name: "agent", URL: "https://runner.example", Events: []string{"*"}, Origin: "incoming", Enabled: true, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	c := webhook.Config{Type: "generic", Name: "agent", URL: "https://runner.example", Events: []string{"*"}, Origin: "incoming", Enabled: true, Secret: base64.StdEncoding.EncodeToString(make([]byte, 32))}
 	if _, err := ib.CreateWebhook(t.Context(), c); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestWebhookReceiveDeduplicatesAndFiltersOrigin(t *testing.T) {
 	oldKey := c.Secret
 	c.Secret = ""
 	c.Enabled = false
-	if _, err = ib.UpdateWebhook(t.Context(), c); err != nil {
+	if _, err = ib.UpdateWebhook(t.Context(), c.Name, webhook.Update{Enabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ib.Webhook(t.Context(), c.Name)

@@ -38,7 +38,7 @@ paths:
         List webhooks.
       responses:
         '200':
-          description: Configured endpoints, without signing keys.
+          description: Configured endpoints, without destination credentials.
           content:
             application/json:
               schema:
@@ -60,7 +60,7 @@ paths:
               $ref: '#/components/schemas/WebhookCreate'
       responses:
         '201':
-          description: The new webhook, without its signing key.
+          description: The new webhook, without destination credentials.
           content:
             application/json:
               schema:
@@ -78,29 +78,34 @@ paths:
         Read a webhook.
       responses:
         '200':
-          description: The endpoint settings, without its signing key.
+          description: The endpoint settings, without destination credentials.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Webhook'
         default:
           $ref: '#/components/responses/Problem'
-    put:
+    patch:
       operationId: updateWebhook
       tags: [webhooks]
       summary: Update a webhook
       description: >-
-        Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure backoff (pausedUntil).
+        Changes only supplied settings. The destination type is immutable. Omit
+        url, headers or secret to keep them; an empty secret disables signing and
+        empty headers remove custom headers. Pending deliveries use the current
+        destination and credentials. Disabled webhooks queue no new events and
+        pause existing deliveries; an in-flight request may finish. Any update
+        clears the endpoint's failure backoff (pausedUntil).
       requestBody:
         required: true
-        description: Replacement settings and optional new signing key.
+        description: Settings to change; omitted fields are retained.
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/WebhookUpdate'
       responses:
         '200':
-          description: The updated webhook, without its signing key.
+          description: The updated webhook, without destination credentials.
           content:
             application/json:
               schema:
@@ -558,11 +563,13 @@ webhooks:
       tags: [webhooks]
       summary: Receive an event notification
       description: >-
-        Implemented by the configured receiver, not by cpd. Verify the signature
-        and timestamp, deduplicate by Webhook-Id, then durably enqueue before
-        returning 2xx. The payload schema documents the signing algorithm.
+        Implemented by a generic receiver, not by cpd. Signing is opt-in. When
+        configured, verify the signature and timestamp. Deduplicate by Webhook-Id,
+        then durably enqueue before returning 2xx. Other destination types use
+        their provider's message format instead of this payload.
       security:
         - webhookSignature: []
+        - {}
       parameters:
         - name: Webhook-Id
           in: header
@@ -580,7 +587,7 @@ webhooks:
             maxLength: 12
       requestBody:
         required: true
-        description: Event metadata, signed as raw bytes.
+        description: Event metadata; signed as raw bytes when a signing key is configured.
         content:
           application/json:
             schema:
@@ -669,31 +676,70 @@ components:
       enum: [incoming, outgoing]
     WebhookURL:
       type: string
-      format: uri
       description: >-
         A webhook destination: https, or http on a literal loopback address,
-        without credentials or fragment; at most 512 characters (checked by the
-        server; ogen cannot bound a URI). Queries may carry non-secret routing
-        parameters. Any host the daemon can reach is allowed.
-      maxLength: 512
+        without userinfo or fragment. Paths and queries may contain provider
+        credentials, so the entire URL is write-only. Any host the daemon can
+        reach is allowed. Validation errors never echo the URL.
+      minLength: 1
+      maxLength: 2048
+      writeOnly: true
       examples: ['https://runner.example.com/hooks']
+    WebhookType:
+      type: string
+      description: Destination format. Immutable after creation. Teams uses Workflows Adaptive Cards; apprise sends to a configured Apprise API endpoint.
+      enum: [generic, discord, slack, teams, google-chat, mattermost, rocketchat, ntfy, gotify, apprise]
+    WebhookHeaderName:
+      type: string
+      description: An HTTP header name. Transport, content-type, user-agent and webhook signing headers are reserved.
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z0-9!#$%&''*+.^_`|~-]+$'
+    WebhookHeaders:
+      type: array
+      description: Custom headers, including authentication. Names must be unique ignoring case. Values are write-only; empty replaces all headers with none.
+      maxItems: 16
+      items:
+        type: object
+        required: [name, value]
+        properties:
+          name:
+            $ref: '#/components/schemas/WebhookHeaderName'
+          value:
+            type: string
+            minLength: 1
+            maxLength: 4096
+            writeOnly: true
+            description: A single-line value, without control characters.
     WebhookSecret:
       type: string
-      description: Base64 encoding of a 32-byte signing key. Write-only; never returned or logged.
-      minLength: 44
+      description: Optional base64 encoding of a 32-byte signing key for generic destinations only. Empty disables signing. Write-only; never returned or logged.
       maxLength: 44
-      pattern: '^[A-Za-z0-9+/]{43}=$'
+      pattern: '^([A-Za-z0-9+/]{43}=)?$'
       writeOnly: true
     Webhook:
       type: object
       description: >-
-        Owner-configured signed notifications, without the signing key.
-      required: [name, url, events, origin, enabled]
+        Owner-configured notifications, without destination paths, queries,
+        custom header values or signing keys.
+      required: [name, type, destination, events, origin, enabled, signing, headerNames]
       properties:
         name:
           $ref: '#/components/schemas/Name'
-        url:
-          $ref: '#/components/schemas/WebhookURL'
+        type:
+          $ref: '#/components/schemas/WebhookType'
+        destination:
+          type: string
+          maxLength: 2048
+          description: Destination scheme and host only; path and query are never returned.
+        signing:
+          type: boolean
+          description: Whether generic notifications have a configured signing key.
+        headerNames:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/WebhookHeaderName'
         events:
           $ref: '#/components/schemas/WebhookEvents'
         origin:
@@ -711,11 +757,15 @@ components:
     WebhookCreate:
       type: object
       description: >-
-        A new webhook. Secret is supplied by the owner and never returned.
-      required: [name, url, events, origin, enabled, secret]
+        A new webhook. Generic signing is opt-in. Destination URL, custom header
+        values and signing key are write-only. Chat destinations authenticate
+        with their provider URL or custom headers, without a signing key.
+      required: [name, type, url, events, origin, enabled]
       properties:
         name:
           $ref: '#/components/schemas/Name'
+        type:
+          $ref: '#/components/schemas/WebhookType'
         url:
           $ref: '#/components/schemas/WebhookURL'
         events:
@@ -726,11 +776,13 @@ components:
           type: boolean
         secret:
           $ref: '#/components/schemas/WebhookSecret'
+        headers:
+          $ref: '#/components/schemas/WebhookHeaders'
     WebhookUpdate:
       type: object
       description: >-
-        Full replacement of settings, with an optional signing-key replacement.
-      required: [url, events, origin, enabled]
+        Changes to a destination. Omitted settings are retained. Empty secret
+        disables signing; empty headers remove custom headers. Type is immutable.
       properties:
         url:
           $ref: '#/components/schemas/WebhookURL'
@@ -742,6 +794,8 @@ components:
           type: boolean
         secret:
           $ref: '#/components/schemas/WebhookSecret'
+        headers:
+          $ref: '#/components/schemas/WebhookHeaders'
     WebhookList:
       type: object
       description: Configured webhooks, sorted by name.
@@ -804,7 +858,8 @@ components:
         Signed HTTP POST body. Webhook-Id is this delivery id; Webhook-Timestamp is
         the attempt's Unix time in seconds. Webhook-Signature is v1, followed by
         base64 HMAC-SHA256 of id.timestamp.rawBody using the decoded signing key.
-        Verify the raw body, signature, timestamp freshness and duplicate IDs.
+        When signing is enabled, verify the raw body, signature and timestamp
+        freshness. Deduplicate by notification ID with or without signing.
         Treat this as a notification; fetch current state before acting.
         Ignore unknown fields, and unknown types when subscribed to '*'.
         For peering.requested, peer is the name the unauthenticated requester
