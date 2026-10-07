@@ -36,6 +36,19 @@ type Handler interface {
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, req *Approval, params ApproveRequestParams) (*Peer, error)
+	// CreateWebhook implements createWebhook operation.
+	//
+	// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+	//
+	// POST /api/v1/webhooks
+	CreateWebhook(ctx context.Context, req *WebhookCreate) (*Webhook, error)
+	// DeleteWebhook implements deleteWebhook operation.
+	//
+	// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
+	// finish.
+	//
+	// DELETE /api/v1/webhooks/{name}
+	DeleteWebhook(ctx context.Context, params DeleteWebhookParams) error
 	// DeliverEvent implements deliverEvent operation.
 	//
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
@@ -75,6 +88,12 @@ type Handler interface {
 	//
 	// GET /api/v1/threads/{ref}
 	GetThread(ctx context.Context, params GetThreadParams) (*Thread, error)
+	// GetWebhook implements getWebhook operation.
+	//
+	// Read a webhook.
+	//
+	// GET /api/v1/webhooks/{name}
+	GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error)
 	// ListPeers implements listPeers operation.
 	//
 	// Every peer, requested or active.
@@ -94,6 +113,19 @@ type Handler interface {
 	//
 	// GET /api/v1/threads
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
+	// ListWebhookDeliveries implements listWebhookDeliveries operation.
+	//
+	// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
+	// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+	//
+	// GET /api/v1/webhooks/{name}/deliveries
+	ListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (*WebhookDeliveryList, error)
+	// ListWebhooks implements listWebhooks operation.
+	//
+	// List webhooks.
+	//
+	// GET /api/v1/webhooks
+	ListWebhooks(ctx context.Context) (*WebhookList, error)
 	// NotifyPeeringAccepted implements notifyPeeringAccepted operation.
 	//
 	// The approving daemon calls this with the shared secret, so the requester starts delivering at once
@@ -122,6 +154,21 @@ type Handler interface {
 	//
 	// POST /api/v1/peering-requests
 	RequestPeering(ctx context.Context, req *PeeringRequest) (*RequestReceipt, error)
+	// RetryWebhookDelivery implements retryWebhookDelivery operation.
+	//
+	// Resets a failed delivery for another seven days of retries, retaining its ID and payload. Requires
+	// an enabled webhook. Refuses pending or delivered items with 409.
+	//
+	// POST /api/v1/webhooks/{name}/deliveries/{id}/retry
+	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
+	// UpdateWebhook implements updateWebhook operation.
+	//
+	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
+	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
+	// finish.
+	//
+	// PUT /api/v1/webhooks/{name}
+	UpdateWebhook(ctx context.Context, req *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)
 	// NewError creates *ProblemStatusCode from error returned by handler.
 	//
 	// Used for common default response.

@@ -50,6 +50,19 @@ type Invoker interface {
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, request *Approval, params ApproveRequestParams) (*Peer, error)
+	// CreateWebhook invokes createWebhook operation.
+	//
+	// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+	//
+	// POST /api/v1/webhooks
+	CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error)
+	// DeleteWebhook invokes deleteWebhook operation.
+	//
+	// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
+	// finish.
+	//
+	// DELETE /api/v1/webhooks/{name}
+	DeleteWebhook(ctx context.Context, params DeleteWebhookParams) error
 	// DeliverEvent invokes deliverEvent operation.
 	//
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
@@ -89,6 +102,12 @@ type Invoker interface {
 	//
 	// GET /api/v1/threads/{ref}
 	GetThread(ctx context.Context, params GetThreadParams) (*Thread, error)
+	// GetWebhook invokes getWebhook operation.
+	//
+	// Read a webhook.
+	//
+	// GET /api/v1/webhooks/{name}
+	GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error)
 	// ListPeers invokes listPeers operation.
 	//
 	// Every peer, requested or active.
@@ -108,6 +127,19 @@ type Invoker interface {
 	//
 	// GET /api/v1/threads
 	ListThreads(ctx context.Context, params ListThreadsParams) (*ThreadList, error)
+	// ListWebhookDeliveries invokes listWebhookDeliveries operation.
+	//
+	// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
+	// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+	//
+	// GET /api/v1/webhooks/{name}/deliveries
+	ListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (*WebhookDeliveryList, error)
+	// ListWebhooks invokes listWebhooks operation.
+	//
+	// List webhooks.
+	//
+	// GET /api/v1/webhooks
+	ListWebhooks(ctx context.Context) (*WebhookList, error)
 	// NotifyPeeringAccepted invokes notifyPeeringAccepted operation.
 	//
 	// The approving daemon calls this with the shared secret, so the requester starts delivering at once
@@ -136,6 +168,21 @@ type Invoker interface {
 	//
 	// POST /api/v1/peering-requests
 	RequestPeering(ctx context.Context, request *PeeringRequest) (*RequestReceipt, error)
+	// RetryWebhookDelivery invokes retryWebhookDelivery operation.
+	//
+	// Resets a failed delivery for another seven days of retries, retaining its ID and payload. Requires
+	// an enabled webhook. Refuses pending or delivered items with 409.
+	//
+	// POST /api/v1/webhooks/{name}/deliveries/{id}/retry
+	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
+	// UpdateWebhook invokes updateWebhook operation.
+	//
+	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
+	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
+	// finish.
+	//
+	// PUT /api/v1/webhooks/{name}
+	UpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)
 }
 
 // Client implements OAS client.
@@ -460,6 +507,183 @@ func (c *Client) sendApproveRequest(ctx context.Context, request *Approval, para
 	}()
 
 	result, err := decodeApproveRequestResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// CreateWebhook invokes createWebhook operation.
+//
+// At most 32 webhooks. Only future matching events are queued; secrets are never returned.
+//
+// POST /api/v1/webhooks
+func (c *Client) CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error) {
+	res, err := c.sendCreateWebhook(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendCreateWebhook(ctx context.Context, request *WebhookCreate) (res *Webhook, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/webhooks"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeCreateWebhookRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, CreateWebhookOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeCreateWebhookResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteWebhook invokes deleteWebhook operation.
+//
+// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
+// finish.
+//
+// DELETE /api/v1/webhooks/{name}
+func (c *Client) DeleteWebhook(ctx context.Context, params DeleteWebhookParams) error {
+	_, err := c.sendDeleteWebhook(ctx, params)
+	return err
+}
+
+func (c *Client) sendDeleteWebhook(ctx context.Context, params DeleteWebhookParams) (res *DeleteWebhookNoContent, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/webhooks/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, DeleteWebhookOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeDeleteWebhookResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -956,6 +1180,103 @@ func (c *Client) sendGetThread(ctx context.Context, params GetThreadParams) (res
 	return result, nil
 }
 
+// GetWebhook invokes getWebhook operation.
+//
+// Read a webhook.
+//
+// GET /api/v1/webhooks/{name}
+func (c *Client) GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error) {
+	res, err := c.sendGetWebhook(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetWebhook(ctx context.Context, params GetWebhookParams) (res *Webhook, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/webhooks/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, GetWebhookOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeGetWebhookResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // ListPeers invokes listPeers operation.
 //
 // Every peer, requested or active.
@@ -1279,6 +1600,181 @@ func (c *Client) sendListThreads(ctx context.Context, params ListThreadsParams) 
 	return result, nil
 }
 
+// ListWebhookDeliveries invokes listWebhookDeliveries operation.
+//
+// The newest 100 deliveries. Pending deliveries retry for up to seven days; terminal history is kept
+// for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+//
+// GET /api/v1/webhooks/{name}/deliveries
+func (c *Client) ListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (*WebhookDeliveryList, error) {
+	res, err := c.sendListWebhookDeliveries(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListWebhookDeliveries(ctx context.Context, params ListWebhookDeliveriesParams) (res *WebhookDeliveryList, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/webhooks/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/deliveries"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, ListWebhookDeliveriesOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeListWebhookDeliveriesResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListWebhooks invokes listWebhooks operation.
+//
+// List webhooks.
+//
+// GET /api/v1/webhooks
+func (c *Client) ListWebhooks(ctx context.Context) (*WebhookList, error) {
+	res, err := c.sendListWebhooks(ctx)
+	return res, err
+}
+
+func (c *Client) sendListWebhooks(ctx context.Context) (res *WebhookList, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/webhooks"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, ListWebhooksOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeListWebhooksResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // NotifyPeeringAccepted invokes notifyPeeringAccepted operation.
 //
 // The approving daemon calls this with the shared secret, so the requester starts delivering at once
@@ -1574,6 +2070,229 @@ func (c *Client) sendRequestPeering(ctx context.Context, request *PeeringRequest
 	}()
 
 	result, err := decodeRequestPeeringResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// RetryWebhookDelivery invokes retryWebhookDelivery operation.
+//
+// Resets a failed delivery for another seven days of retries, retaining its ID and payload. Requires
+// an enabled webhook. Refuses pending or delivered items with 409.
+//
+// POST /api/v1/webhooks/{name}/deliveries/{id}/retry
+func (c *Client) RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error {
+	_, err := c.sendRetryWebhookDelivery(ctx, params)
+	return err
+}
+
+func (c *Client) sendRetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) (res *RetryWebhookDeliveryNoContent, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [5]string
+	pathParts[0] = "/api/v1/webhooks/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/deliveries/"
+	{
+		// Encode "id" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "id",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.ID); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	pathParts[4] = "/retry"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, RetryWebhookDeliveryOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeRetryWebhookDeliveryResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// UpdateWebhook invokes updateWebhook operation.
+//
+// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
+// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
+// finish.
+//
+// PUT /api/v1/webhooks/{name}
+func (c *Client) UpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error) {
+	res, err := c.sendUpdateWebhook(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendUpdateWebhook(ctx context.Context, request *WebhookUpdate, params UpdateWebhookParams) (res *Webhook, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/webhooks/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeUpdateWebhookRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, UpdateWebhookOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeUpdateWebhookResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

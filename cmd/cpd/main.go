@@ -199,6 +199,7 @@ func serve(ctx context.Context, log *slog.Logger, o options) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return httpserve.Serve(ctx, log, ln, api, api.Shutdown) })
 	g.Go(func() error { return deliverer.Run(ctx) })
+	g.Go(func() error { return delivery.NewWebhooks(log, st, delivery.Config{}).Run(ctx) })
 	g.Go(func() error { return watchUpdates(ctx, log) })
 
 	if err = g.Wait(); err != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/savid/clanker-proxy/pkg/thread"
+	"github.com/savid/clanker-proxy/pkg/webhook"
 )
 
 // ErrAmbiguous is returned when a thread reference matches more than one
@@ -126,7 +127,12 @@ func (s *Store) AddEvent(ctx context.Context, e Event, outbox bool, projection S
 			return fmt.Errorf("write thread: %w", err)
 		}
 
-		return nil
+		origin, self := "incoming", e.To
+		if outbox {
+			origin, self = "outgoing", e.From
+		}
+		mine := projection.Turn == self
+		return queueWebhooks(ctx, tx, webhook.Payload{Type: webhook.ThreadType(e.Action), Origin: origin, At: e.StoredAt, Subject: e.Thread, EventID: e.ID, Peer: projection.Peer, State: projection.State, MyTurn: &mine})
 	})
 }
 

@@ -11,16 +11,16 @@ import (
 )
 
 var (
-	rn18AllowedHeaders = map[string]string{
+	rn22AllowedHeaders = map[string]string{
 		"POST": "Authorization",
 	}
-	rn10AllowedHeaders = map[string]string{
+	rn13AllowedHeaders = map[string]string{
 		"POST": "Authorization,Content-Type",
 	}
-	rn12AllowedHeaders = map[string]string{
+	rn15AllowedHeaders = map[string]string{
 		"GET": "Authorization",
 	}
-	rn15AllowedHeaders = map[string]string{
+	rn18AllowedHeaders = map[string]string{
 		"GET":  "Authorization",
 		"POST": "Content-Type",
 	}
@@ -34,11 +34,11 @@ var (
 		"GET":  "Authorization",
 		"POST": "Authorization,Content-Type",
 	}
-	rn14AllowedHeaders = map[string]string{
+	rn17AllowedHeaders = map[string]string{
 		"DELETE": "Authorization",
 		"GET":    "Authorization",
 	}
-	rn16AllowedHeaders = map[string]string{
+	rn19AllowedHeaders = map[string]string{
 		"GET":  "Authorization",
 		"POST": "Authorization,Content-Type",
 	}
@@ -47,6 +47,21 @@ var (
 	}
 	rn3AllowedHeaders = map[string]string{
 		"POST": "Authorization,Content-Type",
+	}
+	rn10AllowedHeaders = map[string]string{
+		"GET":  "Authorization",
+		"POST": "Authorization,Content-Type",
+	}
+	rn12AllowedHeaders = map[string]string{
+		"DELETE": "Authorization",
+		"GET":    "Authorization",
+		"PUT":    "Authorization,Content-Type",
+	}
+	rn20AllowedHeaders = map[string]string{
+		"GET": "Authorization",
+	}
+	rn25AllowedHeaders = map[string]string{
+		"POST": "Authorization",
 	}
 )
 
@@ -80,7 +95,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.notFound(w, r)
 		return
 	}
-	args := [1]string{}
+	args := [2]string{}
 
 	// Static code generated router with unwrapped path search.
 	switch {
@@ -129,7 +144,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						default:
 							s.notAllowed(w, r, notAllowedParams{
 								allowedMethods: "POST",
-								allowedHeaders: rn18AllowedHeaders,
+								allowedHeaders: rn22AllowedHeaders,
 								acceptPost:     "",
 								acceptPatch:    "",
 							})
@@ -154,7 +169,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						default:
 							s.notAllowed(w, r, notAllowedParams{
 								allowedMethods: "POST",
-								allowedHeaders: rn10AllowedHeaders,
+								allowedHeaders: rn13AllowedHeaders,
 								acceptPost:     "application/json",
 								acceptPatch:    "",
 							})
@@ -206,7 +221,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					default:
 						s.notAllowed(w, r, notAllowedParams{
 							allowedMethods: "GET",
-							allowedHeaders: rn12AllowedHeaders,
+							allowedHeaders: rn15AllowedHeaders,
 							acceptPost:     "",
 							acceptPatch:    "",
 						})
@@ -244,7 +259,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						default:
 							s.notAllowed(w, r, notAllowedParams{
 								allowedMethods: "GET,POST",
-								allowedHeaders: rn15AllowedHeaders,
+								allowedHeaders: rn18AllowedHeaders,
 								acceptPost:     "application/json",
 								acceptPatch:    "",
 							})
@@ -376,7 +391,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							default:
 								s.notAllowed(w, r, notAllowedParams{
 									allowedMethods: "DELETE,GET",
-									allowedHeaders: rn14AllowedHeaders,
+									allowedHeaders: rn17AllowedHeaders,
 									acceptPost:     "",
 									acceptPatch:    "",
 								})
@@ -406,7 +421,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					default:
 						s.notAllowed(w, r, notAllowedParams{
 							allowedMethods: "GET,POST",
-							allowedHeaders: rn16AllowedHeaders,
+							allowedHeaders: rn19AllowedHeaders,
 							acceptPost:     "application/json",
 							acceptPatch:    "",
 						})
@@ -481,6 +496,158 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 				}
 
+			case 'w': // Prefix: "webhooks"
+
+				if l := len("webhooks"); len(elem) >= l && elem[0:l] == "webhooks" {
+					elem = elem[l:]
+				} else {
+					break
+				}
+
+				if len(elem) == 0 {
+					switch r.Method {
+					case "GET":
+						s.handleListWebhooksRequest([0]string{}, elemIsEscaped, w, r)
+					case "POST":
+						s.handleCreateWebhookRequest([0]string{}, elemIsEscaped, w, r)
+					default:
+						s.notAllowed(w, r, notAllowedParams{
+							allowedMethods: "GET,POST",
+							allowedHeaders: rn10AllowedHeaders,
+							acceptPost:     "application/json",
+							acceptPatch:    "",
+						})
+					}
+
+					return
+				}
+				switch elem[0] {
+				case '/': // Prefix: "/"
+
+					if l := len("/"); len(elem) >= l && elem[0:l] == "/" {
+						elem = elem[l:]
+					} else {
+						break
+					}
+
+					// Param: "name"
+					// Match until "/"
+					idx := strings.IndexByte(elem, '/')
+					if idx < 0 {
+						idx = len(elem)
+					}
+					args[0] = elem[:idx]
+					elem = elem[idx:]
+
+					if len(elem) == 0 {
+						switch r.Method {
+						case "DELETE":
+							s.handleDeleteWebhookRequest([1]string{
+								args[0],
+							}, elemIsEscaped, w, r)
+						case "GET":
+							s.handleGetWebhookRequest([1]string{
+								args[0],
+							}, elemIsEscaped, w, r)
+						case "PUT":
+							s.handleUpdateWebhookRequest([1]string{
+								args[0],
+							}, elemIsEscaped, w, r)
+						default:
+							s.notAllowed(w, r, notAllowedParams{
+								allowedMethods: "DELETE,GET,PUT",
+								allowedHeaders: rn12AllowedHeaders,
+								acceptPost:     "",
+								acceptPatch:    "",
+							})
+						}
+
+						return
+					}
+					switch elem[0] {
+					case '/': // Prefix: "/deliveries"
+
+						if l := len("/deliveries"); len(elem) >= l && elem[0:l] == "/deliveries" {
+							elem = elem[l:]
+						} else {
+							break
+						}
+
+						if len(elem) == 0 {
+							switch r.Method {
+							case "GET":
+								s.handleListWebhookDeliveriesRequest([1]string{
+									args[0],
+								}, elemIsEscaped, w, r)
+							default:
+								s.notAllowed(w, r, notAllowedParams{
+									allowedMethods: "GET",
+									allowedHeaders: rn20AllowedHeaders,
+									acceptPost:     "",
+									acceptPatch:    "",
+								})
+							}
+
+							return
+						}
+						switch elem[0] {
+						case '/': // Prefix: "/"
+
+							if l := len("/"); len(elem) >= l && elem[0:l] == "/" {
+								elem = elem[l:]
+							} else {
+								break
+							}
+
+							// Param: "id"
+							// Match until "/"
+							idx := strings.IndexByte(elem, '/')
+							if idx < 0 {
+								idx = len(elem)
+							}
+							args[1] = elem[:idx]
+							elem = elem[idx:]
+
+							if len(elem) == 0 {
+								break
+							}
+							switch elem[0] {
+							case '/': // Prefix: "/retry"
+
+								if l := len("/retry"); len(elem) >= l && elem[0:l] == "/retry" {
+									elem = elem[l:]
+								} else {
+									break
+								}
+
+								if len(elem) == 0 {
+									// Leaf node.
+									switch r.Method {
+									case "POST":
+										s.handleRetryWebhookDeliveryRequest([2]string{
+											args[0],
+											args[1],
+										}, elemIsEscaped, w, r)
+									default:
+										s.notAllowed(w, r, notAllowedParams{
+											allowedMethods: "POST",
+											allowedHeaders: rn25AllowedHeaders,
+											acceptPost:     "",
+											acceptPatch:    "",
+										})
+									}
+
+									return
+								}
+
+							}
+
+						}
+
+					}
+
+				}
+
 			}
 
 		}
@@ -496,7 +663,7 @@ type Route struct {
 	operationGroup string
 	pathPattern    string
 	count          int
-	args           [1]string
+	args           [2]string
 }
 
 // Name returns ogen operation name.
@@ -971,6 +1138,168 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 							default:
 								return
 							}
+						}
+
+					}
+
+				}
+
+			case 'w': // Prefix: "webhooks"
+
+				if l := len("webhooks"); len(elem) >= l && elem[0:l] == "webhooks" {
+					elem = elem[l:]
+				} else {
+					break
+				}
+
+				if len(elem) == 0 {
+					switch method {
+					case "GET":
+						r.name = ListWebhooksOperation
+						r.summary = "List webhooks"
+						r.operationID = "listWebhooks"
+						r.operationGroup = ""
+						r.pathPattern = "/api/v1/webhooks"
+						r.args = args
+						r.count = 0
+						return r, true
+					case "POST":
+						r.name = CreateWebhookOperation
+						r.summary = "Create a webhook"
+						r.operationID = "createWebhook"
+						r.operationGroup = ""
+						r.pathPattern = "/api/v1/webhooks"
+						r.args = args
+						r.count = 0
+						return r, true
+					default:
+						return
+					}
+				}
+				switch elem[0] {
+				case '/': // Prefix: "/"
+
+					if l := len("/"); len(elem) >= l && elem[0:l] == "/" {
+						elem = elem[l:]
+					} else {
+						break
+					}
+
+					// Param: "name"
+					// Match until "/"
+					idx := strings.IndexByte(elem, '/')
+					if idx < 0 {
+						idx = len(elem)
+					}
+					args[0] = elem[:idx]
+					elem = elem[idx:]
+
+					if len(elem) == 0 {
+						switch method {
+						case "DELETE":
+							r.name = DeleteWebhookOperation
+							r.summary = "Delete a webhook"
+							r.operationID = "deleteWebhook"
+							r.operationGroup = ""
+							r.pathPattern = "/api/v1/webhooks/{name}"
+							r.args = args
+							r.count = 1
+							return r, true
+						case "GET":
+							r.name = GetWebhookOperation
+							r.summary = "Read a webhook"
+							r.operationID = "getWebhook"
+							r.operationGroup = ""
+							r.pathPattern = "/api/v1/webhooks/{name}"
+							r.args = args
+							r.count = 1
+							return r, true
+						case "PUT":
+							r.name = UpdateWebhookOperation
+							r.summary = "Update a webhook"
+							r.operationID = "updateWebhook"
+							r.operationGroup = ""
+							r.pathPattern = "/api/v1/webhooks/{name}"
+							r.args = args
+							r.count = 1
+							return r, true
+						default:
+							return
+						}
+					}
+					switch elem[0] {
+					case '/': // Prefix: "/deliveries"
+
+						if l := len("/deliveries"); len(elem) >= l && elem[0:l] == "/deliveries" {
+							elem = elem[l:]
+						} else {
+							break
+						}
+
+						if len(elem) == 0 {
+							switch method {
+							case "GET":
+								r.name = ListWebhookDeliveriesOperation
+								r.summary = "List recent webhook deliveries"
+								r.operationID = "listWebhookDeliveries"
+								r.operationGroup = ""
+								r.pathPattern = "/api/v1/webhooks/{name}/deliveries"
+								r.args = args
+								r.count = 1
+								return r, true
+							default:
+								return
+							}
+						}
+						switch elem[0] {
+						case '/': // Prefix: "/"
+
+							if l := len("/"); len(elem) >= l && elem[0:l] == "/" {
+								elem = elem[l:]
+							} else {
+								break
+							}
+
+							// Param: "id"
+							// Match until "/"
+							idx := strings.IndexByte(elem, '/')
+							if idx < 0 {
+								idx = len(elem)
+							}
+							args[1] = elem[:idx]
+							elem = elem[idx:]
+
+							if len(elem) == 0 {
+								break
+							}
+							switch elem[0] {
+							case '/': // Prefix: "/retry"
+
+								if l := len("/retry"); len(elem) >= l && elem[0:l] == "/retry" {
+									elem = elem[l:]
+								} else {
+									break
+								}
+
+								if len(elem) == 0 {
+									// Leaf node.
+									switch method {
+									case "POST":
+										r.name = RetryWebhookDeliveryOperation
+										r.summary = "Retry a failed webhook delivery"
+										r.operationID = "retryWebhookDelivery"
+										r.operationGroup = ""
+										r.pathPattern = "/api/v1/webhooks/{name}/deliveries/{id}/retry"
+										r.args = args
+										r.count = 2
+										return r, true
+									default:
+										return
+									}
+								}
+
+							}
+
 						}
 
 					}

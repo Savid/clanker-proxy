@@ -23,6 +23,7 @@ import (
 	"github.com/savid/clanker-proxy/internal/inbox"
 	"github.com/savid/clanker-proxy/internal/store"
 	"github.com/savid/clanker-proxy/pkg/thread"
+	"github.com/savid/clanker-proxy/pkg/webhook"
 )
 
 // maxBody bounds request bodies: one thread body plus JSON escaping.
@@ -30,6 +31,13 @@ const maxBody = 1 << 20
 
 // Inbox is what the API needs from the daemon's core.
 type Inbox interface {
+	Webhooks(context.Context) ([]webhook.Config, error)
+	Webhook(context.Context, string) (webhook.Config, error)
+	CreateWebhook(context.Context, webhook.Config) (webhook.Config, error)
+	UpdateWebhook(context.Context, webhook.Config) (webhook.Config, error)
+	DeleteWebhook(context.Context, string) error
+	WebhookDeliveries(context.Context, string) ([]store.WebhookDelivery, error)
+	RetryWebhook(context.Context, string, string) error
 	Self() string
 	URL() string
 	PeerBySecret(ctx context.Context, secret string) (store.Peer, error)
