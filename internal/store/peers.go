@@ -10,7 +10,7 @@ import (
 	"github.com/savid/clanker-proxy/pkg/webhook"
 )
 
-// ErrExists is returned when a peer or webhook of that name already exists.
+// ErrExists is returned when a peer, webhook or agent token of that name already exists.
 var ErrExists = errors.New("already exists")
 
 // Peer statuses.

@@ -36,12 +36,26 @@ type Handler interface {
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, req *Approval, params ApproveRequestParams) (*Peer, error)
+	// CreateAgentToken implements createAgentToken operation.
+	//
+	// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+	// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+	// the name is taken, and with 400 when `expiresAt` is not in the future.
+	//
+	// POST /api/v1/agent-tokens
+	CreateAgentToken(ctx context.Context, req *AgentTokenInput) (*NewAgentToken, error)
 	// CreateWebhook implements createWebhook operation.
 	//
 	// Only future matching events are queued; secrets are never returned.
 	//
 	// POST /api/v1/webhooks
 	CreateWebhook(ctx context.Context, req *WebhookCreate) (*Webhook, error)
+	// DeleteAgentToken implements deleteAgentToken operation.
+	//
+	// The token stops working at once.
+	//
+	// DELETE /api/v1/agent-tokens/{name}
+	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error
 	// DeleteWebhook implements deleteWebhook operation.
 	//
 	// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
@@ -94,6 +108,12 @@ type Handler interface {
 	//
 	// GET /api/v1/webhooks/{name}
 	GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error)
+	// ListAgentTokens implements listAgentTokens operation.
+	//
+	// Every agent token, by name, without the tokens themselves.
+	//
+	// GET /api/v1/agent-tokens
+	ListAgentTokens(ctx context.Context) (*AgentTokenList, error)
 	// ListPeers implements listPeers operation.
 	//
 	// Every peer, requested or active.

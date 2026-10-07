@@ -50,12 +50,26 @@ type Invoker interface {
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, request *Approval, params ApproveRequestParams) (*Peer, error)
+	// CreateAgentToken invokes createAgentToken operation.
+	//
+	// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+	// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+	// the name is taken, and with 400 when `expiresAt` is not in the future.
+	//
+	// POST /api/v1/agent-tokens
+	CreateAgentToken(ctx context.Context, request *AgentTokenInput) (*NewAgentToken, error)
 	// CreateWebhook invokes createWebhook operation.
 	//
 	// Only future matching events are queued; secrets are never returned.
 	//
 	// POST /api/v1/webhooks
 	CreateWebhook(ctx context.Context, request *WebhookCreate) (*Webhook, error)
+	// DeleteAgentToken invokes deleteAgentToken operation.
+	//
+	// The token stops working at once.
+	//
+	// DELETE /api/v1/agent-tokens/{name}
+	DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error
 	// DeleteWebhook invokes deleteWebhook operation.
 	//
 	// Deletes configuration and delivery history, including pending deliveries. An in-flight request may
@@ -108,6 +122,12 @@ type Invoker interface {
 	//
 	// GET /api/v1/webhooks/{name}
 	GetWebhook(ctx context.Context, params GetWebhookParams) (*Webhook, error)
+	// ListAgentTokens invokes listAgentTokens operation.
+	//
+	// Every agent token, by name, without the tokens themselves.
+	//
+	// GET /api/v1/agent-tokens
+	ListAgentTokens(ctx context.Context) (*AgentTokenList, error)
 	// ListPeers invokes listPeers operation.
 	//
 	// Every peer, requested or active.
@@ -289,11 +309,23 @@ func (c *Client) sendActOnThread(ctx context.Context, request *ThreadAction, par
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, ActOnThreadOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -518,6 +550,87 @@ func (c *Client) sendApproveRequest(ctx context.Context, request *Approval, para
 	return result, nil
 }
 
+// CreateAgentToken invokes createAgentToken operation.
+//
+// The token is returned once and only its hash is stored. It may list, read and act on threads, follow
+// the stream and read the owner's name; every other operation refuses it with 403. Fails with 409 when
+// the name is taken, and with 400 when `expiresAt` is not in the future.
+//
+// POST /api/v1/agent-tokens
+func (c *Client) CreateAgentToken(ctx context.Context, request *AgentTokenInput) (*NewAgentToken, error) {
+	res, err := c.sendCreateAgentToken(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendCreateAgentToken(ctx context.Context, request *AgentTokenInput) (res *NewAgentToken, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/agent-tokens"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeCreateAgentTokenRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, CreateAgentTokenOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeCreateAgentTokenResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // CreateWebhook invokes createWebhook operation.
 //
 // Only future matching events are queued; secrets are never returned.
@@ -590,6 +703,103 @@ func (c *Client) sendCreateWebhook(ctx context.Context, request *WebhookCreate) 
 	}()
 
 	result, err := decodeCreateWebhookResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteAgentToken invokes deleteAgentToken operation.
+//
+// The token stops working at once.
+//
+// DELETE /api/v1/agent-tokens/{name}
+func (c *Client) DeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) error {
+	_, err := c.sendDeleteAgentToken(ctx, params)
+	return err
+}
+
+func (c *Client) sendDeleteAgentToken(ctx context.Context, params DeleteAgentTokenParams) (res *DeleteAgentTokenNoContent, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/agent-tokens/"
+	{
+		// Encode "name" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "name",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			if unwrapped := string(params.Name); true {
+				return e.EncodeValue(conv.StringToString(unwrapped))
+			}
+			return nil
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, DeleteAgentTokenOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeDeleteAgentTokenResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -953,11 +1163,23 @@ func (c *Client) sendGetMe(ctx context.Context) (res *Me, err error) {
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, GetMeOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1144,11 +1366,23 @@ func (c *Client) sendGetThread(ctx context.Context, params GetThreadParams) (res
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, GetThreadOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {
@@ -1274,6 +1508,82 @@ func (c *Client) sendGetWebhook(ctx context.Context, params GetWebhookParams) (r
 	}()
 
 	result, err := decodeGetWebhookResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListAgentTokens invokes listAgentTokens operation.
+//
+// Every agent token, by name, without the tokens themselves.
+//
+// GET /api/v1/agent-tokens
+func (c *Client) ListAgentTokens(ctx context.Context) (*AgentTokenList, error) {
+	res, err := c.sendListAgentTokens(ctx)
+	return res, err
+}
+
+func (c *Client) sendListAgentTokens(ctx context.Context) (res *AgentTokenList, err error) {
+
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/agent-tokens"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	{
+		type bitset = [1]uint8
+		var satisfied bitset
+		{
+
+			switch err := c.securityOwnerToken(ctx, ListAgentTokensOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 0
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"OwnerToken\"")
+			}
+		}
+
+		if ok := func() bool {
+		nextRequirement:
+			for _, requirement := range []bitset{
+				{0b00000001},
+			} {
+				for i, mask := range requirement {
+					if satisfied[i]&mask != mask {
+						continue nextRequirement
+					}
+				}
+				return true
+			}
+			return false
+		}(); !ok {
+			return res, ogenerrors.ErrSecurityRequirementIsNotSatisfied
+		}
+	}
+
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer func() {
+		// Drain the body to EOF before closing, so the underlying
+		// connection can be reused by the Transport regardless of the
+		// response status code. See https://github.com/ogen-go/ogen/issues/1670.
+		_, _ = io.Copy(io.Discard, body)
+		_ = body.Close()
+	}()
+
+	result, err := decodeListAgentTokensResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -1564,11 +1874,23 @@ func (c *Client) sendListThreads(ctx context.Context, params ListThreadsParams) 
 				return res, errors.Wrap(err, "security \"OwnerToken\"")
 			}
 		}
+		{
+
+			switch err := c.securityAgentToken(ctx, ListThreadsOperation, r); {
+			case err == nil: // if NO error
+				satisfied[0] |= 1 << 1
+			case errors.Is(err, ogenerrors.ErrSkipClientSecurity):
+				// Skip this security.
+			default:
+				return res, errors.Wrap(err, "security \"AgentToken\"")
+			}
+		}
 
 		if ok := func() bool {
 		nextRequirement:
 			for _, requirement := range []bitset{
 				{0b00000001},
+				{0b00000010},
 			} {
 				for i, mask := range requirement {
 					if satisfied[i]&mask != mask {

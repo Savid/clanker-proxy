@@ -16,11 +16,19 @@ const (
 
 // streamEvents serves the streamEvents operation: a `thread` event with the thread's
 // summary each time a thread changes. It is routed by hand, so it checks the
-// owner token itself, as the spec's default security requires.
+// owner or agent token itself, as the spec's security for it requires.
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if !s.sec.isOwner(bearer(r)) {
+	admitted, err := s.sec.ownerOrAgent(ctx, bearer(r))
+	if err != nil {
+		s.log.ErrorContext(ctx, "stream security failed", "error", err)
+		httpserve.WriteProblem(w, http.StatusInternalServerError, "")
+
+		return
+	}
+
+	if !admitted {
 		httpserve.WriteProblem(w, http.StatusUnauthorized, errUnauthorized.Error())
 
 		return

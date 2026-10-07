@@ -18,15 +18,20 @@ import (
 	"github.com/savid/clanker-proxy/api/rest"
 )
 
-// ownerSource presents the owner token, and nothing for peer operations,
-// which cpctl never calls.
-type ownerSource string
+// tokenSource presents cpctl's token, the owner's or an agent's, under the
+// owner scheme: both are bearer tokens and cpd tells them apart by prefix.
+// cpctl never calls peer operations.
+type tokenSource string
 
-func (s ownerSource) OwnerToken(context.Context, rest.OperationName) (rest.OwnerToken, error) {
+func (s tokenSource) OwnerToken(context.Context, rest.OperationName) (rest.OwnerToken, error) {
 	return rest.OwnerToken{Token: string(s)}, nil
 }
 
-func (ownerSource) PeerSecret(context.Context, rest.OperationName) (rest.PeerSecret, error) {
+func (tokenSource) AgentToken(context.Context, rest.OperationName) (rest.AgentToken, error) {
+	return rest.AgentToken{}, ogenerrors.ErrSkipClientSecurity
+}
+
+func (tokenSource) PeerSecret(context.Context, rest.OperationName) (rest.PeerSecret, error) {
 	return rest.PeerSecret{}, ogenerrors.ErrSkipClientSecurity
 }
 
@@ -84,7 +89,7 @@ func newClient(baseURL, token string) (*rest.Client, error) {
 		return nil, err
 	}
 
-	c, err := rest.NewClient(baseURL, ownerSource(token), rest.WithClient(ownerHTTPClient(requestTimeout)))
+	c, err := rest.NewClient(baseURL, tokenSource(token), rest.WithClient(ownerHTTPClient(requestTimeout)))
 	if err != nil {
 		return nil, fmt.Errorf("client: %w", err)
 	}
@@ -163,7 +168,9 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 	case http.StatusBadRequest:
 		f.exit, f.hint = exitUsage, "cpctl help "+name
 	case http.StatusUnauthorized:
-		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp)"
+		f.exit, f.hint = exitAuth, "set CP_TOKEN (or -token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp), or to an agent token from cpctl token add"
+	case http.StatusForbidden:
+		f.exit, f.hint = exitRefused, "CP_TOKEN is an agent token: it lists, reads and acts on threads; ask the owner to run this"
 	case http.StatusNotFound:
 		f.exit, f.hint = exitNotFound, notFoundHint(name)
 	case http.StatusConflict, http.StatusUnprocessableEntity:
@@ -171,6 +178,8 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 		switch {
 		case name == "webhook add":
 			f.hint = "choose another name, or change the existing one with cpctl webhook set <name>"
+		case name == "token add":
+			f.hint = "choose another name, or revoke the existing one with cpctl token rm <name>"
 		case name == "webhook retry":
 			f.hint = "only failed deliveries of enabled webhooks can be retried; cpctl webhook deliveries <name> -status failed lists them, and cpctl webhook set <name> -enabled=true resumes a paused webhook"
 		case ref != "":
@@ -184,6 +193,9 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 }
 
 func notFoundHint(cmd string) string {
+	if strings.HasPrefix(cmd, "token ") {
+		return "cpctl token ls lists agent tokens"
+	}
 	if strings.HasPrefix(cmd, "webhook ") {
 		return "cpctl webhook ls lists webhook names; cpctl webhook deliveries <name> lists recent delivery IDs"
 	}

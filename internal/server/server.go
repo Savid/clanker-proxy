@@ -56,6 +56,10 @@ type Inbox interface {
 	Act(ctx context.Context, ref string, action thread.Action, body string) (inbox.View, error)
 	Receive(ctx context.Context, peer string, e thread.Event) (inbox.Receipt, error)
 	Subscribe() (<-chan store.Summary, func())
+	CreateAgentToken(ctx context.Context, name string, expires time.Time) (string, store.AgentToken, error)
+	AgentTokens(ctx context.Context) ([]store.AgentToken, error)
+	DeleteAgentToken(ctx context.Context, name string) error
+	AgentByToken(ctx context.Context, token string) (store.AgentToken, error)
 }
 
 // Config holds what the server needs.
@@ -81,11 +85,16 @@ func New(log *slog.Logger, ib Inbox, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("owner token: want %s and at least 28 more characters", inbox.OwnerPrefix)
 	}
 
+	agentOps, err := agentOperations(api.Spec)
+	if err != nil {
+		return nil, err
+	}
+
 	log = httpserve.Logger(log)
 	s := &Server{
 		log:      log,
 		ops:      &operations{log: log, inbox: ib, version: cfg.Version, now: time.Now},
-		sec:      &security{inbox: ib, ownerToken: cfg.OwnerToken},
+		sec:      &security{inbox: ib, ownerToken: cfg.OwnerToken, agentOps: agentOps},
 		shutdown: make(chan struct{}),
 	}
 

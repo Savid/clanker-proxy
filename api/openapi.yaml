@@ -6,11 +6,13 @@ info:
     name: MIT
     identifier: MIT
   description: >-
-    One API with three access levels, declared per operation and checked
+    One API with four access levels, declared per operation and checked
     before any handler runs. **owner** (the default): the daemon's owner,
-    with the token in `<dir>/owner.token`; cpctl uses it. **peer**: another
-    daemon, with the secret it shares with this one; it identifies which peer
-    is calling. **public**: no token; only `getHealth` and `requestPeering`.
+    with the token in `<dir>/owner.token`; cpctl uses it. **agent**: a token
+    the owner creates for an agent working for them; it reads and acts on
+    existing threads and nothing else. **peer**: another daemon, with the
+    secret it shares with this one; it identifies which peer is calling.
+    **public**: no token; only `getHealth` and `requestPeering`.
     This spec is the source of truth for `api/rest` (server and client).
 servers:
   - url: /
@@ -28,6 +30,8 @@ tags:
     description: What peers call.
   - name: webhooks
     description: Signed notifications to owner-configured endpoints.
+  - name: tokens
+    description: Agent tokens, limited to existing threads.
 paths:
   /api/v1/webhooks:
     get:
@@ -184,6 +188,64 @@ paths:
           description: The delivery is queued again.
         default:
           $ref: '#/components/responses/Problem'
+  /api/v1/agent-tokens:
+    get:
+      operationId: listAgentTokens
+      tags: [tokens]
+      summary: List agent tokens
+      description: Every agent token, by name, without the tokens themselves.
+      responses:
+        '200':
+          description: Agent tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTokenList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createAgentToken
+      tags: [tokens]
+      summary: Create an agent token
+      description: >-
+        The token is returned once and only its hash is stored. It may list,
+        read and act on threads, follow the stream and read the owner's name;
+        every other operation refuses it with 403. Fails with 409 when the
+        name is taken, and with 400 when `expiresAt` is not in the future.
+      requestBody:
+        description: The token's name and optional expiry.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTokenInput'
+      responses:
+        '201':
+          description: The new token, shown only here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewAgentToken'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/agent-tokens/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: The agent token's name.
+        schema:
+          $ref: '#/components/schemas/Name'
+    delete:
+      operationId: deleteAgentToken
+      tags: [tokens]
+      summary: Revoke an agent token
+      description: The token stops working at once.
+      responses:
+        '204':
+          description: Revoked.
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/health:
     get:
       operationId: getHealth
@@ -205,6 +267,9 @@ paths:
     get:
       operationId: getMe
       tags: [system]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Read the owner's name and public URL
       description: >-
         The name this daemon offers peers, and the URL it gives them to call back on.
@@ -384,6 +449,9 @@ paths:
     get:
       operationId: listThreads
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: List threads
       description: Newest activity first.
       parameters:
@@ -455,6 +523,9 @@ paths:
     get:
       operationId: getThread
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Read a thread and its events
       description: >-
         The thread's summary and every event, in the order both daemons replay them.
@@ -473,6 +544,9 @@ paths:
     post:
       operationId: actOnThread
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Reply to a thread or move it on
       description: >-
         Fails with 409 when the owner may not take the action now; the
@@ -497,6 +571,9 @@ paths:
     get:
       operationId: streamEvents
       tags: [threads]
+      security:
+        - ownerToken: []
+        - agentToken: []
       summary: Stream thread changes
       description: >-
         Server-sent events. `thread`: a `ThreadSummary`, sent whenever a thread
@@ -618,6 +695,10 @@ components:
       type: http
       scheme: bearer
       description: The secret shared with one peer.
+    agentToken:
+      type: http
+      scheme: bearer
+      description: An agent token the owner created; limited to existing threads.
   parameters:
     WebhookName:
       name: name
@@ -1085,6 +1166,59 @@ components:
         addedAt:
           type: string
           format: date-time
+    AgentTokenInput:
+      description: A new agent token.
+      type: object
+      required: [name]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        expiresAt:
+          type: string
+          format: date-time
+          description: When it stops working. Omitted, it works until revoked.
+    AgentTokenSummary:
+      description: An agent token, without the token.
+      type: object
+      required: [name, createdAt]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        usedAt:
+          type: string
+          format: date-time
+          description: Its last use, to the minute.
+    NewAgentToken:
+      description: A new agent token and the token itself, which is never shown again.
+      type: object
+      required: [name, token, createdAt]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        token:
+          type: string
+          description: The bearer token. Give it to the agent as CP_TOKEN.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    AgentTokenList:
+      description: Agent tokens, by name.
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentTokenSummary'
     PeerList:
       description: >-
         Peers, by name.

@@ -31,7 +31,7 @@ type command struct {
 
 // commands is every command, in the order help lists them.
 func commands() []*command {
-	return slices.Concat(peerCommands(), threadCommands(), actionCommands(), webhookCommands(), updateCommands())
+	return slices.Concat(peerCommands(), threadCommands(), actionCommands(), webhookCommands(), tokenCommands(), updateCommands())
 }
 
 func peerCommands() []*command {

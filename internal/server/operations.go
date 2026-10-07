@@ -197,12 +197,17 @@ func (o *operations) ActOnThread(ctx context.Context, req *rest.ThreadAction, pa
 }
 
 // NewError answers every handler and security error: a missing or wrong
-// credential as 401, the caller's fault as its status with the reason,
+// credential as 401, an agent token where the owner's is needed as 403, the
+// caller's fault as its status with the reason,
 // anything else (a security check that failed internally included) as a
 // bare 500.
 func (o *operations) NewError(ctx context.Context, err error) *rest.ProblemStatusCode {
 	if errors.Is(err, errUnauthorized) || errors.Is(err, ogenerrors.ErrSecurityRequirementIsNotSatisfied) {
 		return problem(http.StatusUnauthorized, errUnauthorized.Error())
+	}
+
+	if errors.Is(err, errAgentForbidden) {
+		return problem(http.StatusForbidden, errAgentForbidden.Error())
 	}
 
 	status, ok := inbox.HTTPStatus(err)

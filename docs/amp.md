@@ -33,12 +33,12 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
   orb, and its agents call back to cpd.
 - **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can
   clone your repositories.
-- **Your owner token**: the `owner.token` file in cpd's data directory
-  (`~/.cp/owner.token` by default). The orb uses it as `CP_TOKEN`, so
-  anything running there can act as you. The guardrails below stop agents
-  from using it for the wrong things, but code an agent runs, such as a test
-  suite a peer asked about, inherits it too. Hand the inbox only to peers you
-  would let run code in that orb.
+- **An agent token, not your owner token.** The orb's `CP_TOKEN` is readable
+  by anything running there, including code an agent runs for a peer. An
+  agent token (`cpctl token add`) can only list, read and act on threads; cpd
+  refuses it for peering, opening threads, webhooks and tokens. If it leaks,
+  someone can read and answer your threads until you run `cpctl token rm`, but
+  cannot add peers, redirect notifications or lock you out.
 
 ## Choosing the project
 
@@ -52,21 +52,24 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
 
 ## Setup
 
-1. **Secrets.** Generate a signing key:
+1. **On your machine**, where cpctl uses your owner token, create the agent
+   token and a webhook signing key:
 
    ```bash
-   openssl rand -base64 32
+   cpctl token add amp-inbox -o amp.token
+   (umask 077; openssl rand -base64 32 > hook.key)
    ```
 
-   In the project's settings, add `CP_WEBHOOK_SECRET` (that key), `CP_URL`
-   (cpd's public URL) and `CP_TOKEN` (the owner token). Prefer the project
-   over Settings → Secrets & Env Vars, which would give your owner token to
-   every orb you start. A running orb picks up secrets after
-   `amp orb restart-processes`.
+2. **Secrets.** In the Amp project's settings, add `CP_URL` (cpd's public
+   URL), `CP_TOKEN` (the contents of `amp.token`) and `CP_WEBHOOK_SECRET`
+   (the contents of `hook.key`). Prefer the project over Settings → Secrets &
+   Env Vars, which would give the token to every orb you start. A running orb
+   picks up secrets after `amp orb restart-processes`. Then delete
+   `amp.token`.
 
-2. **Start the inbox thread** in an orb (executor **New Orb**) in that
+3. **Start the inbox thread** in an orb (executor **New Orb**) in that
    project. Whichever thread loads the plugin first owns the webhook for good,
-   so do the rest of the setup in this thread. Have it:
+   so do this in the thread meant to be the inbox. Have it:
 
    - install `cpctl` (the README's install command) and make sure it is on
      `PATH` for both its shell and plugins; otherwise set `CP_INBOX_CPCTL` to
@@ -75,22 +78,24 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
      workspace root (the repository root in a project) and load it, or run
      `plugins: reload` from the command palette.
 
-   The plugin writes its webhook URL to `cp-inbox/webhook.url` under
-   `$XDG_STATE_HOME` (`~/.local/state` by default), mode 0600, instead of
-   showing it, since anyone with the URL can post events. If the file already
-   exists, it is kept.
+   The plugin keeps its webhook URL in `cp-inbox/webhook.url` under
+   `$XDG_STATE_HOME` (`~/.local/state` by default), mode 0600. If the file
+   already exists, it is kept.
 
-3. **Point cpd at it.** Ask the inbox thread to run this, so the URL and key
-   never leave the orb:
+4. **Point cpd at it.** In that thread, run **cp-inbox: Show webhook URL**
+   from the command palette. The URL appears in a dialog, outside every
+   thread, since anyone with it can post events. Copy it into a private file
+   on your machine and add the webhook there:
 
    ```bash
-   printenv CP_WEBHOOK_SECRET | cpctl webhook add amp \
-     -url-file ~/.local/state/cp-inbox/webhook.url -secret-file - -origin incoming
+   (umask 077; cat > amp.url)   # paste the URL, then Ctrl-D
+   cpctl webhook add amp -url-file amp.url -secret-file hook.key -origin incoming
+   rm amp.url hook.key
    ```
 
    `-origin incoming` keeps your agents' own actions from waking them.
 
-4. **Keep the inbox unarchived.** Archiving it pauses delivery and makes the
+5. **Keep the inbox unarchived.** Archiving it pauses delivery and makes the
    URL return 404. Remove any workspace or personal guidance that tells Amp to
    archive threads when work finishes.
 
@@ -100,7 +105,7 @@ to conversations, and the other threads only gain the `cp_ask_owner` tool.
 
 If the wrong thread became the inbox, delete the `cp-inbox` trigger in
 Settings → Triggers and the `webhook.url` file, reload the plugin in the
-right thread, and run step 3 again with `cpctl webhook set amp -url-file …`.
+right thread, and repeat step 4 with `cpctl webhook set amp -url-file amp.url`.
 After adding a missing secret, restart the orb's processes and reload the
 plugin.
 
@@ -131,9 +136,9 @@ conversation runs, and the files other tools name:
 
 | Commands | Result |
 | --- | --- |
-| `cpctl` on any other thread or peer, `ls`, `inbox`, `requests`, `approve`, `deny`, `peer add`/`rm`, `webhook …`, `update`; `-url`, `-token`, `CP_URL`, `CP_TOKEN` or `CP_DIR` overrides | Refused. |
+| `cpctl` on any other thread, `ls`, `inbox`, `requests`, `approve`, `deny`, `peer …`, `webhook …`, `token …`, `update`; `-url`, `-token`, `CP_URL`, `CP_TOKEN` or `CP_DIR` overrides | Refused. cpd itself refuses the agent token for everything but threads. |
 | Anything naming `CP_TOKEN`, `CP_WEBHOOK_SECRET`, `owner.token`, `/proc/*/environ` or the plugin's state; printing the environment; `gh auth` | Refused. |
-| `git push` (however git's options are placed), GitHub changes (everything but `gh pr`/`issue`/`run`/`repo` reads and `gh search`), `cpctl send`, uploads with `curl`/`wget`, `ssh`/`nc`, copying to other machines, publishing | Asks you to approve that exact command; refused if too long to show. |
+| `git push` (however git's options are placed), GitHub changes (everything but `gh pr`/`issue`/`run`/`repo` reads and `gh search`), uploads with `curl`/`wget`, `ssh`/`nc`, copying to other machines, publishing | Asks you to approve that exact command; refused if too long to show. |
 | Everything else | Runs. |
 
 Commands inside `bash -c`, `eval` and `$(…)` are checked too. A script the

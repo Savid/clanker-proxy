@@ -47,6 +47,7 @@ Common tasks:
   act on a thread              cpctl show <ref>, then one of its "next:" commands
   choose a notification type   cpctl webhook types
   notify chat or HTTP          cpctl help webhook add
+  give an agent thread access  cpctl token add <name> -o <file>
   inspect notification errors  cpctl webhook deliveries <name> -status failed
   check for a release          cpctl update -check
   update both local binaries   cpctl update

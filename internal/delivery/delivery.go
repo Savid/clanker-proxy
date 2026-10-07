@@ -89,6 +89,10 @@ func (secret) OwnerToken(context.Context, rest.OperationName) (rest.OwnerToken, 
 	return rest.OwnerToken{}, ogenerrors.ErrSkipClientSecurity
 }
 
+func (secret) AgentToken(context.Context, rest.OperationName) (rest.AgentToken, error) {
+	return rest.AgentToken{}, ogenerrors.ErrSkipClientSecurity
+}
+
 func (s secret) PeerSecret(context.Context, rest.OperationName) (rest.PeerSecret, error) {
 	if s == "" {
 		return rest.PeerSecret{}, ogenerrors.ErrSkipClientSecurity

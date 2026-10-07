@@ -107,6 +107,125 @@ func (s *Action) UnmarshalText(data []byte) error {
 	}
 }
 
+type AgentToken struct {
+	Token string
+	Roles []string
+}
+
+// GetToken returns the value of Token.
+func (s *AgentToken) GetToken() string {
+	return s.Token
+}
+
+// GetRoles returns the value of Roles.
+func (s *AgentToken) GetRoles() []string {
+	return s.Roles
+}
+
+// SetToken sets the value of Token.
+func (s *AgentToken) SetToken(val string) {
+	s.Token = val
+}
+
+// SetRoles sets the value of Roles.
+func (s *AgentToken) SetRoles(val []string) {
+	s.Roles = val
+}
+
+// A new agent token.
+// Ref: #/components/schemas/AgentTokenInput
+type AgentTokenInput struct {
+	Name Name `json:"name"`
+	// When it stops working. Omitted, it works until revoked.
+	ExpiresAt OptDateTime `json:"expiresAt"`
+}
+
+// GetName returns the value of Name.
+func (s *AgentTokenInput) GetName() Name {
+	return s.Name
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *AgentTokenInput) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// SetName sets the value of Name.
+func (s *AgentTokenInput) SetName(val Name) {
+	s.Name = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *AgentTokenInput) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
+
+// Agent tokens, by name.
+// Ref: #/components/schemas/AgentTokenList
+type AgentTokenList struct {
+	Tokens []AgentTokenSummary `json:"tokens"`
+}
+
+// GetTokens returns the value of Tokens.
+func (s *AgentTokenList) GetTokens() []AgentTokenSummary {
+	return s.Tokens
+}
+
+// SetTokens sets the value of Tokens.
+func (s *AgentTokenList) SetTokens(val []AgentTokenSummary) {
+	s.Tokens = val
+}
+
+// An agent token, without the token.
+// Ref: #/components/schemas/AgentTokenSummary
+type AgentTokenSummary struct {
+	Name      Name        `json:"name"`
+	CreatedAt time.Time   `json:"createdAt"`
+	ExpiresAt OptDateTime `json:"expiresAt"`
+	// Its last use, to the minute.
+	UsedAt OptDateTime `json:"usedAt"`
+}
+
+// GetName returns the value of Name.
+func (s *AgentTokenSummary) GetName() Name {
+	return s.Name
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *AgentTokenSummary) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *AgentTokenSummary) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// GetUsedAt returns the value of UsedAt.
+func (s *AgentTokenSummary) GetUsedAt() OptDateTime {
+	return s.UsedAt
+}
+
+// SetName sets the value of Name.
+func (s *AgentTokenSummary) SetName(val Name) {
+	s.Name = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *AgentTokenSummary) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *AgentTokenSummary) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
+
+// SetUsedAt sets the value of UsedAt.
+func (s *AgentTokenSummary) SetUsedAt(val OptDateTime) {
+	s.UsedAt = val
+}
+
 // How to approve a peering request.
 // Ref: #/components/schemas/Approval
 type Approval struct {
@@ -130,6 +249,9 @@ type Code string
 type Count int32
 
 type DaemonURL url.URL
+
+// DeleteAgentTokenNoContent is response for DeleteAgentToken operation.
+type DeleteAgentTokenNoContent struct{}
 
 // DeleteWebhookNoContent is response for DeleteWebhook operation.
 type DeleteWebhookNoContent struct{}
@@ -560,6 +682,56 @@ func (s *Me) SetVersion(val string) {
 }
 
 type Name string
+
+// A new agent token and the token itself, which is never shown again.
+// Ref: #/components/schemas/NewAgentToken
+type NewAgentToken struct {
+	Name Name `json:"name"`
+	// The bearer token. Give it to the agent as CP_TOKEN.
+	Token     string      `json:"token"`
+	CreatedAt time.Time   `json:"createdAt"`
+	ExpiresAt OptDateTime `json:"expiresAt"`
+}
+
+// GetName returns the value of Name.
+func (s *NewAgentToken) GetName() Name {
+	return s.Name
+}
+
+// GetToken returns the value of Token.
+func (s *NewAgentToken) GetToken() string {
+	return s.Token
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *NewAgentToken) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *NewAgentToken) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// SetName sets the value of Name.
+func (s *NewAgentToken) SetName(val Name) {
+	s.Name = val
+}
+
+// SetToken sets the value of Token.
+func (s *NewAgentToken) SetToken(val string) {
+	s.Token = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *NewAgentToken) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *NewAgentToken) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
 
 // A thread to open with a peer.
 // Ref: #/components/schemas/NewThread

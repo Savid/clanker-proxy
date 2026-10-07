@@ -20,11 +20,12 @@ import (
 	"github.com/savid/clanker-proxy/pkg/thread"
 )
 
-// Secret prefixes, so a token's kind is visible and the two are never
+// Secret prefixes, so a token's kind is visible and kinds are never
 // confused.
 const (
 	OwnerPrefix = "cpo_"
 	PeerPrefix  = "cpp_"
+	AgentPrefix = "cpa_"
 )
 
 // Peering limits.

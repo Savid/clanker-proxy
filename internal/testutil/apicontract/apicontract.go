@@ -135,16 +135,13 @@ func successContentType(t *testing.T, id string, op map[string]any) string {
 }
 
 // Do sends op to h with an empty JSON body and the given bearer token ("" for
-// none). An event stream's request is cancelled, so it ends after starting.
+// none). An event stream's request is cancelled once its response starts, so
+// the stream ends after its security check and headers.
 func Do(t *testing.T, h http.Handler, op Operation, token string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-
-	if op.ContentType == "text/event-stream" {
-		cancel()
-	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(ctx, op.Method, op.Path, strings.NewReader("{}"))
@@ -154,9 +151,25 @@ func Do(t *testing.T, h http.Handler, op Operation, token string) *httptest.Resp
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	h.ServeHTTP(rec, req)
+	var w http.ResponseWriter = rec
+	if op.ContentType == "text/event-stream" {
+		w = &cancelOnStart{ResponseRecorder: rec, cancel: cancel}
+	}
+
+	h.ServeHTTP(w, req)
 
 	return rec
+}
+
+// cancelOnStart cancels the request once a response begins.
+type cancelOnStart struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w *cancelOnStart) WriteHeader(code int) {
+	w.ResponseRecorder.WriteHeader(code)
+	w.cancel()
 }
 
 // Routed reports why rec shows the operation was not routed to a handler:

@@ -301,7 +301,7 @@ export default async function (amp: PluginAPI) {
 		const subject = await conversationFor(event.thread.id)
 		if (!subject) return { action: 'allow' }
 		const command = amp.helpers.shellCommandFromToolCall(event)?.command
-		const verdict = command === undefined ? checkPaths(event.input) : checkShell(command, subject, state.conversations[subject]!.peer)
+		const verdict = command === undefined ? checkPaths(event.input) : checkShell(command, subject)
 		if (verdict.kind === 'allow') return { action: 'allow' }
 		if (verdict.kind === 'forbid') {
 			return { action: 'reject-and-continue', message: `Blocked by cp-inbox: ${verdict.why}. If it is needed, call cp_ask_owner and explain.` }
@@ -346,6 +346,19 @@ export default async function (amp: PluginAPI) {
 				}
 			}),
 	})
+	// The owner copies the URL from a dialog, which stays out of every
+	// thread, to configure cpd where they hold the owner token.
+	amp.registerCommand('cp-inbox-webhook-url', { title: 'Show webhook URL', category: 'cp-inbox', description: 'The URL to give cpctl webhook add' }, async (ctx) => {
+		const saved = (await readFile(urlFile, 'utf8').catch(() => '')).trim()
+		await ctx.ui.input({
+			title: 'cp-inbox webhook URL',
+			helpText:
+				'Copy it into a private file where you run cpctl as the owner, then run cpctl webhook add with -url-file. Anyone with it can post events: never paste it into a thread.',
+			initialValue: saved || url,
+			requireHuman: true,
+		})
+	})
+
 	await mkdir(stateDir, { recursive: true, mode: 0o700 })
 	// Only the inbox's URL belongs here. Without a project, every thread that
 	// loads the plugin gets its own URL, which must not replace it.
@@ -427,7 +440,7 @@ function checkPaths(input: Record<string, unknown>): Verdict {
 // checkShell decides on a shell command from a conversation. It is a
 // guardrail against an agent talked into something, not a sandbox: a script
 // the agent writes and runs is not inspected.
-function checkShell(command: string, subject: string, peer: string, depth = 0): Verdict {
+function checkShell(command: string, subject: string, depth = 0): Verdict {
 	if (/CP_TOKEN|CP_WEBHOOK_SECRET/.test(command) || secretPath.test(command)) return forbid('owner credentials stay with the owner')
 	if (depth > 3) return forbid('the command nests too deeply to check')
 	let verdict = allow
@@ -436,10 +449,10 @@ function checkShell(command: string, subject: string, peer: string, depth = 0): 
 	}
 	// Substitutions run even inside double quotes, where the word splitting
 	// below does not look.
-	for (const m of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) consider(checkShell(m[1] ?? m[2] ?? '', subject, peer, depth + 1))
+	for (const m of command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) consider(checkShell(m[1] ?? m[2] ?? '', subject, depth + 1))
 	for (const words of simpleCommands(command)) {
 		if (verdict.kind === 'forbid') break
-		consider(checkWords(words, subject, peer, depth))
+		consider(checkWords(words, subject, depth))
 	}
 	return verdict
 }
@@ -508,7 +521,7 @@ const readOnlyGitHub: Record<string, Set<string> | true> = {
 	help: true,
 }
 
-function checkWords(all: string[], subject: string, peer: string, depth: number): Verdict {
+function checkWords(all: string[], subject: string, depth: number): Verdict {
 	let i = 0
 	const assigned: string[] = []
 	for (; i < all.length; i++) {
@@ -523,11 +536,11 @@ function checkWords(all: string[], subject: string, peer: string, depth: number)
 
 	if (shells.has(program)) {
 		const c = args.indexOf('-c')
-		return c >= 0 ? checkShell(args[c + 1] ?? '', subject, peer, depth + 1) : allow
+		return c >= 0 ? checkShell(args[c + 1] ?? '', subject, depth + 1) : allow
 	}
 	switch (program) {
 		case 'eval':
-			return checkShell(args.join(' '), subject, peer, depth + 1)
+			return checkShell(args.join(' '), subject, depth + 1)
 		case 'env':
 		case 'printenv':
 			return forbid('the environment holds owner credentials')
@@ -548,7 +561,7 @@ function checkWords(all: string[], subject: string, peer: string, depth: number)
 		case 'perl':
 			return /environ|process\.env|\bENV\b|getenv|Deno\.env/.test(args.join(' ')) ? forbid('the environment holds owner credentials') : allow
 		case 'cpctl':
-			return checkCpctl(args, subject, peer)
+			return checkCpctl(args, subject)
 		case 'git':
 			return checkGit(args)
 		case 'gh': {
@@ -588,8 +601,9 @@ function checkWords(all: string[], subject: string, peer: string, depth: number)
 	}
 }
 
-// checkCpctl keeps a conversation to its own thread and its own peer.
-function checkCpctl(args: string[], subject: string, peer: string): Verdict {
+// checkCpctl keeps a conversation to its own thread. An agent token already
+// refuses everything but threads; this also keeps out other threads.
+function checkCpctl(args: string[], subject: string): Verdict {
 	let i = 0
 	for (; i < args.length && args[i]!.startsWith('-'); i++) {
 		if (/^--?(url|token)(=|$)/.test(args[i]!)) return forbid('cpctl must reach your daemon with your settings')
@@ -607,8 +621,6 @@ function checkCpctl(args: string[], subject: string, peer: string): Verdict {
 		const ref = operands[0] ?? ''
 		return ref.length >= 4 && subject.startsWith(ref) ? allow : forbid(`cpctl ${command} works only on this conversation's thread, ${subject}`)
 	}
-	if (command === 'peer' && operands[0] === 'show' && operands[1] === peer) return allow
-	if (command === 'send') return ask('open a new thread with a peer')
 	return forbid(`cpctl ${command} is for the owner, not a conversation`)
 }
 

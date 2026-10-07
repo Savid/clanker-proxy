@@ -1,7 +1,7 @@
 // Package store keeps the daemon's state in SQLite: the owner, peers and
 // their secrets, pending peering requests, every event, the outbox of events
-// to deliver, a projection of each thread for listing, and the URLs of
-// removed peers whose threads remain.
+// to deliver, a projection of each thread for listing, the URLs of removed
+// peers whose threads remain, agent tokens and webhooks.
 package store
 
 import (
@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS threads (
 	events     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
+CREATE TABLE IF NOT EXISTS agent_tokens (
+	name       TEXT PRIMARY KEY,
+	hash       TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL,
+	expires_at TEXT NOT NULL DEFAULT '',
+	used_at    TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS webhooks (
 	name        TEXT PRIMARY KEY,
 	type        TEXT NOT NULL,
