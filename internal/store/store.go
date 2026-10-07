@@ -1,6 +1,7 @@
 // Package store keeps the daemon's state in SQLite: the owner, peers and
 // their secrets, pending peering requests, every event, the outbox of events
-// to deliver, and a projection of each thread for listing.
+// to deliver, a projection of each thread for listing, and the URLs of
+// removed peers whose threads remain.
 package store
 
 import (
@@ -8,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -28,6 +30,10 @@ CREATE TABLE IF NOT EXISTS peers (
 	secret   TEXT NOT NULL UNIQUE,
 	status   TEXT NOT NULL CHECK (status IN ('requested', 'active')),
 	added_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS former_peers (
+	name TEXT PRIMARY KEY,
+	url  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS requests (
 	id     TEXT PRIMARY KEY,
@@ -77,8 +83,19 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open opens or creates the database at path.
+// Open opens or creates the database at path. A new database is readable by
+// the owner only, since it holds peer secrets; SQLite gives its journal
+// files the same mode.
 func Open(ctx context.Context, path string) (*Store, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+
+	if err = f.Close(); err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+
 	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
 
 	db, err := sql.Open("sqlite", dsn)

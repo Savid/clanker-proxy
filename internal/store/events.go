@@ -16,19 +16,16 @@ import (
 // thread.
 var ErrAmbiguous = errors.New("ambiguous thread reference")
 
-// Delivery statuses. Received events came from the peer; the rest are the
-// owner's, in the outbox.
-const (
-	DeliveryReceived = "received"
-	DeliveryFailed   = "failed"
-)
+// DeliveryFailed is the status of an event that will never be delivered.
+const DeliveryFailed = "failed"
 
 // Event is a stored event and, for the owner's, its delivery.
 type Event struct {
 	thread.Event
 	// StoredAt is when this daemon stored it.
 	StoredAt time.Time
-	Delivery Delivery
+	// Delivery is nil for the peer's events.
+	Delivery *Delivery
 }
 
 // Delivery is where an event is in reaching the peer.
@@ -164,9 +161,8 @@ func (s *Store) ThreadEvents(ctx context.Context, threadID string) ([]Event, err
 			return nil, fmt.Errorf("stored event: %w", err)
 		}
 
-		e.Delivery = Delivery{Status: DeliveryReceived}
 		if status.Valid {
-			e.Delivery = Delivery{Status: status.String, Attempts: int(attempts.Int64), LastError: lastErr.String}
+			e.Delivery = &Delivery{Status: status.String, Attempts: int(attempts.Int64), LastError: lastErr.String}
 			if e.Delivery.NextAttemptAt, err = parseNullTime(nextAttempt); err != nil {
 				return nil, err
 			}

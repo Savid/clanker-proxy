@@ -131,11 +131,11 @@ type Count int32
 
 type DaemonURL url.URL
 
-// How an event is getting to the peer.
+// How the owner's event is getting to the peer; absent on the peer's events.
 // Ref: #/components/schemas/Delivery
 type Delivery struct {
-	// `received`: from the peer. `pending`: the owner's, not yet delivered. `delivered`: the peer stored
-	// it. `failed`: never to be delivered: the peer refused it, or the peer was removed or replaced.
+	// `pending`: not yet delivered; retried with backoff for a week. `delivered`: the peer stored it.
+	// `failed`: never to be delivered: the peer refused it, retries ran out, or the peer was removed.
 	Status        DeliveryStatus `json:"status"`
 	Attempts      Count          `json:"attempts"`
 	LastError     OptString      `json:"lastError"`
@@ -193,12 +193,11 @@ func (s *Delivery) SetDeliveredAt(val OptDateTime) {
 	s.DeliveredAt = val
 }
 
-// `received`: from the peer. `pending`: the owner's, not yet delivered. `delivered`: the peer stored
-// it. `failed`: never to be delivered: the peer refused it, or the peer was removed or replaced.
+// `pending`: not yet delivered; retried with backoff for a week. `delivered`: the peer stored it.
+// `failed`: never to be delivered: the peer refused it, retries ran out, or the peer was removed.
 type DeliveryStatus string
 
 const (
-	DeliveryStatusReceived  DeliveryStatus = "received"
 	DeliveryStatusPending   DeliveryStatus = "pending"
 	DeliveryStatusDelivered DeliveryStatus = "delivered"
 	DeliveryStatusFailed    DeliveryStatus = "failed"
@@ -207,7 +206,6 @@ const (
 // AllValues returns all DeliveryStatus values.
 func (DeliveryStatus) AllValues() []DeliveryStatus {
 	return []DeliveryStatus{
-		DeliveryStatusReceived,
 		DeliveryStatusPending,
 		DeliveryStatusDelivered,
 		DeliveryStatusFailed,
@@ -217,8 +215,6 @@ func (DeliveryStatus) AllValues() []DeliveryStatus {
 // MarshalText implements encoding.TextMarshaler.
 func (s DeliveryStatus) MarshalText() ([]byte, error) {
 	switch s {
-	case DeliveryStatusReceived:
-		return []byte(s), nil
 	case DeliveryStatusPending:
 		return []byte(s), nil
 	case DeliveryStatusDelivered:
@@ -233,9 +229,6 @@ func (s DeliveryStatus) MarshalText() ([]byte, error) {
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (s *DeliveryStatus) UnmarshalText(data []byte) error {
 	switch DeliveryStatus(data) {
-	case DeliveryStatusReceived:
-		*s = DeliveryStatusReceived
-		return nil
 	case DeliveryStatusPending:
 		*s = DeliveryStatusPending
 		return nil
@@ -714,6 +707,52 @@ func (o OptDateTime) Get() (v time.Time, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptDateTime) Or(d time.Time) time.Time {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptDelivery returns new OptDelivery with value set to v.
+func NewOptDelivery(v Delivery) OptDelivery {
+	return OptDelivery{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptDelivery is optional Delivery.
+type OptDelivery struct {
+	Value Delivery
+	Set   bool
+}
+
+// IsSet returns true if OptDelivery was set.
+func (o OptDelivery) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptDelivery) Reset() {
+	var v Delivery
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptDelivery) SetTo(v Delivery) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptDelivery) Get() (v Delivery, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptDelivery) Or(d Delivery) Delivery {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -1661,17 +1700,22 @@ type RequestRef string
 // Merged schema.
 // Ref: #/components/schemas/Thread
 type Thread struct {
-	ID        ID          `json:"id"`
-	Title     Title       `json:"title"`
-	Kind      ThreadKind  `json:"kind"`
-	Labels    Labels      `json:"labels"`
-	Sender    Name        `json:"sender"`
-	Recipient Name        `json:"recipient"`
-	Peer      Name        `json:"peer"`
-	State     ThreadState `json:"state"`
-	Turn      OptName     `json:"turn"`
+	ID        ID         `json:"id"`
+	Title     Title      `json:"title"`
+	Kind      ThreadKind `json:"kind"`
+	Labels    Labels     `json:"labels"`
+	Sender    Name       `json:"sender"`
+	Recipient Name       `json:"recipient"`
+	Peer      Name       `json:"peer"`
+	// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
+	// asked and ack, ask, resolve or decline it.
+	Role  ThreadRole  `json:"role"`
+	State ThreadState `json:"state"`
+	Turn  OptName     `json:"turn"`
 	// The thread is waiting on the owner.
-	MyTurn      bool      `json:"myTurn"`
+	MyTurn bool `json:"myTurn"`
+	// What the owner may do now, for actOnThread. `comment` is always among them.
+	Actions     []Action  `json:"actions"`
 	OpenedAt    time.Time `json:"openedAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	Events      Count     `json:"events"`
@@ -1716,6 +1760,11 @@ func (s *Thread) GetPeer() Name {
 	return s.Peer
 }
 
+// GetRole returns the value of Role.
+func (s *Thread) GetRole() ThreadRole {
+	return s.Role
+}
+
 // GetState returns the value of State.
 func (s *Thread) GetState() ThreadState {
 	return s.State
@@ -1729,6 +1778,11 @@ func (s *Thread) GetTurn() OptName {
 // GetMyTurn returns the value of MyTurn.
 func (s *Thread) GetMyTurn() bool {
 	return s.MyTurn
+}
+
+// GetActions returns the value of Actions.
+func (s *Thread) GetActions() []Action {
+	return s.Actions
 }
 
 // GetOpenedAt returns the value of OpenedAt.
@@ -1796,6 +1850,11 @@ func (s *Thread) SetPeer(val Name) {
 	s.Peer = val
 }
 
+// SetRole sets the value of Role.
+func (s *Thread) SetRole(val ThreadRole) {
+	s.Role = val
+}
+
 // SetState sets the value of State.
 func (s *Thread) SetState(val ThreadState) {
 	s.State = val
@@ -1809,6 +1868,11 @@ func (s *Thread) SetTurn(val OptName) {
 // SetMyTurn sets the value of MyTurn.
 func (s *Thread) SetMyTurn(val bool) {
 	s.MyTurn = val
+}
+
+// SetActions sets the value of Actions.
+func (s *Thread) SetActions(val []Action) {
+	s.Actions = val
 }
 
 // SetOpenedAt sets the value of OpenedAt.
@@ -1873,14 +1937,13 @@ func (s *ThreadAction) SetBody(val OptBody) {
 type ThreadEvent struct {
 	ID     ID        `json:"id"`
 	From   Name      `json:"from"`
-	To     Name      `json:"to"`
 	At     time.Time `json:"at"`
 	Action Action    `json:"action"`
 	Body   OptBody   `json:"body"`
 	// Why the event did not change the thread: the other side's action came first, or it was not its
 	// author's to take. Its body still stands.
-	Ignored  OptString `json:"ignored"`
-	Delivery Delivery  `json:"delivery"`
+	Ignored  OptString   `json:"ignored"`
+	Delivery OptDelivery `json:"delivery"`
 }
 
 // GetID returns the value of ID.
@@ -1891,11 +1954,6 @@ func (s *ThreadEvent) GetID() ID {
 // GetFrom returns the value of From.
 func (s *ThreadEvent) GetFrom() Name {
 	return s.From
-}
-
-// GetTo returns the value of To.
-func (s *ThreadEvent) GetTo() Name {
-	return s.To
 }
 
 // GetAt returns the value of At.
@@ -1919,7 +1977,7 @@ func (s *ThreadEvent) GetIgnored() OptString {
 }
 
 // GetDelivery returns the value of Delivery.
-func (s *ThreadEvent) GetDelivery() Delivery {
+func (s *ThreadEvent) GetDelivery() OptDelivery {
 	return s.Delivery
 }
 
@@ -1931,11 +1989,6 @@ func (s *ThreadEvent) SetID(val ID) {
 // SetFrom sets the value of From.
 func (s *ThreadEvent) SetFrom(val Name) {
 	s.From = val
-}
-
-// SetTo sets the value of To.
-func (s *ThreadEvent) SetTo(val Name) {
-	s.To = val
 }
 
 // SetAt sets the value of At.
@@ -1959,7 +2012,7 @@ func (s *ThreadEvent) SetIgnored(val OptString) {
 }
 
 // SetDelivery sets the value of Delivery.
-func (s *ThreadEvent) SetDelivery(val Delivery) {
+func (s *ThreadEvent) SetDelivery(val OptDelivery) {
 	s.Delivery = val
 }
 
@@ -2020,6 +2073,49 @@ func (s *ThreadList) GetThreads() []ThreadSummary {
 // SetThreads sets the value of Threads.
 func (s *ThreadList) SetThreads(val []ThreadSummary) {
 	s.Threads = val
+}
+
+// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
+// asked and ack, ask, resolve or decline it.
+type ThreadRole string
+
+const (
+	ThreadRoleSender    ThreadRole = "sender"
+	ThreadRoleRecipient ThreadRole = "recipient"
+)
+
+// AllValues returns all ThreadRole values.
+func (ThreadRole) AllValues() []ThreadRole {
+	return []ThreadRole{
+		ThreadRoleSender,
+		ThreadRoleRecipient,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ThreadRole) MarshalText() ([]byte, error) {
+	switch s {
+	case ThreadRoleSender:
+		return []byte(s), nil
+	case ThreadRoleRecipient:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ThreadRole) UnmarshalText(data []byte) error {
+	switch ThreadRole(data) {
+	case ThreadRoleSender:
+		*s = ThreadRoleSender
+		return nil
+	case ThreadRoleRecipient:
+		*s = ThreadRoleRecipient
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
 }
 
 // Where a thread is in its workflow. `closed`, `declined` and `withdrawn` end it; a closed thread can
@@ -2104,17 +2200,22 @@ func (s *ThreadState) UnmarshalText(data []byte) error {
 // A thread without its events.
 // Ref: #/components/schemas/ThreadSummary
 type ThreadSummary struct {
-	ID        ID          `json:"id"`
-	Title     Title       `json:"title"`
-	Kind      ThreadKind  `json:"kind"`
-	Labels    Labels      `json:"labels"`
-	Sender    Name        `json:"sender"`
-	Recipient Name        `json:"recipient"`
-	Peer      Name        `json:"peer"`
-	State     ThreadState `json:"state"`
-	Turn      OptName     `json:"turn"`
+	ID        ID         `json:"id"`
+	Title     Title      `json:"title"`
+	Kind      ThreadKind `json:"kind"`
+	Labels    Labels     `json:"labels"`
+	Sender    Name       `json:"sender"`
+	Recipient Name       `json:"recipient"`
+	Peer      Name       `json:"peer"`
+	// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
+	// asked and ack, ask, resolve or decline it.
+	Role  ThreadSummaryRole `json:"role"`
+	State ThreadState       `json:"state"`
+	Turn  OptName           `json:"turn"`
 	// The thread is waiting on the owner.
-	MyTurn      bool      `json:"myTurn"`
+	MyTurn bool `json:"myTurn"`
+	// What the owner may do now, for actOnThread. `comment` is always among them.
+	Actions     []Action  `json:"actions"`
 	OpenedAt    time.Time `json:"openedAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	Events      Count     `json:"events"`
@@ -2157,6 +2258,11 @@ func (s *ThreadSummary) GetPeer() Name {
 	return s.Peer
 }
 
+// GetRole returns the value of Role.
+func (s *ThreadSummary) GetRole() ThreadSummaryRole {
+	return s.Role
+}
+
 // GetState returns the value of State.
 func (s *ThreadSummary) GetState() ThreadState {
 	return s.State
@@ -2170,6 +2276,11 @@ func (s *ThreadSummary) GetTurn() OptName {
 // GetMyTurn returns the value of MyTurn.
 func (s *ThreadSummary) GetMyTurn() bool {
 	return s.MyTurn
+}
+
+// GetActions returns the value of Actions.
+func (s *ThreadSummary) GetActions() []Action {
+	return s.Actions
 }
 
 // GetOpenedAt returns the value of OpenedAt.
@@ -2232,6 +2343,11 @@ func (s *ThreadSummary) SetPeer(val Name) {
 	s.Peer = val
 }
 
+// SetRole sets the value of Role.
+func (s *ThreadSummary) SetRole(val ThreadSummaryRole) {
+	s.Role = val
+}
+
 // SetState sets the value of State.
 func (s *ThreadSummary) SetState(val ThreadState) {
 	s.State = val
@@ -2245,6 +2361,11 @@ func (s *ThreadSummary) SetTurn(val OptName) {
 // SetMyTurn sets the value of MyTurn.
 func (s *ThreadSummary) SetMyTurn(val bool) {
 	s.MyTurn = val
+}
+
+// SetActions sets the value of Actions.
+func (s *ThreadSummary) SetActions(val []Action) {
+	s.Actions = val
 }
 
 // SetOpenedAt sets the value of OpenedAt.
@@ -2270,6 +2391,49 @@ func (s *ThreadSummary) SetUndelivered(val Count) {
 // SetFailed sets the value of Failed.
 func (s *ThreadSummary) SetFailed(val Count) {
 	s.Failed = val
+}
+
+// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
+// asked and ack, ask, resolve or decline it.
+type ThreadSummaryRole string
+
+const (
+	ThreadSummaryRoleSender    ThreadSummaryRole = "sender"
+	ThreadSummaryRoleRecipient ThreadSummaryRole = "recipient"
+)
+
+// AllValues returns all ThreadSummaryRole values.
+func (ThreadSummaryRole) AllValues() []ThreadSummaryRole {
+	return []ThreadSummaryRole{
+		ThreadSummaryRoleSender,
+		ThreadSummaryRoleRecipient,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ThreadSummaryRole) MarshalText() ([]byte, error) {
+	switch s {
+	case ThreadSummaryRoleSender:
+		return []byte(s), nil
+	case ThreadSummaryRoleRecipient:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ThreadSummaryRole) UnmarshalText(data []byte) error {
+	switch ThreadSummaryRole(data) {
+	case ThreadSummaryRoleSender:
+		*s = ThreadSummaryRoleSender
+		return nil
+	case ThreadSummaryRoleRecipient:
+		*s = ThreadSummaryRoleRecipient
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
 }
 
 type Title string

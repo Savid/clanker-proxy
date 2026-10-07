@@ -10,7 +10,7 @@ import (
 	ht "github.com/ogen-go/ogen/http"
 )
 
-func encodeActOnThreadResponse(response *Thread, w http.ResponseWriter) error {
+func encodeActOnThreadResponse(response *ThreadSummary, w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
 
@@ -165,7 +165,7 @@ func encodeNotifyPeeringAcceptedResponse(response *NotifyPeeringAcceptedNoConten
 	return nil
 }
 
-func encodeOpenThreadResponse(response *Thread, w http.ResponseWriter) error {
+func encodeOpenThreadResponse(response *ThreadSummary, w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(201)
 

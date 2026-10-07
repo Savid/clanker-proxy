@@ -156,6 +156,29 @@ func (t Thread) NextClock() int64 {
 	return c + 1
 }
 
+// maxLead is how far past NextClock a peer's event may be. An honest peer's
+// clock is one past the events it holds, which can run ahead of this
+// daemon's only by the peer's own events that this daemon refused.
+const maxLead = 1000
+
+// CheckClock reports why a peer's event e has a clock the thread cannot take,
+// or nil. Peers deliver in order, so each author's clocks rise; a lower one
+// would replay ahead of what its author already said. A clock far ahead
+// would use up the room below MaxClock.
+func (t Thread) CheckClock(e Event) error {
+	for _, a := range t.Events {
+		if a.From == e.From && a.Clock >= e.Clock {
+			return fmt.Errorf("clock %d is not after %s's clock %d in this thread", e.Clock, e.From, a.Clock)
+		}
+	}
+
+	if limit := t.NextClock() + maxLead; e.Clock > limit {
+		return fmt.Errorf("clock %d is past %d, this thread's limit", e.Clock, limit)
+	}
+
+	return nil
+}
+
 // Check reports why e may not apply to the thread as it stands, or nil.
 func (t Thread) Check(e Event) error {
 	if e.Thread != t.ID {
@@ -210,6 +233,28 @@ func (t Thread) after(e Event) State {
 	default:
 		return t.State
 	}
+}
+
+// Allowed is what user may do to the thread as it stands, in Actions order.
+// A participant may always comment.
+func (t Thread) Allowed(user string) []Action {
+	role, ok := t.RoleOf(user)
+	if !ok {
+		return nil
+	}
+
+	rules := Rules()
+
+	var out []Action
+
+	for _, a := range Actions() {
+		r, ruled := rules[a]
+		if a == ActionComment || ruled && r.By == role && slices.Contains(r.From, t.State) {
+			out = append(out, a)
+		}
+	}
+
+	return out
 }
 
 // RoleOf is user's role in the thread.

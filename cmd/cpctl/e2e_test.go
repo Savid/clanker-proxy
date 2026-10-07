@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -150,14 +151,14 @@ func (p *person) waitTurn(t *testing.T, ref string) threadJSON {
 }
 
 // peer makes from ask to, checks to sees the same code, and approves.
-func peer(t *testing.T, from, to *person, as string) {
+func peer(t *testing.T, from, to *person) {
 	t.Helper()
 
 	var asked struct {
 		Code   string `json:"code"`
 		Status string `json:"status"`
 	}
-	from.json(t, &asked, "peer", "add", as, to.url, "-m", "hi, it's "+from.name)
+	from.json(t, &asked, "peer", "add", to.name, to.url, "-m", "hi, it's "+from.name)
 
 	var reqs struct {
 		Requests []struct {
@@ -183,7 +184,7 @@ func TestPeersWorkAThread(t *testing.T) {
 		t.Fatalf("me = %s", out)
 	}
 
-	peer(t, alice, bob, "bob")
+	peer(t, alice, bob)
 
 	if out := bob.cp(t, "peer", "ls"); !strings.Contains(out, "alice") || !strings.Contains(out, "active") {
 		t.Fatalf("bob's peers = %s", out)
@@ -294,46 +295,215 @@ func TestSendBeforeApproval(t *testing.T) {
 	}
 }
 
+// exitOf is the exit code cpctl would end with.
+func exitOf(err error) int {
+	if f, ok := errors.AsType[*failure](err); ok {
+		return f.exit
+	}
+
+	return 0
+}
+
+// Each refusal ends with the exit code an agent branches on.
 func TestRefusals(t *testing.T) {
 	t.Parallel()
 
 	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")
 
-	if _, err := alice.try(t, "send", "bob", "hi"); err == nil || !strings.Contains(err.Error(), "not a peer") {
+	if _, err := alice.try(t, "send", "bob", "hi"); exitOf(err) != exitNotFound {
 		t.Fatalf("send to non-peer = %v", err)
 	}
 
-	peer(t, alice, bob, "bob")
+	peer(t, alice, bob)
 
 	var sent threadJSON
 	alice.json(t, &sent, "send", "bob", "Do the thing")
 
-	if _, err := alice.try(t, "resolve", sent.ID, "-m", "done"); err == nil || !strings.Contains(err.Error(), "only the recipient") {
-		t.Fatalf("sender resolve = %v", err)
+	out, err := alice.try(t, "resolve", sent.ID, "-m", "done")
+	if exitOf(err) != exitRefused || !strings.Contains(out, "you can now comment, withdraw") || !strings.Contains(out, "hint: cpctl show") {
+		t.Fatalf("sender resolve = %v\n%s", err, out)
 	}
 
-	if _, err := bob.try(t, "show", "zzzz"); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err = bob.try(t, "show", "zzzz"); exitOf(err) != exitNotFound {
 		t.Fatalf("show unknown = %v", err)
 	}
 
 	stranger := &person{name: "stranger", url: bob.url, token: inbox.NewSecret(inbox.OwnerPrefix)}
-	if _, err := stranger.try(t, "inbox"); err == nil || !strings.Contains(err.Error(), "401") {
+	if _, err = stranger.try(t, "inbox"); exitOf(err) != exitAuth {
 		t.Fatalf("wrong owner token = %v", err)
 	}
 
 	// The stream refuses it too, and wait gives up at once instead of
 	// retrying until its timeout.
-	if _, err := stranger.try(t, "wait", "-timeout", "5s"); err == nil || !strings.Contains(err.Error(), "401") {
+	if _, err = stranger.try(t, "wait", "-timeout", "5s"); exitOf(err) != exitAuth {
 		t.Fatalf("wait with a wrong owner token = %v", err)
 	}
 
-	if _, err := bob.try(t, "approve", "nope"); err == nil || !strings.Contains(err.Error(), "400") {
+	if _, err = bob.try(t, "approve", "nope"); exitOf(err) != exitUsage {
 		t.Fatalf("approve malformed = %v", err)
 	}
 
-	if _, err := bob.try(t, "approve", "deadbeef"); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err = bob.try(t, "approve", "deadbeef"); exitOf(err) != exitNotFound {
 		t.Fatalf("approve unknown = %v", err)
 	}
+
+	if _, err = bob.try(t, "resolve", sent.ID); exitOf(err) != exitUsage {
+		t.Fatalf("resolve without a body = %v", err)
+	}
+
+	if _, err = bob.try(t, "wait", sent.ID[:8], "-timeout", "50ms"); err != nil {
+		t.Fatalf("wait on a thread already waiting on bob = %v", err)
+	}
+
+	if _, err = alice.try(t, "wait", sent.ID[:8], "-timeout", "50ms"); exitOf(err) != exitTimeout {
+		t.Fatalf("wait that times out = %v", err)
+	}
+
+	unreachable := &person{name: "alice", url: "http://127.0.0.1:1", token: alice.token}
+	if _, err = unreachable.try(t, "me"); exitOf(err) != exitUnreachable {
+		t.Fatalf("cpd not running = %v", err)
+	}
+}
+
+// An agent learns the CLI from its help: every command is listed, and each
+// has its own help with flags and an example.
+func TestHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	if err := run(t.Context(), nil, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range commands() {
+		if !strings.Contains(stdout.String(), "  "+c.name) {
+			t.Errorf("overview does not list %q", c.name)
+		}
+
+		var one bytes.Buffer
+		if err := run(t.Context(), append([]string{"help"}, strings.Fields(c.name)...), strings.NewReader(""), &one, &stderr); err != nil {
+			t.Fatalf("help %s: %v", c.name, err)
+		}
+
+		if !strings.HasPrefix(one.String(), "cpctl "+c.name) || !strings.Contains(one.String(), "Example:\n  cpctl "+c.name) {
+			t.Errorf("help %s =\n%s", c.name, one.String())
+		}
+	}
+
+	stdout.Reset()
+
+	if err := run(t.Context(), []string{"send", "-h"}, strings.NewReader(""), &stdout, &stderr); err != nil ||
+		!strings.Contains(stdout.String(), "Example:") {
+		t.Errorf("send -h = %v\n%s", err, stdout.String())
+	}
+
+	for _, args := range [][]string{{"frobnicate"}, {"peer"}, {"show"}, {"ls", "-bogus"}} {
+		stderr.Reset()
+
+		err := run(t.Context(), args, strings.NewReader(""), &stdout, &stderr)
+		if exitOf(err) != exitUsage || !strings.Contains(stderr.String(), "hint: cpctl help") {
+			t.Errorf("%v = %v\n%s", args, err, stderr.String())
+		}
+	}
+}
+
+// Text output ends with the commands that come next; -json may follow the
+// command and turns errors into JSON too.
+func TestAgentOutput(t *testing.T) {
+	t.Parallel()
+
+	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")
+	peer(t, alice, bob)
+
+	out := alice.cp(t, "send", "bob", "Review", "-m", "please")
+	if !strings.Contains(out, "next:\n  cpctl wait ") || !strings.Contains(out, "cpctl withdraw ") {
+		t.Errorf("send output:\n%s", out)
+	}
+
+	var sum struct {
+		ID      string   `json:"id"`
+		Role    string   `json:"role"`
+		Actions []string `json:"actions"`
+		Log     any      `json:"log"`
+	}
+	if err := json.Unmarshal([]byte(alice.cp(t, "send", "bob", "Second", "-json")), &sum); err != nil {
+		t.Fatal(err)
+	}
+
+	if sum.Role != "sender" || strings.Join(sum.Actions, ",") != "comment,withdraw" || sum.Log != nil {
+		t.Errorf("send -json = %+v", sum)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for _, err := bob.try(t, "show", sum.ID); err != nil; _, err = bob.try(t, "show", sum.ID) {
+		if time.Now().After(deadline) {
+			t.Fatalf("thread never reached bob: %v", err)
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if out = bob.cp(t, "show", sum.ID[:8]); !strings.Contains(out, "cpctl resolve "+sum.ID[:8]+` -m "<result>"`) {
+		t.Errorf("recipient's show:\n%s", out)
+	}
+
+	out, err := bob.try(t, "show", "zzzz", "-json")
+
+	var e struct {
+		Error struct {
+			Exit   int    `json:"exit"`
+			Status int    `json:"status"`
+			Hint   string `json:"hint"`
+		} `json:"error"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &e); jsonErr != nil || exitOf(err) != exitNotFound ||
+		e.Error.Exit != exitNotFound || e.Error.Status != http.StatusNotFound || e.Error.Hint == "" {
+		t.Errorf("show unknown -json = %v, %+v\n%s", err, e, out)
+	}
+}
+
+// When the other side has already asked, peer add points at their request
+// instead of crossing it with a second one.
+func TestPeerAddWhenAlreadyAsked(t *testing.T) {
+	t.Parallel()
+
+	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")
+	alice.cp(t, "peer", "add", "bob", bob.url)
+
+	out, err := bob.try(t, "peer", "add", "alice", alice.url)
+	if exitOf(err) != exitRefused || !strings.Contains(out, "approve that request") {
+		t.Fatalf("peer add back = %v\n%s", err, out)
+	}
+}
+
+func TestDuplicatePeerKeepsExistingThreads(t *testing.T) {
+	t.Parallel()
+
+	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")
+	peer(t, alice, bob)
+
+	var sent threadJSON
+	alice.json(t, &sent, "send", "bob", "Original thread")
+	bob.waitTurn(t, "")
+
+	for _, url := range []string{bob.url, bob.url + "/"} {
+		out, err := alice.try(t, "peer", "add", "robert", url)
+		if exitOf(err) != exitRefused || !strings.Contains(out, "already a peer") {
+			t.Fatalf("duplicate daemon = %v\n%s", err, out)
+		}
+	}
+
+	var requests struct {
+		Requests []struct{ ID string } `json:"requests"`
+	}
+	bob.json(t, &requests, "requests")
+	if len(requests.Requests) != 0 {
+		t.Fatal("duplicate daemon received a new peering request")
+	}
+
+	bob.cp(t, "resolve", sent.ID, "-m", "Done")
+	alice.waitTurn(t, sent.ID)
+	converge(t, alice, bob, sent.ID, "resolved", 2)
 }
 
 // A stranger cannot pass off a request as a friend's: approving it calls the

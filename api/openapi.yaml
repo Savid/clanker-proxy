@@ -68,8 +68,8 @@ paths:
       description: >-
         Another daemon asks this one's owner to accept it as a peer, offering
         the secret both will use. Nothing is accepted from it until the owner
-        approves. Requests expire after a week. Fails with 429 when too many
-        are pending.
+        approves. Requests expire after a week; at most 20 wait, and a new
+        one drops the oldest.
       security: []
       requestBody:
         description: The requester and the secret it offers.
@@ -128,7 +128,8 @@ paths:
         secret it offered: only if that daemon confirms does the requester
         become a peer, under the name given or the one they asked for. So a
         request cannot claim someone else's URL. Fails with 502 when their
-        daemon does not confirm; the request stays.
+        daemon does not confirm; the request stays. If confirmation is
+        interrupted, the request and any previous peer are restored.
       requestBody:
         description: What to call the new peer.
         required: true
@@ -169,7 +170,9 @@ paths:
         Makes a secret, sends it with a peering request to the daemon at
         `url`, and saves the peer as `requested`. Events to them queue until
         their owner approves; then they deliver. Fails with 502 when their
-        daemon cannot be reached, and saves nothing.
+        daemon cannot be reached, and saves nothing. Fails with 409 when
+        the name or URL already belongs to a peer; each daemon has one name
+        here. Trailing slashes on daemon URLs are removed.
       requestBody:
         description: Who to ask, and where.
         required: true
@@ -210,7 +213,8 @@ paths:
       summary: Remove a peer
       description: >-
         Their secret stops working and undelivered events to them fail.
-        Threads are kept.
+        Threads are kept, so their name can later go only to a peer at the
+        same URL.
       responses:
         '204':
           description: The peer is gone.
@@ -278,11 +282,11 @@ paths:
               $ref: '#/components/schemas/NewThread'
       responses:
         '201':
-          description: The new thread.
+          description: The new thread, without its events.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Thread'
+                $ref: '#/components/schemas/ThreadSummary'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/threads/{ref}:
@@ -311,9 +315,8 @@ paths:
       tags: [threads]
       summary: Reply to a thread or move it on
       description: >-
-        Fails with 409 when the owner may not take the action now: the
-        recipient acks, asks, resolves and declines; the sender closes,
-        reopens and withdraws; either comments.
+        Fails with 409 when the owner may not take the action now; the
+        thread's `actions` lists the ones they may.
       requestBody:
         description: The action, with an optional body.
         required: true
@@ -323,11 +326,11 @@ paths:
               $ref: '#/components/schemas/ThreadAction'
       responses:
         '200':
-          description: The thread with the event applied.
+          description: The thread with the event applied, without its events.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Thread'
+                $ref: '#/components/schemas/ThreadSummary'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/stream:
@@ -357,7 +360,9 @@ paths:
       description: >-
         The peer's secret says who sent it. Delivering the same event again is
         harmless and answers `duplicate`. Fails with 422 when its thread is
-        unknown or not shared with this peer.
+        unknown or not shared with this peer, or its clock is not after the
+        peer's earlier events in the thread; with 503, to retry later, when
+        it is dated more than ten minutes ahead.
       security:
         - peerSecret: []
       requestBody:
@@ -463,12 +468,12 @@ components:
       maxLength: 36
     Title:
       type: string
-      description: A thread's one-line title, at most 200 bytes of UTF-8.
+      description: A thread's one-line title, at most 200 characters.
       minLength: 1
       maxLength: 200
     Body:
       type: string
-      description: Markdown, at most 65536 bytes of UTF-8.
+      description: Markdown, at most 65536 characters.
       maxLength: 65536
     Note:
       type: string
@@ -724,7 +729,7 @@ components:
       description: >-
         A thread without its events.
       type: object
-      required: [id, title, kind, labels, sender, recipient, peer, state, myTurn, openedAt, updatedAt, events, undelivered, failed]
+      required: [id, title, kind, labels, sender, recipient, peer, role, state, myTurn, actions, openedAt, updatedAt, events, undelivered, failed]
       properties:
         id:
           $ref: '#/components/schemas/ID'
@@ -740,6 +745,13 @@ components:
           $ref: '#/components/schemas/Name'
         peer:
           $ref: '#/components/schemas/Name'
+        role:
+          type: string
+          description: >-
+            The owner's part. `sender`: they opened it and close, reopen or
+            withdraw it. `recipient`: they were asked and ack, ask, resolve
+            or decline it.
+          enum: [sender, recipient]
         state:
           $ref: '#/components/schemas/ThreadState'
         turn:
@@ -747,6 +759,13 @@ components:
         myTurn:
           type: boolean
           description: The thread is waiting on the owner.
+        actions:
+          type: array
+          description: >-
+            What the owner may do now, for actOnThread. `comment` is always
+            among them.
+          items:
+            $ref: '#/components/schemas/Action'
         openedAt:
           type: string
           format: date-time
@@ -776,13 +795,11 @@ components:
       description: >-
         One event in a thread, as this daemon holds it.
       type: object
-      required: [id, from, to, at, action, delivery]
+      required: [id, from, at, action]
       properties:
         id:
           $ref: '#/components/schemas/ID'
         from:
-          $ref: '#/components/schemas/Name'
-        to:
           $ref: '#/components/schemas/Name'
         at:
           type: string
@@ -801,18 +818,18 @@ components:
           $ref: '#/components/schemas/Delivery'
     Delivery:
       description: >-
-        How an event is getting to the peer.
+        How the owner's event is getting to the peer; absent on the peer's
+        events.
       type: object
       required: [status, attempts]
       properties:
         status:
           type: string
           description: >-
-            `received`: from the peer. `pending`: the owner's, not yet
-            delivered. `delivered`: the peer stored it. `failed`: never to be
-            delivered: the peer refused it, or the peer was removed or
-            replaced.
-          enum: [received, pending, delivered, failed]
+            `pending`: not yet delivered; retried with backoff for a week.
+            `delivered`: the peer stored it. `failed`: never to be delivered:
+            the peer refused it, retries ran out, or the peer was removed.
+          enum: [pending, delivered, failed]
         attempts:
           $ref: '#/components/schemas/Count'
         lastError:

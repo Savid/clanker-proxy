@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +32,7 @@ const (
 	MaxPendingRequests = 20
 	RequestTTL         = 7 * 24 * time.Hour
 	maxURL             = 512
+	rollbackTimeout    = 5 * time.Second
 )
 
 var secretPattern = regexp.MustCompile(`^cpp_[A-Za-z0-9_-]{43}$`)
@@ -87,6 +89,9 @@ func (b *Inbox) PeerBySecret(ctx context.Context, secret string) (store.Peer, er
 // AddPeer asks the daemon at url to become peers, under a new secret, and
 // saves them as requested. Nothing is saved if they cannot be reached.
 func (b *Inbox) AddPeer(ctx context.Context, name, peerURL, note string) (store.Peer, error) {
+	b.peerMu.Lock()
+	defer b.peerMu.Unlock()
+
 	name, err := b.newPeerName(ctx, name)
 	if err != nil {
 		return store.Peer{}, err
@@ -94,6 +99,16 @@ func (b *Inbox) AddPeer(ctx context.Context, name, peerURL, note string) (store.
 
 	if err = ValidURL(peerURL); err != nil {
 		return store.Peer{}, errorf(KindInvalid, "%v", err)
+	}
+
+	peerURL = strings.TrimRight(peerURL, "/")
+
+	if _, err = b.approvable(ctx, name, peerURL); err != nil {
+		return store.Peer{}, err
+	}
+
+	if err = b.notAskedBy(ctx, peerURL); err != nil {
+		return store.Peer{}, err
 	}
 
 	if b.url == "" {
@@ -117,6 +132,25 @@ func (b *Inbox) AddPeer(ctx context.Context, name, peerURL, note string) (store.
 	b.log.InfoContext(ctx, "peering requested", "peer", name, "url", peerURL, "code", Code(p.Secret))
 
 	return p, nil
+}
+
+// notAskedBy refuses to ask the daemon at url when it has already asked
+// this one: approving its request peers them, and asking back would only
+// cross the two requests.
+func (b *Inbox) notAskedBy(ctx context.Context, url string) error {
+	reqs, err := b.Requests(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, r := range reqs {
+		if r.URL == url {
+			return errorf(KindConflict, "%s already asked to peer as %s (request %s, code %s); approve that request instead",
+				url, r.Name, r.ID, Code(r.Secret))
+		}
+	}
+
+	return nil
 }
 
 // validName normalizes a participant's name, or says why it is invalid.
@@ -170,6 +204,8 @@ func (b *Inbox) RequestReceived(ctx context.Context, req PeeringRequest) (string
 		return "", errorf(KindInvalid, "%v", err)
 	}
 
+	req.URL = strings.TrimRight(req.URL, "/")
+
 	if !secretPattern.MatchString(req.Secret) {
 		return "", errorf(KindInvalid, "secret: want cpp_ and 43 base64url characters")
 	}
@@ -177,16 +213,16 @@ func (b *Inbox) RequestReceived(ctx context.Context, req PeeringRequest) (string
 	now := b.now().UTC()
 	r := store.Request{ID: uuid.NewString()[:8], Name: name, URL: req.URL, Secret: req.Secret, Note: req.Note, At: now}
 
-	err = b.store.AddRequest(ctx, r, MaxPendingRequests, now.Add(-RequestTTL))
-	if errors.Is(err, store.ErrFull) {
-		return "", errorf(KindTooMany, "too many pending requests; try later")
-	}
-
+	dropped, err := b.store.AddRequest(ctx, r, MaxPendingRequests, now.Add(-RequestTTL))
 	if err != nil {
 		return "", err
 	}
 
 	b.log.InfoContext(ctx, "peering request received", "name", name, "url", req.URL, "code", Code(req.Secret))
+
+	if dropped > 0 {
+		b.log.WarnContext(ctx, "peering requests dropped to make room", "dropped", dropped, "max", MaxPendingRequests)
+	}
 
 	return Code(req.Secret), nil
 }
@@ -202,6 +238,9 @@ func (b *Inbox) Requests(ctx context.Context) ([]store.Request, error) {
 // That proves the URL is the requester's, and nothing they send on hearing
 // back can arrive before they are a peer here.
 func (b *Inbox) Approve(ctx context.Context, id, name string) (store.Peer, error) {
+	b.peerMu.Lock()
+	defer b.peerMu.Unlock()
+
 	now := b.now().UTC()
 
 	r, err := b.store.Request(ctx, id, now.Add(-RequestTTL))
@@ -233,11 +272,19 @@ func (b *Inbox) Approve(ctx context.Context, id, name string) (store.Peer, error
 	}
 
 	if err = b.fed.Accepted(ctx, r.URL, r.Secret); err != nil {
-		if undoErr := b.store.Unapprove(ctx, p, prev, r); undoErr != nil {
+		// A disconnected owner still needs the unconfirmed approval undone.
+		undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
+
+		if undoErr := b.store.Unapprove(undoCtx, p, prev, r); undoErr != nil {
 			return store.Peer{}, fmt.Errorf("undo approval of %s: %w", n, undoErr)
 		}
 
 		return store.Peer{}, errorf(KindUpstream, "the daemon at %s did not confirm this request, so it is not approved: %v", r.URL, err)
+	}
+
+	if err = b.store.DeleteRequestsFrom(ctx, p.URL); err != nil {
+		return p, err
 	}
 
 	b.log.InfoContext(ctx, "peering approved", "peer", p.Name, "url", p.URL)
@@ -246,10 +293,30 @@ func (b *Inbox) Approve(ctx context.Context, id, name string) (store.Peer, error
 	return p, nil
 }
 
+// boundElsewhere refuses name for the daemon at url when a removed peer of
+// that name, at another URL, left threads here: threads name their
+// participants, so the new daemon would take them over.
+func (b *Inbox) boundElsewhere(ctx context.Context, name, url string) error {
+	was, err := b.store.FormerURL(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	if was != "" && was != url {
+		return errorf(KindConflict, "%s was a peer at %s and threads with them are kept; give this one another name", name, was)
+	}
+
+	return nil
+}
+
 // approvable checks that a request from url can become the peer called name,
 // and returns the peer it replaces: one of that name at the same URL, or
 // nil.
 func (b *Inbox) approvable(ctx context.Context, name, url string) (*store.Peer, error) {
+	if err := b.boundElsewhere(ctx, name, url); err != nil {
+		return nil, err
+	}
+
 	peers, err := b.store.Peers(ctx)
 	if err != nil {
 		return nil, err
@@ -262,7 +329,7 @@ func (b *Inbox) approvable(ctx context.Context, name, url string) (*store.Peer, 
 		case p.Name == name && p.URL != url:
 			return nil, errorf(KindConflict, "another peer is called %s; approve with another name", name)
 		case p.Name != name && p.URL == url:
-			return nil, errorf(KindConflict, "%s is already a peer at %s; remove them first or approve as %s", p.Name, url, p.Name)
+			return nil, errorf(KindConflict, "%s is already a peer at %s; use that name or remove them first", p.Name, url)
 		case p.Name == name:
 			prev = &p
 		}
@@ -283,17 +350,24 @@ func (b *Inbox) Deny(ctx context.Context, id string) error {
 }
 
 // Accepted marks peer active, because their owner approved: events queued
-// for them are due now.
+// for them are due now, and their own requests to this daemon are moot.
 func (b *Inbox) Accepted(ctx context.Context, peer string) error {
 	changed, err := b.store.Activate(ctx, peer, b.now().UTC())
+	if err != nil || !changed {
+		return err
+	}
+
+	p, err := b.store.Peer(ctx, peer)
 	if err != nil {
 		return err
 	}
 
-	if changed {
-		b.log.InfoContext(ctx, "peering accepted", "peer", peer)
-		b.poke()
+	if err = b.store.DeleteRequestsFrom(ctx, p.URL); err != nil {
+		return err
 	}
+
+	b.log.InfoContext(ctx, "peering accepted", "peer", peer)
+	b.poke()
 
 	return nil
 }
@@ -315,9 +389,17 @@ func (b *Inbox) Peers(ctx context.Context) ([]store.Peer, error) {
 	return b.store.Peers(ctx)
 }
 
-// RemovePeer forgets a peer.
+// RemovePeer forgets a peer. Threads with them stay, and their name stays
+// with their URL; see boundElsewhere.
 func (b *Inbox) RemovePeer(ctx context.Context, name string) error {
 	n, _ := thread.NormalizeName(name)
+
+	b.peerMu.Lock()
+	defer b.peerMu.Unlock()
+
+	// Under mu, so no event of theirs is stored after they are gone.
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	err := b.store.RemovePeer(ctx, n)
 	if errors.Is(err, store.ErrNotFound) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ogen-go/ogen/ogenerrors"
+	"github.com/ogen-go/ogen/validate"
 
 	"github.com/savid/clanker-proxy/api"
 	"github.com/savid/clanker-proxy/api/rest"
@@ -97,7 +98,7 @@ func New(log *slog.Logger, ib Inbox, cfg Config) (*Server, error) {
 				return
 			}
 
-			httpserve.WriteProblem(w, code, err.Error())
+			httpserve.WriteProblem(w, code, invalidInput(err))
 		}),
 		rest.WithNotFound(func(w http.ResponseWriter, _ *http.Request) {
 			httpserve.WriteProblem(w, http.StatusNotFound, "no such API route")
@@ -135,4 +136,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Shutdown ends open streams; pass it to httpserve.Serve.
 func (s *Server) Shutdown() {
 	close(s.shutdown)
+}
+
+// invalidInput names what in a request ogen refused and why, without the
+// decoder's call chain.
+func invalidInput(err error) string {
+	if v, ok := errors.AsType[*validate.Error](err); ok {
+		parts := make([]string, 0, len(v.Fields))
+		for _, f := range v.Fields {
+			parts = append(parts, fmt.Sprintf("invalid %s: %v", f.Name, f.Error))
+		}
+
+		return strings.Join(parts, "; ")
+	}
+
+	if p, ok := errors.AsType[*ogenerrors.DecodeParamError](err); ok {
+		return fmt.Sprintf("invalid %s: %v", p.Name, p.Err)
+	}
+
+	if r, ok := errors.AsType[*ogenerrors.DecodeRequestError](err); ok {
+		return fmt.Sprintf("invalid request body: %v", r.Err)
+	}
+
+	return err.Error()
 }

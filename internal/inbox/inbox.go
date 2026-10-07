@@ -57,6 +57,11 @@ type Inbox struct {
 	// state.
 	mu sync.Mutex
 
+	// Owner peering changes must keep their checked names, URLs and rollback
+	// snapshots until the callback finishes. Peer callbacks do not take this
+	// lock, so they can confirm while an owner operation is waiting on them.
+	peerMu sync.Mutex
+
 	subMu sync.Mutex
 	subs  map[chan store.Summary]struct{}
 
@@ -110,11 +115,19 @@ func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Recei
 	}
 
 	if e.At.After(b.now().Add(maxFutureSkew)) {
-		return Receipt{}, errorf(KindUnprocessable, "event time %s is in the future", e.At.Format(time.RFC3339))
+		return Receipt{}, errorf(KindUnavailable, "event time %s is ahead of this daemon's clock; retry later",
+			e.At.Format(time.RFC3339))
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// RemovePeer may have run since the secret was checked.
+	if _, err := b.store.Peer(ctx, peer); errors.Is(err, store.ErrNotFound) {
+		return Receipt{}, errorf(KindUnauthorized, "unknown peer secret")
+	} else if err != nil {
+		return Receipt{}, err
+	}
 
 	dup, err := b.duplicate(ctx, e)
 	if err != nil || dup {
@@ -184,7 +197,28 @@ func (b *Inbox) Act(ctx context.Context, ref string, action thread.Action, body 
 		return View{}, err
 	}
 
+	if err = b.delivered(ctx, id); err != nil {
+		return View{}, err
+	}
+
 	return b.submit(ctx, thread.Event{ID: uuid.NewString(), Thread: id, To: sum.Peer, Action: action, Body: body})
+}
+
+// delivered refuses a thread whose open the peer will never get: anything
+// more sent on it would be refused as a thread they do not hold.
+func (b *Inbox) delivered(ctx context.Context, id string) error {
+	events, err := b.store.ThreadEvents(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range events {
+		if e.ID == id && e.Delivery != nil && e.Delivery.Status == store.DeliveryFailed {
+			return errorf(KindConflict, "%s never received this thread (%s); send a new one", e.To, e.Delivery.LastError)
+		}
+	}
+
+	return nil
 }
 
 // submit completes, checks and stores an owner's event, and queues it.
@@ -243,7 +277,8 @@ func (b *Inbox) duplicate(ctx context.Context, e thread.Event) (bool, error) {
 
 // next replays e onto its thread. The event must be between the thread's
 // participants. own marks the owner's event: it must apply, and it is given
-// the thread's next clock, so it replays after everything the owner saw.
+// the thread's next clock, so it replays after everything the owner saw. A
+// peer's event may fail to apply, but its clock must pass CheckClock.
 func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thread, error) {
 	stored, err := b.store.ThreadEvents(ctx, e.Thread)
 	if err != nil {
@@ -280,8 +315,10 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 		e.Clock = t.NextClock()
 
 		if err = t.Check(*e); err != nil {
-			return thread.Thread{}, errorf(KindConflict, "%v", err)
+			return thread.Thread{}, errorf(KindConflict, "%v; you can now %s", err, actionList(t.Allowed(e.From)))
 		}
+	} else if err = t.CheckClock(*e); err != nil {
+		return thread.Thread{}, errorf(KindUnprocessable, "%v", err)
 	}
 
 	t, err = thread.Replay(append(events, *e))
@@ -290,6 +327,15 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 	}
 
 	return t, nil
+}
+
+func actionList(actions []thread.Action) string {
+	names := make([]string, 0, len(actions))
+	for _, a := range actions {
+		names = append(names, string(a))
+	}
+
+	return strings.Join(names, ", ")
 }
 
 // opened is the thread an open event starts.

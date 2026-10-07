@@ -10,16 +10,17 @@ import (
 type Handler interface {
 	// ActOnThread implements actOnThread operation.
 	//
-	// Fails with 409 when the owner may not take the action now: the recipient acks, asks, resolves and
-	// declines; the sender closes, reopens and withdraws; either comments.
+	// Fails with 409 when the owner may not take the action now; the thread's `actions` lists the ones
+	// they may.
 	//
 	// POST /api/v1/threads/{ref}/events
-	ActOnThread(ctx context.Context, req *ThreadAction, params ActOnThreadParams) (*Thread, error)
+	ActOnThread(ctx context.Context, req *ThreadAction, params ActOnThreadParams) (*ThreadSummary, error)
 	// AddPeer implements addPeer operation.
 	//
 	// Makes a secret, sends it with a peering request to the daemon at `url`, and saves the peer as
 	// `requested`. Events to them queue until their owner approves; then they deliver. Fails with 502 when
-	// their daemon cannot be reached, and saves nothing.
+	// their daemon cannot be reached, and saves nothing. Fails with 409 when the name or URL already
+	// belongs to a peer; each daemon has one name here. Trailing slashes on daemon URLs are removed.
 	//
 	// POST /api/v1/peers
 	AddPeer(ctx context.Context, req *PeerInput) (*Peer, error)
@@ -28,14 +29,16 @@ type Handler interface {
 	// First calls the requester's daemon, at the URL it gave, with the secret it offered: only if that
 	// daemon confirms does the requester become a peer, under the name given or the one they asked for. So
 	// a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm; the
-	// request stays.
+	// request stays. If confirmation is interrupted, the request and any previous peer are restored.
 	//
 	// POST /api/v1/peering-requests/{id}/approve
 	ApproveRequest(ctx context.Context, req *Approval, params ApproveRequestParams) (*Peer, error)
 	// DeliverEvent implements deliverEvent operation.
 	//
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
-	// `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer.
+	// `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
+	// not after the peer's earlier events in the thread; with 503, to retry later, when it is dated more
+	// than ten minutes ahead.
 	//
 	// POST /api/v1/federation/events
 	DeliverEvent(ctx context.Context, req *Event) (*Receipt, error)
@@ -100,18 +103,19 @@ type Handler interface {
 	// The thread is stored and queued for delivery to the peer.
 	//
 	// POST /api/v1/threads
-	OpenThread(ctx context.Context, req *NewThread) (*Thread, error)
+	OpenThread(ctx context.Context, req *NewThread) (*ThreadSummary, error)
 	// RemovePeer implements removePeer operation.
 	//
-	// Their secret stops working and undelivered events to them fail. Threads are kept.
+	// Their secret stops working and undelivered events to them fail. Threads are kept, so their name can
+	// later go only to a peer at the same URL.
 	//
 	// DELETE /api/v1/peers/{name}
 	RemovePeer(ctx context.Context, params RemovePeerParams) error
 	// RequestPeering implements requestPeering operation.
 	//
 	// Another daemon asks this one's owner to accept it as a peer, offering the secret both will use.
-	// Nothing is accepted from it until the owner approves. Requests expire after a week. Fails with 429
-	// when too many are pending.
+	// Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait,
+	// and a new one drops the oldest.
 	//
 	// POST /api/v1/peering-requests
 	RequestPeering(ctx context.Context, req *PeeringRequest) (*RequestReceipt, error)

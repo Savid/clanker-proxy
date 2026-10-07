@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -135,21 +136,41 @@ func TestRequestLimits(t *testing.T) {
 		t.Errorf("oversized body: %d %s", rec.Code, rec.Body.String())
 	}
 
-	if rec := post(`{"name":"Not A Name","url":"http://x.test","secret":"cpp_x"}`); rec.Code != http.StatusBadRequest {
+	// A refused field is named plainly, without the decoder's call chain.
+	if rec := post(`{"name":"Not A Name","url":"http://x.test","secret":"cpp_x"}`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), `"detail":"invalid name: `) {
 		t.Errorf("bad name: %d %s", rec.Code, rec.Body.String())
+	}
+
+	if rec := post(`not json`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), `"detail":"invalid request body: `) {
+		t.Errorf("bad JSON: %d %s", rec.Code, rec.Body.String())
 	}
 
 	if rec := post(`{"name":"x","url":"http://x.test/` + strings.Repeat("a", 600) + `","secret":"` + inbox.NewSecret(inbox.PeerPrefix) + `"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("long url: %d %s", rec.Code, rec.Body.String())
 	}
 
-	// Pending requests are capped; past the cap they are refused.
-	var last *httptest.ResponseRecorder
+	// Pending requests are capped: past the cap, a new one is taken and the
+	// oldest dropped, so a flood cannot shut out later requests.
 	for i := range inbox.MaxPendingRequests + 1 {
-		last = post(`{"name":"x` + string(rune('a'+i)) + `","url":"http://x.test","secret":"` + inbox.NewSecret(inbox.PeerPrefix) + `"}`)
+		rec := post(`{"name":"x` + string(rune('a'+i)) + `","url":"http://x.test","secret":"` + inbox.NewSecret(inbox.PeerPrefix) + `"}`)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d answered %d %s", i, rec.Code, rec.Body.String())
+		}
 	}
 
-	if last.Code != http.StatusTooManyRequests {
-		t.Errorf("request past the cap answered %d %s", last.Code, last.Body.String())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/peering-requests", nil)
+	req.Header.Set("Authorization", "Bearer "+f.owner)
+	f.h.ServeHTTP(rec, req)
+
+	var list struct{ Requests []struct{ Name string } }
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := len(list.Requests); n != inbox.MaxPendingRequests || list.Requests[0].Name != "xb" {
+		t.Errorf("pending after the cap: %d, oldest %+v; want %d from xb", n, list.Requests[0], inbox.MaxPendingRequests)
 	}
 }

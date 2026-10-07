@@ -180,6 +180,111 @@ func TestReplayErrors(t *testing.T) {
 	}
 }
 
+func TestCheckClock(t *testing.T) {
+	t.Parallel()
+
+	var b builder
+
+	resolve := b.ev(bob, thread.ActionResolve) // clock 2
+	closed := b.ev(alice, thread.ActionClose)  // clock 3
+
+	th, err := thread.Replay([]thread.Event{b.open(thread.KindRequest), resolve, closed})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		from  string
+		clock int64
+		ok    bool
+	}{
+		"after everything":           {bob, 4, true},
+		"concurrent with alice":      {bob, 3, true},
+		"at bob's own earlier clock": {bob, 2, false},
+		"before bob's own clock":     {bob, 1, false},
+		"at alice's own clock":       {alice, 3, false},
+		"at the lead limit":          {bob, th.NextClock() + 1000, true},
+		"past the lead limit":        {bob, th.NextClock() + 1001, false},
+	} {
+		e := b.ev(tc.from, thread.ActionDecline)
+		e.Clock = tc.clock
+
+		if got := th.CheckClock(e); (got == nil) != tc.ok {
+			t.Errorf("%s: CheckClock = %v, want ok %v", name, got, tc.ok)
+		}
+	}
+}
+
+func TestLengthsCountCharacters(t *testing.T) {
+	t.Parallel()
+
+	var b builder
+
+	open := b.open(thread.KindRequest)
+	open.Title = strings.Repeat("界", thread.MaxTitle)
+	open.Body = strings.Repeat("界", thread.MaxBody)
+
+	if err := open.Validate(); err != nil {
+		t.Errorf("multibyte title and body at the limits: %v", err)
+	}
+
+	open.Title += "界"
+	if err := open.Validate(); err == nil {
+		t.Error("title one character over the limit passed")
+	}
+}
+
+func TestAllowed(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		state     thread.State
+		sender    []thread.Action
+		recipient []thread.Action
+	}{
+		{
+			thread.StateOpen,
+			[]thread.Action{thread.ActionComment, thread.ActionWithdraw},
+			[]thread.Action{thread.ActionComment, thread.ActionAck, thread.ActionNeedsInput, thread.ActionResolve, thread.ActionDecline},
+		},
+		{
+			thread.StateAcked,
+			[]thread.Action{thread.ActionComment, thread.ActionWithdraw},
+			[]thread.Action{thread.ActionComment, thread.ActionNeedsInput, thread.ActionResolve, thread.ActionDecline},
+		},
+		{
+			thread.StateNeedsInput,
+			[]thread.Action{thread.ActionComment, thread.ActionWithdraw},
+			[]thread.Action{thread.ActionComment, thread.ActionResolve, thread.ActionDecline},
+		},
+		{
+			thread.StateResolved,
+			[]thread.Action{thread.ActionComment, thread.ActionClose, thread.ActionReopen},
+			[]thread.Action{thread.ActionComment},
+		},
+		{
+			thread.StateClosed,
+			[]thread.Action{thread.ActionComment, thread.ActionReopen},
+			[]thread.Action{thread.ActionComment},
+		},
+		{thread.StateDeclined, []thread.Action{thread.ActionComment}, []thread.Action{thread.ActionComment}},
+		{thread.StateWithdrawn, []thread.Action{thread.ActionComment}, []thread.Action{thread.ActionComment}},
+	} {
+		th := thread.Thread{Sender: alice, Recipient: bob, State: tc.state}
+		if got := th.Allowed(alice); !slices.Equal(got, tc.sender) {
+			t.Errorf("%s: sender may %v, want %v", tc.state, got, tc.sender)
+		}
+
+		if got := th.Allowed(bob); !slices.Equal(got, tc.recipient) {
+			t.Errorf("%s: recipient may %v, want %v", tc.state, got, tc.recipient)
+		}
+
+		if got := th.Allowed("mallory"); got != nil {
+			t.Errorf("%s: outsider may %v", tc.state, got)
+		}
+	}
+}
+
 func TestTurn(t *testing.T) {
 	t.Parallel()
 
@@ -277,6 +382,7 @@ func TestNormalizeName(t *testing.T) {
 	for in, want := range map[string]bool{
 		"Savid": true, "a-b": true, "-a": false, "a--b": false, "a-": false, "": false,
 		strings.Repeat("a", 39): true, strings.Repeat("a", 40): false, "a_b": false,
+		"a" + strings.Repeat("-b", 19): true, "a" + strings.Repeat("-b", 20): false,
 	} {
 		if _, ok := thread.NormalizeName(in); ok != want {
 			t.Errorf("NormalizeName(%q) ok = %v, want %v", in, ok, want)

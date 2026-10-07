@@ -57,8 +57,8 @@ func TestReceive(t *testing.T) {
 		t.Errorf("reused ID: %v", err)
 	}
 
-	// An event dated well into the future is refused.
-	if _, err = ib.Receive(t.Context(), "bob", openFrom(uuid.NewString(), now.Add(time.Hour))); status(t, err) != http.StatusUnprocessableEntity {
+	// An event dated well into the future waits for this daemon's clock.
+	if _, err = ib.Receive(t.Context(), "bob", openFrom(uuid.NewString(), now.Add(time.Hour))); status(t, err) != http.StatusServiceUnavailable {
 		t.Errorf("future event: %v", err)
 	}
 
@@ -105,6 +105,70 @@ func TestOwnerActions(t *testing.T) {
 	// Nothing is queued for a peer that is gone.
 	if _, err = ib.Act(t.Context(), v.Summary.ID, thread.ActionComment, "anyone?"); status(t, err) != http.StatusNotFound {
 		t.Errorf("act after the peer left: %v", err)
+	}
+
+	// Their threads stay, so "bob" can only be the daemon at bob's URL
+	// (which fails here only because nobody answers).
+	if _, err = ib.AddPeer(t.Context(), "bob", "http://imposter.test", ""); status(t, err) != http.StatusConflict {
+		t.Errorf("add another daemon as bob: %v", err)
+	}
+
+	if _, err = ib.AddPeer(t.Context(), "bob", "http://bob.test", ""); status(t, err) != http.StatusBadGateway {
+		t.Errorf("add bob again: %v", err)
+	}
+
+	if _, err = ib.RequestReceived(t.Context(), inbox.PeeringRequest{Name: "bob", URL: "http://imposter.test", Secret: inbox.NewSecret(inbox.PeerPrefix)}); err != nil {
+		t.Fatal(err)
+	}
+
+	reqs, _ := ib.Requests(t.Context())
+	if _, err = ib.Approve(t.Context(), reqs[0].ID, ""); status(t, err) != http.StatusConflict {
+		t.Errorf("approve another daemon as bob: %v", err)
+	}
+}
+
+// A peer cannot date an event at or before its own earlier one, which would
+// replay it ahead of what it already said, nor far past the thread's clock.
+func TestReceiveClocks(t *testing.T) {
+	t.Parallel()
+
+	ib := inboxtest.New(t)
+	ib.ActivePeer(t, "bob")
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	v, err := ib.Open(t.Context(), inbox.NewThread{To: "bob", Title: "Hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id := v.Summary.ID
+	from := func(clock int64, action thread.Action) thread.Event {
+		return thread.Event{ID: uuid.NewString(), Thread: id, At: now, Clock: clock, Action: action}
+	}
+
+	if _, err = ib.Receive(t.Context(), "bob", from(2, thread.ActionResolve)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = ib.Act(t.Context(), id, thread.ActionClose, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = ib.Receive(t.Context(), "bob", from(2, thread.ActionDecline)); status(t, err) != http.StatusUnprocessableEntity {
+		t.Errorf("decline at bob's earlier clock: %v", err)
+	}
+
+	if _, err = ib.Receive(t.Context(), "bob", from(thread.MaxClock, thread.ActionComment)); status(t, err) != http.StatusUnprocessableEntity {
+		t.Errorf("comment at the maximum clock: %v", err)
+	}
+
+	if v, err = ib.Thread(t.Context(), id); err != nil || v.Summary.State != thread.StateClosed {
+		t.Fatalf("thread after refused events = %+v, %v", v.Summary, err)
+	}
+
+	if _, err = ib.Act(t.Context(), id, thread.ActionReopen, "one more thing"); err != nil {
+		t.Errorf("owner act after refused events: %v", err)
 	}
 }
 
@@ -168,5 +232,56 @@ func TestPeering(t *testing.T) {
 		if _, err = ib.RequestReceived(t.Context(), bad); status(t, err) != http.StatusBadRequest {
 			t.Errorf("RequestReceived(%+v): %v", bad, err)
 		}
+	}
+}
+
+// When two owners ask each other at once and one approves, the other's
+// request is moot: approving it would offer a secret the first approval
+// replaced.
+func TestAcceptedDropsCrossedRequest(t *testing.T) {
+	t.Parallel()
+
+	ib := inboxtest.New(t)
+	ib.RequestedPeer(t, "carol")
+
+	crossed := inbox.PeeringRequest{Name: "carol", URL: "http://carol.test", Secret: inbox.NewSecret(inbox.PeerPrefix)}
+	if _, err := ib.RequestReceived(t.Context(), crossed); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ib.Accepted(t.Context(), "carol"); err != nil {
+		t.Fatal(err)
+	}
+
+	if reqs, err := ib.Requests(t.Context()); err != nil || len(reqs) != 0 {
+		t.Errorf("requests after carol accepted = %+v, %v", reqs, err)
+	}
+
+	if p, err := ib.Peer(t.Context(), "carol"); err != nil || p.Status != "active" {
+		t.Errorf("carol = %+v, %v", p, err)
+	}
+}
+
+// A thread whose open was never delivered cannot be continued: the peer
+// would refuse every later event as a thread it does not hold.
+func TestActOnUndeliveredThread(t *testing.T) {
+	t.Parallel()
+
+	ib := inboxtest.New(t)
+	ib.ActivePeer(t, "bob")
+
+	v, err := ib.Open(t.Context(), inbox.NewThread{To: "bob", Title: "Hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = ib.RemovePeer(t.Context(), "bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	ib.ActivePeer(t, "bob")
+
+	if _, err = ib.Act(t.Context(), v.Summary.ID, thread.ActionComment, "still there?"); status(t, err) != http.StatusConflict {
+		t.Errorf("act on an undelivered thread: %v", err)
 	}
 }

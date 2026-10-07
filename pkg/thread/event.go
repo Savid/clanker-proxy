@@ -15,8 +15,10 @@ import (
 	"unicode/utf8"
 )
 
-// Limits on an event's fields.
+// Limits on an event's fields. Lengths of text count characters (Unicode
+// code points), as the spec's maxLength does.
 const (
+	MaxName   = 39
 	MaxTitle  = 200
 	MaxBody   = 64 << 10
 	MaxLabels = 10
@@ -79,8 +81,9 @@ type Event struct {
 }
 
 var (
-	// Names: lower-case alphanumerics and single inner hyphens, at most 39.
-	namePattern  = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){0,38}$`)
+	// Names: lower-case alphanumerics and single inner hyphens; NormalizeName
+	// bounds the length.
+	namePattern  = regexp.MustCompile(`^[a-z0-9](?:-?[a-z0-9])*$`)
 	idPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	labelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
 )
@@ -90,7 +93,7 @@ var (
 func NormalizeName(s string) (string, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 
-	return s, namePattern.MatchString(s)
+	return s, len(s) <= MaxName && namePattern.MatchString(s)
 }
 
 // ValidID reports whether s is a lower-case UUID, the form of event and
@@ -170,8 +173,8 @@ func (e Event) Validate() error {
 		add("action %q: want one of %v", e.Action, Actions())
 	}
 
-	if len(e.Body) > MaxBody || !utf8.ValidString(e.Body) {
-		add("body: want UTF-8 of at most %d bytes", MaxBody)
+	if !utf8.ValidString(e.Body) || utf8.RuneCountInString(e.Body) > MaxBody {
+		add("body: want UTF-8 of at most %d characters", MaxBody)
 	}
 
 	if e.Action == ActionOpen {
@@ -190,9 +193,9 @@ func (e Event) validateOpen() []error {
 		errs = append(errs, errors.New("open: thread must equal id"))
 	}
 
-	if t := strings.TrimSpace(e.Title); t == "" || t != e.Title || len(e.Title) > MaxTitle || !utf8.ValidString(e.Title) ||
-		strings.ContainsAny(e.Title, "\r\n") {
-		errs = append(errs, fmt.Errorf("open: title must be one trimmed line of 1 to %d bytes", MaxTitle))
+	if t := strings.TrimSpace(e.Title); t == "" || t != e.Title || !utf8.ValidString(e.Title) ||
+		utf8.RuneCountInString(e.Title) > MaxTitle || strings.ContainsAny(e.Title, "\r\n") {
+		errs = append(errs, fmt.Errorf("open: title must be one trimmed line of 1 to %d characters", MaxTitle))
 	}
 
 	if e.Kind != KindRequest && e.Kind != KindFYI {

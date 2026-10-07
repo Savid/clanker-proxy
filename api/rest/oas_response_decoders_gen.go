@@ -13,7 +13,7 @@ import (
 	"github.com/ogen-go/ogen/validate"
 )
 
-func decodeActOnThreadResponse(resp *http.Response) (res *Thread, _ error) {
+func decodeActOnThreadResponse(resp *http.Response) (res *ThreadSummary, _ error) {
 	switch resp.StatusCode {
 	case 200:
 		// Code 200.
@@ -29,7 +29,7 @@ func decodeActOnThreadResponse(resp *http.Response) (res *Thread, _ error) {
 			}
 			d := jx.DecodeBytes(buf)
 
-			var response Thread
+			var response ThreadSummary
 			if err := func() error {
 				if err := response.Decode(d); err != nil {
 					return err
@@ -1244,7 +1244,7 @@ func decodeNotifyPeeringAcceptedResponse(resp *http.Response) (res *NotifyPeerin
 	return res, errors.Wrap(defRes, "error")
 }
 
-func decodeOpenThreadResponse(resp *http.Response) (res *Thread, _ error) {
+func decodeOpenThreadResponse(resp *http.Response) (res *ThreadSummary, _ error) {
 	switch resp.StatusCode {
 	case 201:
 		// Code 201.
@@ -1260,7 +1260,7 @@ func decodeOpenThreadResponse(resp *http.Response) (res *Thread, _ error) {
 			}
 			d := jx.DecodeBytes(buf)
 
-			var response Thread
+			var response ThreadSummary
 			if err := func() error {
 				if err := response.Decode(d); err != nil {
 					return err

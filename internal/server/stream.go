@@ -14,7 +14,7 @@ const (
 	streamRetry = 2 * time.Second
 )
 
-// streamEvents serves streamEvents: a `thread` event with the thread's
+// streamEvents serves the streamEvents operation: a `thread` event with the thread's
 // summary each time a thread changes. It is routed by hand, so it checks the
 // owner token itself, as the spec's default security requires.
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {

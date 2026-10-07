@@ -17,7 +17,8 @@ const (
 	KindConflict
 	KindUnprocessable
 	KindUpstream
-	KindTooMany
+	// KindUnavailable is a refusal that may pass later; delivery retries it.
+	KindUnavailable
 )
 
 // Error is an error the caller caused, or another daemon did.
@@ -55,8 +56,8 @@ func HTTPStatus(err error) (int, bool) {
 		return http.StatusUnprocessableEntity, true
 	case KindUpstream:
 		return http.StatusBadGateway, true
-	case KindTooMany:
-		return http.StatusTooManyRequests, true
+	case KindUnavailable:
+		return http.StatusServiceUnavailable, true
 	default:
 		return http.StatusInternalServerError, false
 	}

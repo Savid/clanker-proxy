@@ -6,6 +6,7 @@ import (
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/internal/inbox"
 	"github.com/savid/clanker-proxy/internal/store"
+	"github.com/savid/clanker-proxy/pkg/thread"
 )
 
 func parseURL(raw string) (rest.DaemonURL, bool) {
@@ -66,11 +67,19 @@ func request(r store.Request) rest.Request {
 }
 
 func summary(s store.Summary, self string) rest.ThreadSummary {
+	th := thread.Thread{Sender: s.Sender, Recipient: s.Recipient, State: s.State}
+	role, _ := th.RoleOf(self)
+
+	actions := make([]rest.Action, 0, len(thread.Actions()))
+	for _, a := range th.Allowed(self) {
+		actions = append(actions, rest.Action(a))
+	}
+
 	out := rest.ThreadSummary{
 		ID: rest.ID(s.ID), Title: rest.Title(s.Title), Kind: rest.ThreadKind(s.Kind), Labels: toLabels(s.Labels),
 		Sender: rest.Name(s.Sender), Recipient: rest.Name(s.Recipient), Peer: rest.Name(s.Peer),
-		State: rest.ThreadState(s.State), MyTurn: s.Turn != "" && s.Turn == self,
-		OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
+		Role: rest.ThreadSummaryRole(role), State: rest.ThreadState(s.State), MyTurn: s.Turn != "" && s.Turn == self,
+		Actions: actions, OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
 		Events: count(s.Events), Undelivered: count(s.Undelivered), Failed: count(s.Failed),
 	}
 	if s.Turn != "" {
@@ -84,8 +93,8 @@ func threadView(v inbox.View, self string) *rest.Thread {
 	s := summary(v.Summary, self)
 	t := &rest.Thread{
 		ID: s.ID, Title: s.Title, Kind: s.Kind, Labels: s.Labels,
-		Sender: s.Sender, Recipient: s.Recipient, Peer: s.Peer,
-		State: s.State, Turn: s.Turn, MyTurn: s.MyTurn,
+		Sender: s.Sender, Recipient: s.Recipient, Peer: s.Peer, Role: rest.ThreadRole(s.Role),
+		State: s.State, Turn: s.Turn, MyTurn: s.MyTurn, Actions: s.Actions,
 		OpenedAt: s.OpenedAt, UpdatedAt: s.UpdatedAt,
 		Events: s.Events, Undelivered: s.Undelivered, Failed: s.Failed,
 		Log: make([]rest.ThreadEvent, 0, len(v.Events)),
@@ -99,10 +108,7 @@ func threadView(v inbox.View, self string) *rest.Thread {
 }
 
 func threadEvent(e inbox.ViewEvent) rest.ThreadEvent {
-	te := rest.ThreadEvent{
-		ID: rest.ID(e.ID), From: rest.Name(e.From), To: rest.Name(e.To), At: e.At, Action: rest.Action(e.Action),
-		Delivery: rest.Delivery{Status: rest.DeliveryStatus(e.Delivery.Status), Attempts: count(e.Delivery.Attempts)},
-	}
+	te := rest.ThreadEvent{ID: rest.ID(e.ID), From: rest.Name(e.From), At: e.At, Action: rest.Action(e.Action)}
 
 	if e.Body != "" {
 		te.Body = rest.NewOptBody(rest.Body(e.Body))
@@ -112,17 +118,27 @@ func threadEvent(e inbox.ViewEvent) rest.ThreadEvent {
 		te.Ignored = rest.NewOptString(e.Ignored)
 	}
 
-	if e.Delivery.LastError != "" {
-		te.Delivery.LastError = rest.NewOptString(e.Delivery.LastError)
-	}
-
-	if !e.Delivery.NextAttemptAt.IsZero() {
-		te.Delivery.NextAttemptAt = rest.NewOptDateTime(e.Delivery.NextAttemptAt)
-	}
-
-	if !e.Delivery.DeliveredAt.IsZero() {
-		te.Delivery.DeliveredAt = rest.NewOptDateTime(e.Delivery.DeliveredAt)
+	if e.Delivery != nil {
+		te.Delivery = rest.NewOptDelivery(delivery(*e.Delivery))
 	}
 
 	return te
+}
+
+func delivery(d store.Delivery) rest.Delivery {
+	out := rest.Delivery{Status: rest.DeliveryStatus(d.Status), Attempts: count(d.Attempts)}
+
+	if d.LastError != "" {
+		out.LastError = rest.NewOptString(d.LastError)
+	}
+
+	if !d.NextAttemptAt.IsZero() {
+		out.NextAttemptAt = rest.NewOptDateTime(d.NextAttemptAt)
+	}
+
+	if !d.DeliveredAt.IsZero() {
+		out.DeliveredAt = rest.NewOptDateTime(d.DeliveredAt)
+	}
+
+	return out
 }

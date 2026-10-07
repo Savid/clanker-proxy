@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -119,7 +120,8 @@ func TestOutbox(t *testing.T) {
 	addThread(t, st, second, "me", "bob", nil, t0)
 
 	due, err := st.Due(ctx, t0, 10)
-	if err != nil || len(due) != 2 || due[0].Event.ID != first || due[0].URL != "http://bob" || due[0].Secret != "cpp_bob" {
+	if err != nil || len(due) != 2 || due[0].Event.ID != first || due[0].URL != "http://bob" || due[0].Secret != "cpp_bob" ||
+		!due[0].StoredAt.Equal(t0) {
 		t.Fatalf("Due = %+v, %v", due, err)
 	}
 
@@ -165,21 +167,25 @@ func TestPeering(t *testing.T) {
 		return store.Request{ID: id, Name: "alice", URL: url, Secret: "cpp_" + id, At: at}
 	}
 
-	if err := st.AddRequest(ctx, req("old", "http://a", t0), 2, t0.Add(-time.Hour)); err != nil {
+	if _, err := st.AddRequest(ctx, req("old", "http://a", t0), 2, t0.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// A second request from the same URL does not replace the first.
-	if err := st.AddRequest(ctx, req("new", "http://a", t0.Add(time.Minute)), 2, t0.Add(-time.Hour)); err != nil {
+	if _, err := st.AddRequest(ctx, req("new", "http://a", t0.Add(time.Minute)), 2, t0.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := st.AddRequest(ctx, req("full", "http://b", t0), 2, t0.Add(-time.Hour)); !errors.Is(err, store.ErrFull) {
-		t.Fatalf("third request: %v", err)
+	if dropped, err := st.AddRequest(ctx, req("third", "http://b", t0.Add(2*time.Minute)), 2, t0.Add(-time.Hour)); err != nil || dropped != 1 {
+		t.Fatalf("third request: dropped %d, %v", dropped, err)
+	}
+
+	if reqs, _ := st.Requests(ctx, t0.Add(-time.Hour)); len(reqs) != 2 || reqs[0].ID != "new" || reqs[1].ID != "third" {
+		t.Fatalf("after the third: %+v", reqs)
 	}
 
 	// Expired requests make room.
-	if err := st.AddRequest(ctx, req("later", "http://b", t0.Add(48*time.Hour)), 2, t0.Add(time.Hour)); err != nil {
+	if _, err := st.AddRequest(ctx, req("later", "http://b", t0.Add(48*time.Hour)), 2, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -293,7 +299,7 @@ func TestUnapprove(t *testing.T) {
 	}
 
 	r := store.Request{ID: "r1", Name: "bob", URL: "http://bob", Secret: "cpp_new", Note: "hi", At: t0}
-	if err := st.AddRequest(ctx, r, 5, t0.Add(-time.Hour)); err != nil {
+	if _, err := st.AddRequest(ctx, r, 5, t0.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,5 +320,57 @@ func TestUnapprove(t *testing.T) {
 	back, err := st.Request(ctx, "r1", t0.Add(-time.Hour))
 	if err != nil || back.Secret != "cpp_new" || back.Note != "hi" {
 		t.Errorf("request after undo = %+v, %v", back, err)
+	}
+}
+
+// A removed peer's name keeps its URL only while threads with them remain.
+func TestFormerURL(t *testing.T) {
+	t.Parallel()
+
+	st := open(t)
+	ctx := t.Context()
+
+	for _, name := range []string{"bob", "carol"} {
+		p := store.Peer{Name: name, URL: "http://" + name, Secret: "cpp_" + name, Status: store.PeerActive, AddedAt: t0}
+		if err := st.AddPeer(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	addThread(t, st, "abab0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+
+	for name, want := range map[string]string{"bob": "http://bob", "carol": ""} {
+		if err := st.RemovePeer(ctx, name); err != nil {
+			t.Fatal(err)
+		}
+
+		if was, err := st.FormerURL(ctx, name); err != nil || was != want {
+			t.Errorf("FormerURL(%s) = %q, %v; want %q", name, was, err, want)
+		}
+	}
+}
+
+// The database holds peer secrets, so only its owner may read it, journal
+// included.
+func TestOpenIsPrivate(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cp.db")
+
+	st, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err = st.SetMeta(t.Context(), "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{path, path + "-wal"} {
+		fi, statErr := os.Stat(p)
+		if statErr != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v, %v; want 0600", p, fi.Mode(), statErr)
+		}
 	}
 }

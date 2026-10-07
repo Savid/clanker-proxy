@@ -1,7 +1,7 @@
 // Package delivery is how this daemon calls other daemons: it drains the
 // outbox, sending each peer its events in order and retrying with backoff
-// until each is stored or refused, and it carries peering requests and
-// approvals.
+// until each is stored, refused, or a week old, and it carries peering
+// requests and approvals.
 package delivery
 
 import (
@@ -29,6 +29,10 @@ const (
 	// idle is the longest the deliverer sleeps with nothing due, in case a
 	// wake-up was missed.
 	idle = time.Minute
+	// giveUp is how long an event is retried: as long as a peering request
+	// waits, so a peer who never approves, or who removed this daemon,
+	// does not hold its queue forever.
+	giveUp = inbox.RequestTTL
 )
 
 // Notifier is told when a thread's delivery state changes.
@@ -179,6 +183,15 @@ func (d *Deliverer) Drain(ctx context.Context) error {
 			continue
 		}
 
+		pending, checkErr := d.store.Pending(ctx, o)
+		if checkErr != nil {
+			return checkErr
+		}
+
+		if !pending {
+			continue
+		}
+
 		retry, sendErr := d.deliver(ctx, o)
 		if err = d.record(ctx, o, retry, sendErr); err != nil {
 			return err
@@ -268,6 +281,10 @@ func (d *Deliverer) record(ctx context.Context, o store.Outgoing, retry bool, er
 		d.log.InfoContext(ctx, "event delivered", "peer", o.Peer, "event", id)
 
 		return d.store.Delivered(ctx, id, now)
+	case retry && now.Sub(o.StoredAt) >= giveUp:
+		d.log.ErrorContext(ctx, "delivery abandoned", "peer", o.Peer, "event", id, "after", giveUp, "error", err)
+
+		return d.store.Failed(ctx, id, fmt.Sprintf("gave up after %s: %v", giveUp, err))
 	case retry:
 		wait := Backoff(o.Attempts)
 		d.log.WarnContext(ctx, "delivery failed; will retry", "peer", o.Peer, "event", id,

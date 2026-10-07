@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,7 +34,7 @@ func (a *app) openStream(ctx context.Context) (*stream, error) {
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+a.token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ownerHTTPClient(0).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("stream: %w", err)
 	}
@@ -99,15 +98,11 @@ func (s *stream) next() (rest.ThreadSummary, error) {
 
 func (s *stream) close() { _ = s.body.Close() }
 
-func cmdWatch(a *app, args []string) error {
-	if _, err := parseArgs(flag.NewFlagSet("watch", flag.ContinueOnError), args, 0, ""); err != nil {
-		return err
-	}
-
+func runWatch(a *app, _ []string) error {
 	show := func(t rest.ThreadSummary) bool {
 		_ = a.print(&t, func(w io.Writer) {
-			fmt.Fprintf(w, "%s  %s %s  %s  turn: %s  %s\n",
-				time.Now().Format(time.TimeOnly), direction(t), t.Peer, t.State, turn(t.MyTurn, t.Turn), title(t))
+			fmt.Fprintf(w, "%s  %s  %s %s  %s  turn: %s  %s\n",
+				a.now().UTC().Format(time.TimeOnly), t.ID[:shortID], direction(t), t.Peer, t.State, turn(t), title(t))
 		})
 
 		return false
@@ -115,7 +110,7 @@ func cmdWatch(a *app, args []string) error {
 
 	for a.ctx.Err() == nil {
 		_, err := a.follow(a.ctx, show)
-		if isProblem(err) {
+		if isStreamRefusal(err) {
 			return err
 		}
 
@@ -160,24 +155,12 @@ func ready(t rest.ThreadSummary) bool {
 	return t.MyTurn || !t.Turn.Set
 }
 
-func cmdWait(a *app, args []string) error {
-	fs := flag.NewFlagSet("wait", flag.ContinueOnError)
-	timeout := fs.Duration("timeout", 0, "give up after this long (0: never)")
-
-	pos, err := parseArgs(fs, args, -1, "[<ref>] [-timeout d]")
-	if err != nil {
-		return err
-	}
-
-	if len(pos) > 1 {
-		return errors.New("usage: cpctl wait [<ref>] [-timeout d]")
-	}
-
+func runWait(a *app, pos []string, timeout time.Duration) error {
 	ctx := a.ctx
-	if *timeout > 0 {
+	if timeout > 0 {
 		var cancel context.CancelFunc
 
-		ctx, cancel = context.WithTimeout(ctx, *timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
@@ -191,7 +174,16 @@ func cmdWait(a *app, args []string) error {
 		return err
 	}
 
-	return a.print(&t, func(w io.Writer) { printThreads(w, []rest.ThreadSummary{t}, a.now()) })
+	return a.print(&t, func(w io.Writer) {
+		if t.MyTurn {
+			fmt.Fprintln(w, "your turn on:")
+		} else {
+			fmt.Fprintln(w, "ended:")
+		}
+
+		printSummary(w, t)
+		next(w, append([]step{{"cpctl show " + string(t.ID)[:shortID], "read what changed"}}, threadSteps(t)...)...)
+	})
 }
 
 // wait retries waitOnce across dropped connections until it succeeds, the
@@ -207,7 +199,7 @@ func (a *app) wait(ctx context.Context, ref string) (rest.ThreadSummary, error) 
 			return t, errTimeout
 		case ctx.Err() != nil:
 			return t, ctx.Err()
-		case isProblem(err):
+		case isStreamRefusal(err):
 			return t, err
 		}
 
@@ -260,8 +252,8 @@ func (a *app) waitAny(ctx context.Context, s *stream) (rest.ThreadSummary, error
 	return s.until(func(t rest.ThreadSummary) bool { return t.MyTurn })
 }
 
-func isProblem(err error) bool {
+func isStreamRefusal(err error) bool {
 	_, ok := errors.AsType[*rest.ProblemStatusCode](err)
 
-	return ok
+	return ok || errors.Is(err, errRedirect)
 }

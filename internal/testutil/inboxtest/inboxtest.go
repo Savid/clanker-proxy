@@ -49,13 +49,27 @@ func New(t *testing.T) Inbox {
 	return Inbox{Inbox: ib, store: st}
 }
 
-// ActivePeer adds an active peer and returns its secret.
+// ActivePeer adds an active peer at http://<name>.test and returns its
+// secret.
 func (i Inbox) ActivePeer(t *testing.T, name string) string {
+	t.Helper()
+
+	return i.addPeer(t, name, store.PeerActive)
+}
+
+// RequestedPeer adds a peer the owner has asked but who has not approved.
+func (i Inbox) RequestedPeer(t *testing.T, name string) string {
+	t.Helper()
+
+	return i.addPeer(t, name, store.PeerRequested)
+}
+
+func (i Inbox) addPeer(t *testing.T, name, status string) string {
 	t.Helper()
 
 	secret := inbox.NewSecret(inbox.PeerPrefix)
 
-	p := store.Peer{Name: name, URL: "http://" + name + ".test", Secret: secret, Status: store.PeerActive, AddedAt: time.Now()}
+	p := store.Peer{Name: name, URL: "http://" + name + ".test", Secret: secret, Status: status, AddedAt: time.Now()}
 	if err := i.store.AddPeer(t.Context(), p); err != nil {
 		t.Fatal(err)
 	}

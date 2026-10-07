@@ -158,8 +158,6 @@ func (s *Delivery) Validate() error {
 
 func (s DeliveryStatus) Validate() error {
 	switch s {
-	case "received":
-		return nil
 	case "pending":
 		return nil
 	case "delivered":
@@ -1097,6 +1095,17 @@ func (s *Thread) Validate() error {
 		})
 	}
 	if err := func() error {
+		if err := s.Role.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "role",
+			Error: err,
+		})
+	}
+	if err := func() error {
 		if err := s.State.Validate(); err != nil {
 			return err
 		}
@@ -1122,6 +1131,34 @@ func (s *Thread) Validate() error {
 	}(); err != nil {
 		failures = append(failures, validate.FieldError{
 			Name:  "turn",
+			Error: err,
+		})
+	}
+	if err := func() error {
+		if s.Actions == nil {
+			return errors.New("nil is invalid value")
+		}
+		var failures []validate.FieldError
+		for i, elem := range s.Actions {
+			if err := func() error {
+				if err := elem.Validate(); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				failures = append(failures, validate.FieldError{
+					Name:  fmt.Sprintf("[%d]", i),
+					Error: err,
+				})
+			}
+		}
+		if len(failures) > 0 {
+			return &validate.Error{Fields: failures}
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "actions",
 			Error: err,
 		})
 	}
@@ -1262,17 +1299,6 @@ func (s *ThreadEvent) Validate() error {
 		})
 	}
 	if err := func() error {
-		if err := s.To.Validate(); err != nil {
-			return err
-		}
-		return nil
-	}(); err != nil {
-		failures = append(failures, validate.FieldError{
-			Name:  "to",
-			Error: err,
-		})
-	}
-	if err := func() error {
 		if err := s.Action.Validate(); err != nil {
 			return err
 		}
@@ -1302,8 +1328,15 @@ func (s *ThreadEvent) Validate() error {
 		})
 	}
 	if err := func() error {
-		if err := s.Delivery.Validate(); err != nil {
-			return err
+		if value, ok := s.Delivery.Get(); ok {
+			if err := func() error {
+				if err := value.Validate(); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
 		}
 		return nil
 	}(); err != nil {
@@ -1367,6 +1400,17 @@ func (s *ThreadList) Validate() error {
 		return &validate.Error{Fields: failures}
 	}
 	return nil
+}
+
+func (s ThreadRole) Validate() error {
+	switch s {
+	case "sender":
+		return nil
+	case "recipient":
+		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
 }
 
 func (s ThreadState) Validate() error {
@@ -1474,6 +1518,17 @@ func (s *ThreadSummary) Validate() error {
 		})
 	}
 	if err := func() error {
+		if err := s.Role.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "role",
+			Error: err,
+		})
+	}
+	if err := func() error {
 		if err := s.State.Validate(); err != nil {
 			return err
 		}
@@ -1499,6 +1554,34 @@ func (s *ThreadSummary) Validate() error {
 	}(); err != nil {
 		failures = append(failures, validate.FieldError{
 			Name:  "turn",
+			Error: err,
+		})
+	}
+	if err := func() error {
+		if s.Actions == nil {
+			return errors.New("nil is invalid value")
+		}
+		var failures []validate.FieldError
+		for i, elem := range s.Actions {
+			if err := func() error {
+				if err := elem.Validate(); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				failures = append(failures, validate.FieldError{
+					Name:  fmt.Sprintf("[%d]", i),
+					Error: err,
+				})
+			}
+		}
+		if len(failures) > 0 {
+			return &validate.Error{Fields: failures}
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "actions",
 			Error: err,
 		})
 	}
@@ -1539,6 +1622,17 @@ func (s *ThreadSummary) Validate() error {
 		return &validate.Error{Fields: failures}
 	}
 	return nil
+}
+
+func (s ThreadSummaryRole) Validate() error {
+	switch s {
+	case "sender":
+		return nil
+	case "recipient":
+		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
 }
 
 func (s Title) Validate() error {

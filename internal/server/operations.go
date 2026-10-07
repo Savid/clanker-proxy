@@ -171,7 +171,7 @@ func (o *operations) GetThread(ctx context.Context, params rest.GetThreadParams)
 	return threadView(v, o.inbox.Self()), nil
 }
 
-func (o *operations) OpenThread(ctx context.Context, req *rest.NewThread) (*rest.Thread, error) {
+func (o *operations) OpenThread(ctx context.Context, req *rest.NewThread) (*rest.ThreadSummary, error) {
 	v, err := o.inbox.Open(ctx, inbox.NewThread{
 		To: string(req.To), Title: string(req.Title), Kind: thread.Kind(req.Kind.Or("")), Labels: labels(req.Labels),
 		Body: string(req.Body.Or("")),
@@ -180,16 +180,20 @@ func (o *operations) OpenThread(ctx context.Context, req *rest.NewThread) (*rest
 		return nil, err
 	}
 
-	return threadView(v, o.inbox.Self()), nil
+	sum := summary(v.Summary, o.inbox.Self())
+
+	return &sum, nil
 }
 
-func (o *operations) ActOnThread(ctx context.Context, req *rest.ThreadAction, params rest.ActOnThreadParams) (*rest.Thread, error) {
+func (o *operations) ActOnThread(ctx context.Context, req *rest.ThreadAction, params rest.ActOnThreadParams) (*rest.ThreadSummary, error) {
 	v, err := o.inbox.Act(ctx, params.Ref, thread.Action(req.Action), string(req.Body.Or("")))
 	if err != nil {
 		return nil, err
 	}
 
-	return threadView(v, o.inbox.Self()), nil
+	sum := summary(v.Summary, o.inbox.Self())
+
+	return &sum, nil
 }
 
 // NewError answers every handler and security error: a missing or wrong

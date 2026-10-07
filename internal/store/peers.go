@@ -142,9 +142,15 @@ func (s *Store) Activate(ctx context.Context, name string, at time.Time) (bool, 
 }
 
 // RemovePeer forgets a peer and fails their undelivered events. Threads
-// stay.
+// stay; if there are any, the peer's URL is kept as their name's former URL.
 func (s *Store) RemovePeer(ctx context.Context, name string) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO former_peers (name, url)
+			SELECT name, url FROM peers WHERE name = ? AND EXISTS (SELECT 1 FROM threads WHERE peer = ?)`,
+			name, name); err != nil {
+			return fmt.Errorf("keep former peer: %w", err)
+		}
+
 		res, err := tx.ExecContext(ctx, `DELETE FROM peers WHERE name = ?`, name)
 		if err != nil {
 			return fmt.Errorf("delete peer: %w", err)
@@ -163,21 +169,32 @@ func (s *Store) RemovePeer(ctx context.Context, name string) error {
 	})
 }
 
+// FormerURL returns the URL of the removed peer called name whose threads
+// remain, or "".
+func (s *Store) FormerURL(ctx context.Context, name string) (string, error) {
+	var url string
+
+	err := s.db.QueryRowContext(ctx, `SELECT url FROM former_peers WHERE name = ?`, name).Scan(&url)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read former peer: %w", err)
+	}
+
+	return url, nil
+}
+
 // AddRequest stores a peering request, first dropping requests made before
-// expired. It refuses with ErrFull once max requests are pending.
-func (s *Store) AddRequest(ctx context.Context, r Request, maxPending int, expired time.Time) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
+// expired, then the oldest beyond maxPending. It returns how many it
+// dropped for room.
+func (s *Store) AddRequest(ctx context.Context, r Request, maxPending int, expired time.Time) (int, error) {
+	var dropped int
+
+	err := s.tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM requests WHERE at < ?`, formatTime(expired)); err != nil {
 			return fmt.Errorf("expire requests: %w", err)
-		}
-
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM requests`).Scan(&n); err != nil {
-			return fmt.Errorf("count requests: %w", err)
-		}
-
-		if n >= maxPending {
-			return ErrFull
 		}
 
 		if _, err := tx.ExecContext(ctx, `INSERT INTO requests (id, name, url, secret, note, at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -185,12 +202,24 @@ func (s *Store) AddRequest(ctx context.Context, r Request, maxPending int, expir
 			return fmt.Errorf("insert request: %w", err)
 		}
 
+		res, err := tx.ExecContext(ctx, `DELETE FROM requests WHERE rowid IN
+			(SELECT rowid FROM requests ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)`, maxPending)
+		if err != nil {
+			return fmt.Errorf("trim requests: %w", err)
+		}
+
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("trim requests: %w", err)
+		}
+
+		dropped = int(n)
+
 		return nil
 	})
-}
 
-// ErrFull is returned when too many requests are pending.
-var ErrFull = errors.New("too many pending requests")
+	return dropped, err
+}
 
 const (
 	selectRequests = `SELECT id, name, url, secret, note, at FROM requests `
@@ -313,6 +342,15 @@ func (s *Store) Unapprove(ctx context.Context, approved Peer, prev *Peer, r Requ
 
 		return nil
 	})
+}
+
+// DeleteRequestsFrom drops every pending request from url.
+func (s *Store) DeleteRequestsFrom(ctx context.Context, url string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM requests WHERE url = ?`, url); err != nil {
+		return fmt.Errorf("delete requests: %w", err)
+	}
+
+	return nil
 }
 
 // DeleteRequest drops a pending request, or returns ErrNotFound.
