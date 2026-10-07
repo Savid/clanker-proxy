@@ -144,8 +144,8 @@ Each endpoint subscribes to `*` (all current and future types) or a fixed list:
 | `thread.needs-input` | The recipient asked a question |
 | `thread.resolve` | The recipient submitted a result |
 | `thread.decline` | The recipient declined |
-| `thread.close` | The sender closed the thread |
-| `thread.reopen` | The sender reopened it |
+| `thread.close` | Either participant closed the thread |
+| `thread.reopen` | Either participant reopened it with a reason |
 | `thread.withdraw` | The sender withdrew it |
 | `peering.requested` | A new incoming peering request was stored |
 
@@ -154,6 +154,12 @@ The default is incoming. Peering requests are always incoming. A thread event
 means the action was stored; concurrent events can leave an action unapplied
 by the workflow. Fetch the current thread and its available actions before
 acting. Transport retries and delivery-status changes generate no notifications.
+
+A local notification does not confirm the peer accepted the event. If a peer
+refuses a reopen at its 200-thread cap, the sender's copy stays `acked` while
+the recipient's stays `closed`. `cpctl show` marks the event undeliverable.
+The refusal is final: freeing capacity does not retry it, and later replies
+do not reconcile the two copies.
 
 Public peering requests are bounded separately: each endpoint retains only its
 newest 100 peering-request notifications, including pending deliveries. Older

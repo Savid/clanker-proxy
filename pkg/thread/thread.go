@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -39,24 +40,24 @@ const (
 // Rule is who may take an action and from which states. Comment is allowed
 // to either participant in every state, so it has no rule.
 type Rule struct {
-	By   Role
+	By   []Role
 	From []State
 	To   State
 }
 
 var active = []State{StateOpen, StateAcked, StateNeedsInput}
 
-// Rules is the workflow: the recipient works the thread, the sender closes or
-// pulls it.
+// Rules is the workflow: the recipient works the thread, the sender may
+// withdraw it, and either participant may close or reopen it.
 func Rules() map[Action]Rule {
 	return map[Action]Rule{
-		ActionAck:        {By: RoleRecipient, From: []State{StateOpen}, To: StateAcked},
-		ActionNeedsInput: {By: RoleRecipient, From: []State{StateOpen, StateAcked}, To: StateNeedsInput},
-		ActionResolve:    {By: RoleRecipient, From: active, To: StateResolved},
-		ActionDecline:    {By: RoleRecipient, From: active, To: StateDeclined},
-		ActionWithdraw:   {By: RoleSender, From: active, To: StateWithdrawn},
-		ActionClose:      {By: RoleSender, From: []State{StateResolved}, To: StateClosed},
-		ActionReopen:     {By: RoleSender, From: []State{StateResolved, StateClosed}, To: StateAcked},
+		ActionAck:        {By: []Role{RoleRecipient}, From: []State{StateOpen}, To: StateAcked},
+		ActionNeedsInput: {By: []Role{RoleRecipient}, From: []State{StateOpen, StateAcked}, To: StateNeedsInput},
+		ActionResolve:    {By: []Role{RoleRecipient}, From: active, To: StateResolved},
+		ActionDecline:    {By: []Role{RoleRecipient}, From: active, To: StateDeclined},
+		ActionWithdraw:   {By: []Role{RoleSender}, From: active, To: StateWithdrawn},
+		ActionClose:      {By: []Role{RoleSender, RoleRecipient}, From: []State{StateOpen, StateAcked, StateNeedsInput, StateResolved}, To: StateClosed},
+		ActionReopen:     {By: []Role{RoleSender, RoleRecipient}, From: []State{StateResolved, StateClosed}, To: StateAcked},
 	}
 }
 
@@ -206,13 +207,21 @@ func (t Thread) Check(e Event) error {
 		return nil
 	}
 
-	rule := Rules()[e.Action]
-	if rule.By != role {
-		return fmt.Errorf("only the %s may %s", rule.By, e.Action)
+	rule, ok := Rules()[e.Action]
+	if !ok {
+		return fmt.Errorf("unknown action %q", e.Action)
+	}
+
+	if !slices.Contains(rule.By, role) {
+		return fmt.Errorf("only the %s may %s", rule.By[0], e.Action)
 	}
 
 	if !slices.Contains(rule.From, t.State) {
 		return fmt.Errorf("cannot %s a thread that is %s", e.Action, t.State)
+	}
+
+	if e.Action == ActionReopen && strings.TrimSpace(e.Body) == "" {
+		return errors.New("reopen requires a reason")
 	}
 
 	return nil
@@ -257,7 +266,7 @@ func (t Thread) Allowed(user string) []Action {
 
 	for _, a := range Actions() {
 		r, ruled := rules[a]
-		if a == ActionComment || ruled && r.By == role && slices.Contains(r.From, t.State) {
+		if a == ActionComment || ruled && slices.Contains(r.By, role) && slices.Contains(r.From, t.State) {
 			out = append(out, a)
 		}
 	}

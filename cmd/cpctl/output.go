@@ -82,8 +82,10 @@ var actionSteps = map[thread.Action]func(ref string) step{
 	},
 	thread.ActionResolve: func(r string) step { return step{`cpctl resolve ` + r + ` -m "<result>"`, "done; report the result"} },
 	thread.ActionDecline: func(r string) step { return step{`cpctl decline ` + r + ` -m "<why>"`, "refuse it; ends the thread"} },
-	thread.ActionClose:   func(r string) step { return step{"cpctl close " + r, "accept the result; ends the thread"} },
-	thread.ActionReopen:  func(r string) step { return step{`cpctl reopen ` + r + ` -m "<why>"`, "not done; back to them"} },
+	thread.ActionClose:   func(r string) step { return step{"cpctl close " + r, "done here; ends the thread for both sides"} },
+	thread.ActionReopen: func(r string) step {
+		return step{`cpctl reopen ` + r + ` -m "<why>"`, "not done; back to the recipient"}
+	},
 	thread.ActionWithdraw: func(r string) step {
 		return step{`cpctl withdraw ` + r + ` -m "<why>"`, "no longer needed; ends the thread"}
 	},
@@ -120,7 +122,11 @@ func threadSteps(t rest.ThreadSummary) []step {
 
 	for _, act := range stepOrder {
 		if slices.Contains(t.Actions, rest.Action(act)) && (act != thread.ActionAck || !fyiAck) && (act != thread.ActionComment || !answering) {
-			steps = append(steps, actionSteps[act](ref))
+			s := actionSteps[act](ref)
+			if act == thread.ActionClose && t.State == rest.ThreadStateResolved && t.Role == rest.ThreadSummaryRoleRecipient {
+				s.why = "only if the sender has agreed; ends the thread for both sides"
+			}
+			steps = append(steps, s)
 		}
 	}
 
@@ -233,9 +239,9 @@ func standing(t rest.ThreadSummary) string {
 			return peer + " says it is done: close it if you agree, or reopen it saying what is missing."
 		}
 
-		return "Waiting on " + peer + " to close it or reopen it."
+		return "Awaiting " + peer + "'s review. Close only if they have agreed; you can also reopen it with a reason."
 	case rest.ThreadStateClosed:
-		return "Ended: closed. The sender can reopen it; either side can still reply."
+		return "Ended: closed. Either side can reopen it with a reason, or still reply."
 	case rest.ThreadStateDeclined:
 		return "Ended: the recipient declined it. Either side can still reply."
 	case rest.ThreadStateWithdrawn:

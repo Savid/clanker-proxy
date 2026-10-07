@@ -2,6 +2,7 @@ package thread_test
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -35,9 +36,15 @@ func (b *builder) ev(from string, a thread.Action) thread.Event {
 		to = alice
 	}
 
+	body := ""
+	if a == thread.ActionReopen {
+		body = "There is more to do."
+	}
+
 	return thread.Event{
 		ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", b.n), Thread: threadID,
 		From: from, To: to, At: t0.Add(time.Duration(b.n) * time.Minute), Clock: int64(b.n) + 1, Action: a,
+		Body: body,
 	}
 }
 
@@ -74,7 +81,8 @@ func TestWorkflow(t *testing.T) {
 			{alice, thread.ActionAck, thread.StateOpen, "only the recipient may ack"},
 			{alice, thread.ActionResolve, thread.StateOpen, "only the recipient may resolve"},
 			{bob, thread.ActionResolve, thread.StateResolved, ""},
-			{bob, thread.ActionClose, thread.StateResolved, "only the sender may close"},
+			{bob, thread.ActionClose, thread.StateClosed, ""},
+			{bob, thread.ActionReopen, thread.StateAcked, ""},
 		}},
 		"terminal states hold": {thread.KindRequest, []step{
 			{bob, thread.ActionDecline, thread.StateDeclined, ""},
@@ -85,6 +93,14 @@ func TestWorkflow(t *testing.T) {
 		"sender withdraws": {thread.KindRequest, []step{
 			{bob, thread.ActionAck, thread.StateAcked, ""},
 			{alice, thread.ActionWithdraw, thread.StateWithdrawn, ""},
+		}},
+		"either participant closes without resolution": {thread.KindRequest, []step{
+			{bob, thread.ActionClose, thread.StateClosed, ""},
+			{alice, thread.ActionReopen, thread.StateAcked, ""},
+			{alice, thread.ActionClose, thread.StateClosed, ""},
+			{bob, thread.ActionReopen, thread.StateAcked, ""},
+			{bob, thread.ActionNeedsInput, thread.StateNeedsInput, ""},
+			{bob, thread.ActionClose, thread.StateClosed, ""},
 		}},
 		"no second open": {thread.KindRequest, []step{
 			{alice, thread.ActionOpen, thread.StateOpen, "thread is already open"},
@@ -152,6 +168,113 @@ func TestReplayIsOrderIndependent(t *testing.T) {
 	got, err := thread.Replay([]thread.Event{ack, open})
 	if err != nil || got.State != thread.StateAcked {
 		t.Errorf("ack written before the open by the clock on the wall: %s, %v", got.State, err)
+	}
+}
+
+func TestReplayConcurrentCloseAndReopen(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		resolved    bool
+		firstFrom   string
+		first       thread.Action
+		second      thread.Action
+		state       thread.State
+		lastIgnored bool
+	}{
+		{"both close", false, bob, thread.ActionClose, thread.ActionClose, thread.StateClosed, true},
+		{"resolve then close", false, bob, thread.ActionResolve, thread.ActionClose, thread.StateClosed, false},
+		{"close then resolve", false, alice, thread.ActionClose, thread.ActionResolve, thread.StateClosed, true},
+		{"both reopen", true, bob, thread.ActionReopen, thread.ActionReopen, thread.StateAcked, true},
+		{"close then reopen", true, bob, thread.ActionClose, thread.ActionReopen, thread.StateAcked, false},
+		{"reopen then close", true, bob, thread.ActionReopen, thread.ActionClose, thread.StateClosed, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var b builder
+
+			events := []thread.Event{b.open(thread.KindRequest)}
+			if tc.resolved {
+				events = append(events, b.ev(bob, thread.ActionResolve))
+			}
+
+			first := b.ev(tc.firstFrom, tc.first)
+			second := b.ev(first.To, tc.second)
+			second.Clock = first.Clock
+			events = append(events, first, second)
+
+			forward, err := thread.Replay(events)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			slices.Reverse(events)
+
+			backward, err := thread.Replay(events)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(forward, backward) {
+				t.Fatal("arrival order changed the replay")
+			}
+
+			last := forward.Events[len(forward.Events)-1]
+			if forward.State != tc.state || (last.Ignored != "") != tc.lastIgnored {
+				t.Fatalf("state %s, last ignored %q; want %s, ignored %t", forward.State, last.Ignored, tc.state, tc.lastIgnored)
+			}
+		})
+	}
+}
+
+func TestReopenRequiresReason(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []thread.State{thread.StateResolved, thread.StateClosed} {
+		for _, from := range []string{alice, bob} {
+			for _, body := range []string{"", " \t\r\n\u2003", "Still failing"} {
+				checkReopenReason(t, state, from, body)
+			}
+		}
+	}
+}
+
+func checkReopenReason(t *testing.T, state thread.State, from, body string) {
+	t.Helper()
+
+	var b builder
+
+	events := []thread.Event{b.open(thread.KindRequest), b.ev(bob, thread.ActionResolve)}
+	if state == thread.StateClosed {
+		events = append(events, b.ev(alice, thread.ActionClose))
+	}
+
+	th, err := thread.Replay(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := with(b.ev(from, thread.ActionReopen), body)
+	valid := body == "Still failing"
+	if err = th.Check(e); (err == nil) != valid {
+		t.Errorf("%s reopening %s with %q: %v", from, state, body, err)
+	}
+
+	got, err := thread.Replay(append(events, e))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := state
+	if valid {
+		want = thread.StateAcked
+	}
+
+	last := got.Events[len(got.Events)-1]
+	if got.State != want || (last.Ignored == "") != valid {
+		t.Errorf("%s reopening %s with %q: state %s, ignored %q", from, state, body, got.State, last.Ignored)
 	}
 }
 
@@ -271,28 +394,28 @@ func TestAllowed(t *testing.T) {
 	}{
 		{
 			thread.StateOpen,
-			[]thread.Action{thread.ActionComment, thread.ActionWithdraw},
-			[]thread.Action{thread.ActionComment, thread.ActionAck, thread.ActionNeedsInput, thread.ActionResolve, thread.ActionDecline},
+			[]thread.Action{thread.ActionComment, thread.ActionClose, thread.ActionWithdraw},
+			[]thread.Action{thread.ActionComment, thread.ActionAck, thread.ActionNeedsInput, thread.ActionResolve, thread.ActionClose, thread.ActionDecline},
 		},
 		{
 			thread.StateAcked,
-			[]thread.Action{thread.ActionComment, thread.ActionWithdraw},
-			[]thread.Action{thread.ActionComment, thread.ActionNeedsInput, thread.ActionResolve, thread.ActionDecline},
+			[]thread.Action{thread.ActionComment, thread.ActionClose, thread.ActionWithdraw},
+			[]thread.Action{thread.ActionComment, thread.ActionNeedsInput, thread.ActionResolve, thread.ActionClose, thread.ActionDecline},
 		},
 		{
 			thread.StateNeedsInput,
-			[]thread.Action{thread.ActionComment, thread.ActionWithdraw},
-			[]thread.Action{thread.ActionComment, thread.ActionResolve, thread.ActionDecline},
+			[]thread.Action{thread.ActionComment, thread.ActionClose, thread.ActionWithdraw},
+			[]thread.Action{thread.ActionComment, thread.ActionResolve, thread.ActionClose, thread.ActionDecline},
 		},
 		{
 			thread.StateResolved,
 			[]thread.Action{thread.ActionComment, thread.ActionClose, thread.ActionReopen},
-			[]thread.Action{thread.ActionComment},
+			[]thread.Action{thread.ActionComment, thread.ActionClose, thread.ActionReopen},
 		},
 		{
 			thread.StateClosed,
 			[]thread.Action{thread.ActionComment, thread.ActionReopen},
-			[]thread.Action{thread.ActionComment},
+			[]thread.Action{thread.ActionComment, thread.ActionReopen},
 		},
 		{thread.StateDeclined, []thread.Action{thread.ActionComment}, []thread.Action{thread.ActionComment}},
 		{thread.StateWithdrawn, []thread.Action{thread.ActionComment}, []thread.Action{thread.ActionComment}},
@@ -308,6 +431,15 @@ func TestAllowed(t *testing.T) {
 
 		if got := th.Allowed("mallory"); got != nil {
 			t.Errorf("%s: outsider may %v", tc.state, got)
+		}
+
+		for user, actions := range map[string][]thread.Action{alice: tc.sender, bob: tc.recipient, "mallory": nil} {
+			for _, action := range thread.Actions() {
+				e := thread.Event{From: user, To: th.Peer(user), Action: action, Body: "There is more to do."}
+				if err := th.Check(e); (err == nil) != slices.Contains(actions, action) {
+					t.Errorf("%s: %s checking %s: %v, allowed %v", tc.state, user, action, err, actions)
+				}
+			}
 		}
 	}
 }
@@ -345,7 +477,7 @@ func TestRulesCoverActions(t *testing.T) {
 			continue
 		}
 
-		if !ok || !slices.Contains(thread.States(), r.To) || len(r.From) == 0 {
+		if !ok || !slices.Contains(thread.States(), r.To) || len(r.From) == 0 || len(r.By) == 0 {
 			t.Errorf("%s: rule %+v", a, r)
 		}
 	}

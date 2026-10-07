@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build image run check lint lint-go lint-api lint-install generate generate-check vuln tidy-check fmt test test-install release-check clean
+.PHONY: help build image run check lint lint-go lint-api lint-install generate generate-check vuln tidy-check fmt test test-install test-amp release-check clean
 
 BIN_DIR ?= build/bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -71,6 +71,10 @@ test: test-install
 ## test-install: exercise the installer without network access
 test-install:
 	sh scripts/install_test.sh
+
+## test-amp: run Amp plugin regression tests (requires Node.js 24)
+test-amp:
+	node --test examples/amp/cp-inbox.test.mjs
 
 ## release-check: build release archives locally without publishing (requires GoReleaser)
 release-check:

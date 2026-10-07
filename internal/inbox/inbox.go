@@ -146,17 +146,6 @@ func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Recei
 		return Receipt{ID: e.ID, Duplicate: dup}, err
 	}
 
-	if e.Action == thread.ActionOpen {
-		n, countErr := b.store.OpenThreadsFrom(ctx, peer)
-		if countErr != nil {
-			return Receipt{}, countErr
-		}
-
-		if n >= MaxOpenThreadsFromPeer {
-			return Receipt{}, errorf(KindUnprocessable, "%s already has %d threads open here; end some first", peer, n)
-		}
-	}
-
 	t, err := b.next(ctx, &e, false)
 	if err != nil {
 		return Receipt{}, err
@@ -210,6 +199,9 @@ func (b *Inbox) Open(ctx context.Context, n NewThread) (View, error) {
 func (b *Inbox) Act(ctx context.Context, ref string, scope []string, action thread.Action, body string) (View, error) {
 	if action == thread.ActionOpen {
 		return View{}, errorf(KindInvalid, "open a thread by opening it, not as an action")
+	}
+	if action == thread.ActionReopen && strings.TrimSpace(body) == "" {
+		return View{}, errorf(KindInvalid, "reopen requires a reason")
 	}
 
 	id, err := b.resolve(ctx, ref, scope)
@@ -348,7 +340,12 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 			e.Clock = 1
 		}
 
-		return opened(*e, len(stored) > 0)
+		t, openErr := opened(*e, len(stored) > 0)
+		if openErr != nil {
+			return thread.Thread{}, openErr
+		}
+
+		return t, b.checkActiveLimit(ctx, thread.Thread{}, t, own)
 	}
 
 	if len(stored) == 0 {
@@ -387,12 +384,30 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 		return thread.Thread{}, errorf(KindUnprocessable, "%v", err)
 	}
 
-	t, err = thread.Replay(append(events, *e))
+	next, err := thread.Replay(append(events, *e))
 	if err != nil {
 		return thread.Thread{}, fmt.Errorf("replay thread %s: %w", e.Thread, err)
 	}
 
-	return t, nil
+	return next, b.checkActiveLimit(ctx, t, next, own)
+}
+
+func (b *Inbox) checkActiveLimit(ctx context.Context, before, after thread.Thread, own bool) error {
+	if after.Sender == b.self || after.Turn() == "" || before.Turn() != "" {
+		return nil
+	}
+
+	n, err := b.store.OpenThreadsFrom(ctx, after.Sender)
+	if err != nil || n < MaxOpenThreadsFromPeer {
+		return err
+	}
+
+	kind := KindUnprocessable
+	if own {
+		kind = KindConflict
+	}
+
+	return errorf(kind, "%s already has %d threads open here; end some first", after.Sender, n)
 }
 
 func actionList(actions []thread.Action) string {

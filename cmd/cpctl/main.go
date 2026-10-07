@@ -55,10 +55,13 @@ Common tasks:
 Commands:
 %s
 Threads:
-  kind      request: the recipient resolves it, the sender closes it.
+  kind      request: the recipient resolves it with a result; either side closes it.
             fyi: no answer expected; the recipient's ack closes it.
   states    open, acked, needs-input, resolved: in progress.
             closed, declined, withdrawn: ended (a closed one can be reopened).
+  closing   either side can close an open, acked, needs-input or resolved thread.
+            Either side can reopen a resolved or closed thread with a reason;
+            work returns to the recipient.
   answering resolve when done, with the result in the body; needs-input to ask
             the sender something; decline to refuse; reply for anything else.
             ack is optional on a request (it says you are on it); on an fyi it
