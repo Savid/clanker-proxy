@@ -26,7 +26,7 @@ type person struct {
 	token string
 }
 
-// newPerson runs a daemon for name: store, inbox, API and deliverer.
+// newPerson runs a daemon for name: store, inbox, API and both deliverers.
 func newPerson(t *testing.T, name string) *person {
 	t.Helper()
 
@@ -66,6 +66,7 @@ func newPerson(t *testing.T, name string) *person {
 	})
 
 	go func() { _ = deliverer.Run(ctx) }()
+	go func() { _ = delivery.NewWebhooks(log, st, delivery.Config{}).Run(ctx) }()
 
 	return p
 }
@@ -351,6 +352,7 @@ func TestRefusals(t *testing.T) {
 		t.Fatalf("resolve without a body = %v", err)
 	}
 
+	bob.waitTurn(t, "")
 	if _, err = bob.try(t, "wait", sent.ID[:8], "-timeout", "50ms"); err != nil {
 		t.Fatalf("wait on a thread already waiting on bob = %v", err)
 	}

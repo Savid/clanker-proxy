@@ -38,18 +38,25 @@ func findAuthorization(h http.Header, prefix string) (string, bool) {
 
 // operationRolesOwnerToken is a private map storing roles per operation.
 var operationRolesOwnerToken = map[string][]string{
-	ActOnThreadOperation:    []string{},
-	AddPeerOperation:        []string{},
-	ApproveRequestOperation: []string{},
-	DenyRequestOperation:    []string{},
-	GetMeOperation:          []string{},
-	GetPeerOperation:        []string{},
-	GetThreadOperation:      []string{},
-	ListPeersOperation:      []string{},
-	ListRequestsOperation:   []string{},
-	ListThreadsOperation:    []string{},
-	OpenThreadOperation:     []string{},
-	RemovePeerOperation:     []string{},
+	ActOnThreadOperation:           []string{},
+	AddPeerOperation:               []string{},
+	ApproveRequestOperation:        []string{},
+	CreateWebhookOperation:         []string{},
+	DeleteWebhookOperation:         []string{},
+	DenyRequestOperation:           []string{},
+	GetMeOperation:                 []string{},
+	GetPeerOperation:               []string{},
+	GetThreadOperation:             []string{},
+	GetWebhookOperation:            []string{},
+	ListPeersOperation:             []string{},
+	ListRequestsOperation:          []string{},
+	ListThreadsOperation:           []string{},
+	ListWebhookDeliveriesOperation: []string{},
+	ListWebhooksOperation:          []string{},
+	OpenThreadOperation:            []string{},
+	RemovePeerOperation:            []string{},
+	RetryWebhookDeliveryOperation:  []string{},
+	UpdateWebhookOperation:         []string{},
 }
 
 // GetRolesForOwnerToken returns the required roles for the given operation.

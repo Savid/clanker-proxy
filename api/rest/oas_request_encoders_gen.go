@@ -52,6 +52,20 @@ func encodeApproveRequestRequest(
 	return nil
 }
 
+func encodeCreateWebhookRequest(
+	req *WebhookCreate,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeDeliverEventRequest(
 	req *Event,
 	r *http.Request,
@@ -82,6 +96,20 @@ func encodeOpenThreadRequest(
 
 func encodeRequestPeeringRequest(
 	req *PeeringRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeUpdateWebhookRequest(
+	req *WebhookUpdate,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

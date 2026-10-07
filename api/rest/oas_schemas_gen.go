@@ -131,6 +131,9 @@ type Count int32
 
 type DaemonURL url.URL
 
+// DeleteWebhookNoContent is response for DeleteWebhook operation.
+type DeleteWebhookNoContent struct{}
+
 // How the owner's event is getting to the peer; absent on the peer's events.
 // Ref: #/components/schemas/Delivery
 type Delivery struct {
@@ -464,6 +467,54 @@ func (s *ListThreadsTurn) UnmarshalText(data []byte) error {
 		return nil
 	case ListThreadsTurnNone:
 		*s = ListThreadsTurnNone
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ListWebhookDeliveriesStatus string
+
+const (
+	ListWebhookDeliveriesStatusPending   ListWebhookDeliveriesStatus = "pending"
+	ListWebhookDeliveriesStatusDelivered ListWebhookDeliveriesStatus = "delivered"
+	ListWebhookDeliveriesStatusFailed    ListWebhookDeliveriesStatus = "failed"
+)
+
+// AllValues returns all ListWebhookDeliveriesStatus values.
+func (ListWebhookDeliveriesStatus) AllValues() []ListWebhookDeliveriesStatus {
+	return []ListWebhookDeliveriesStatus{
+		ListWebhookDeliveriesStatusPending,
+		ListWebhookDeliveriesStatusDelivered,
+		ListWebhookDeliveriesStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ListWebhookDeliveriesStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ListWebhookDeliveriesStatusPending:
+		return []byte(s), nil
+	case ListWebhookDeliveriesStatusDelivered:
+		return []byte(s), nil
+	case ListWebhookDeliveriesStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ListWebhookDeliveriesStatus) UnmarshalText(data []byte) error {
+	switch ListWebhookDeliveriesStatus(data) {
+	case ListWebhookDeliveriesStatusPending:
+		*s = ListWebhookDeliveriesStatusPending
+		return nil
+	case ListWebhookDeliveriesStatusDelivered:
+		*s = ListWebhookDeliveriesStatusDelivered
+		return nil
+	case ListWebhookDeliveriesStatusFailed:
+		*s = ListWebhookDeliveriesStatusFailed
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
@@ -897,6 +948,52 @@ func (o OptListThreadsTurn) Or(d ListThreadsTurn) ListThreadsTurn {
 	return d
 }
 
+// NewOptListWebhookDeliveriesStatus returns new OptListWebhookDeliveriesStatus with value set to v.
+func NewOptListWebhookDeliveriesStatus(v ListWebhookDeliveriesStatus) OptListWebhookDeliveriesStatus {
+	return OptListWebhookDeliveriesStatus{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptListWebhookDeliveriesStatus is optional ListWebhookDeliveriesStatus.
+type OptListWebhookDeliveriesStatus struct {
+	Value ListWebhookDeliveriesStatus
+	Set   bool
+}
+
+// IsSet returns true if OptListWebhookDeliveriesStatus was set.
+func (o OptListWebhookDeliveriesStatus) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptListWebhookDeliveriesStatus) Reset() {
+	var v ListWebhookDeliveriesStatus
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptListWebhookDeliveriesStatus) SetTo(v ListWebhookDeliveriesStatus) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptListWebhookDeliveriesStatus) Get() (v ListWebhookDeliveriesStatus, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptListWebhookDeliveriesStatus) Or(d ListWebhookDeliveriesStatus) ListWebhookDeliveriesStatus {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptName returns new OptName with value set to v.
 func NewOptName(v Name) OptName {
 	return OptName{
@@ -1167,6 +1264,52 @@ func (o OptTitle) Get() (v Title, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptTitle) Or(d Title) Title {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptWebhookSecret returns new OptWebhookSecret with value set to v.
+func NewOptWebhookSecret(v WebhookSecret) OptWebhookSecret {
+	return OptWebhookSecret{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptWebhookSecret is optional WebhookSecret.
+type OptWebhookSecret struct {
+	Value WebhookSecret
+	Set   bool
+}
+
+// IsSet returns true if OptWebhookSecret was set.
+func (o OptWebhookSecret) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptWebhookSecret) Reset() {
+	var v WebhookSecret
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptWebhookSecret) SetTo(v WebhookSecret) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptWebhookSecret) Get() (v WebhookSecret, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptWebhookSecret) Or(d WebhookSecret) WebhookSecret {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -1696,6 +1839,9 @@ func (s *RequestReceiptStatus) UnmarshalText(data []byte) error {
 }
 
 type RequestRef string
+
+// RetryWebhookDeliveryNoContent is response for RetryWebhookDelivery operation.
+type RetryWebhookDeliveryNoContent struct{}
 
 // Merged schema.
 // Ref: #/components/schemas/Thread
@@ -2437,3 +2583,710 @@ func (s *ThreadSummaryRole) UnmarshalText(data []byte) error {
 }
 
 type Title string
+
+// Owner-configured signed notifications, without the signing key.
+// Ref: #/components/schemas/Webhook
+type Webhook struct {
+	Name    Name          `json:"name"`
+	URL     WebhookURL    `json:"url"`
+	Events  WebhookEvents `json:"events"`
+	Origin  WebhookOrigin `json:"origin"`
+	Enabled bool          `json:"enabled"`
+	// Set while the endpoint is backing off after failed attempts or a receiver's Retry-After; no delivery
+	// is attempted before it. Any update or manual retry clears it.
+	PausedUntil OptDateTime `json:"pausedUntil"`
+}
+
+// GetName returns the value of Name.
+func (s *Webhook) GetName() Name {
+	return s.Name
+}
+
+// GetURL returns the value of URL.
+func (s *Webhook) GetURL() WebhookURL {
+	return s.URL
+}
+
+// GetEvents returns the value of Events.
+func (s *Webhook) GetEvents() WebhookEvents {
+	return s.Events
+}
+
+// GetOrigin returns the value of Origin.
+func (s *Webhook) GetOrigin() WebhookOrigin {
+	return s.Origin
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *Webhook) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetPausedUntil returns the value of PausedUntil.
+func (s *Webhook) GetPausedUntil() OptDateTime {
+	return s.PausedUntil
+}
+
+// SetName sets the value of Name.
+func (s *Webhook) SetName(val Name) {
+	s.Name = val
+}
+
+// SetURL sets the value of URL.
+func (s *Webhook) SetURL(val WebhookURL) {
+	s.URL = val
+}
+
+// SetEvents sets the value of Events.
+func (s *Webhook) SetEvents(val WebhookEvents) {
+	s.Events = val
+}
+
+// SetOrigin sets the value of Origin.
+func (s *Webhook) SetOrigin(val WebhookOrigin) {
+	s.Origin = val
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *Webhook) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetPausedUntil sets the value of PausedUntil.
+func (s *Webhook) SetPausedUntil(val OptDateTime) {
+	s.PausedUntil = val
+}
+
+// A new webhook. Secret is supplied by the owner and never returned.
+// Ref: #/components/schemas/WebhookCreate
+type WebhookCreate struct {
+	Name    Name          `json:"name"`
+	URL     WebhookURL    `json:"url"`
+	Events  WebhookEvents `json:"events"`
+	Origin  WebhookOrigin `json:"origin"`
+	Enabled bool          `json:"enabled"`
+	Secret  WebhookSecret `json:"secret"`
+}
+
+// GetName returns the value of Name.
+func (s *WebhookCreate) GetName() Name {
+	return s.Name
+}
+
+// GetURL returns the value of URL.
+func (s *WebhookCreate) GetURL() WebhookURL {
+	return s.URL
+}
+
+// GetEvents returns the value of Events.
+func (s *WebhookCreate) GetEvents() WebhookEvents {
+	return s.Events
+}
+
+// GetOrigin returns the value of Origin.
+func (s *WebhookCreate) GetOrigin() WebhookOrigin {
+	return s.Origin
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *WebhookCreate) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetSecret returns the value of Secret.
+func (s *WebhookCreate) GetSecret() WebhookSecret {
+	return s.Secret
+}
+
+// SetName sets the value of Name.
+func (s *WebhookCreate) SetName(val Name) {
+	s.Name = val
+}
+
+// SetURL sets the value of URL.
+func (s *WebhookCreate) SetURL(val WebhookURL) {
+	s.URL = val
+}
+
+// SetEvents sets the value of Events.
+func (s *WebhookCreate) SetEvents(val WebhookEvents) {
+	s.Events = val
+}
+
+// SetOrigin sets the value of Origin.
+func (s *WebhookCreate) SetOrigin(val WebhookOrigin) {
+	s.Origin = val
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *WebhookCreate) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetSecret sets the value of Secret.
+func (s *WebhookCreate) SetSecret(val WebhookSecret) {
+	s.Secret = val
+}
+
+// Delivery metadata without the signing key or response body.
+// Ref: #/components/schemas/WebhookDelivery
+type WebhookDelivery struct {
+	ID            ID                    `json:"id"`
+	Event         WebhookEventType      `json:"event"`
+	Origin        WebhookEventOrigin    `json:"origin"`
+	Subject       WebhookSubject        `json:"subject"`
+	Status        WebhookDeliveryStatus `json:"status"`
+	Attempts      Count                 `json:"attempts"`
+	CreatedAt     time.Time             `json:"createdAt"`
+	NextAttemptAt OptDateTime           `json:"nextAttemptAt"`
+	// A sanitized failure category or HTTP status, never a URL or response body.
+	LastError string `json:"lastError"`
+}
+
+// GetID returns the value of ID.
+func (s *WebhookDelivery) GetID() ID {
+	return s.ID
+}
+
+// GetEvent returns the value of Event.
+func (s *WebhookDelivery) GetEvent() WebhookEventType {
+	return s.Event
+}
+
+// GetOrigin returns the value of Origin.
+func (s *WebhookDelivery) GetOrigin() WebhookEventOrigin {
+	return s.Origin
+}
+
+// GetSubject returns the value of Subject.
+func (s *WebhookDelivery) GetSubject() WebhookSubject {
+	return s.Subject
+}
+
+// GetStatus returns the value of Status.
+func (s *WebhookDelivery) GetStatus() WebhookDeliveryStatus {
+	return s.Status
+}
+
+// GetAttempts returns the value of Attempts.
+func (s *WebhookDelivery) GetAttempts() Count {
+	return s.Attempts
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *WebhookDelivery) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetNextAttemptAt returns the value of NextAttemptAt.
+func (s *WebhookDelivery) GetNextAttemptAt() OptDateTime {
+	return s.NextAttemptAt
+}
+
+// GetLastError returns the value of LastError.
+func (s *WebhookDelivery) GetLastError() string {
+	return s.LastError
+}
+
+// SetID sets the value of ID.
+func (s *WebhookDelivery) SetID(val ID) {
+	s.ID = val
+}
+
+// SetEvent sets the value of Event.
+func (s *WebhookDelivery) SetEvent(val WebhookEventType) {
+	s.Event = val
+}
+
+// SetOrigin sets the value of Origin.
+func (s *WebhookDelivery) SetOrigin(val WebhookEventOrigin) {
+	s.Origin = val
+}
+
+// SetSubject sets the value of Subject.
+func (s *WebhookDelivery) SetSubject(val WebhookSubject) {
+	s.Subject = val
+}
+
+// SetStatus sets the value of Status.
+func (s *WebhookDelivery) SetStatus(val WebhookDeliveryStatus) {
+	s.Status = val
+}
+
+// SetAttempts sets the value of Attempts.
+func (s *WebhookDelivery) SetAttempts(val Count) {
+	s.Attempts = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *WebhookDelivery) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetNextAttemptAt sets the value of NextAttemptAt.
+func (s *WebhookDelivery) SetNextAttemptAt(val OptDateTime) {
+	s.NextAttemptAt = val
+}
+
+// SetLastError sets the value of LastError.
+func (s *WebhookDelivery) SetLastError(val string) {
+	s.LastError = val
+}
+
+// Recent deliveries, newest first.
+// Ref: #/components/schemas/WebhookDeliveryList
+type WebhookDeliveryList struct {
+	// Pass as cursor to fetch older records; omitted on the last page.
+	NextCursor OptString         `json:"nextCursor"`
+	Deliveries []WebhookDelivery `json:"deliveries"`
+}
+
+// GetNextCursor returns the value of NextCursor.
+func (s *WebhookDeliveryList) GetNextCursor() OptString {
+	return s.NextCursor
+}
+
+// GetDeliveries returns the value of Deliveries.
+func (s *WebhookDeliveryList) GetDeliveries() []WebhookDelivery {
+	return s.Deliveries
+}
+
+// SetNextCursor sets the value of NextCursor.
+func (s *WebhookDeliveryList) SetNextCursor(val OptString) {
+	s.NextCursor = val
+}
+
+// SetDeliveries sets the value of Deliveries.
+func (s *WebhookDeliveryList) SetDeliveries(val []WebhookDelivery) {
+	s.Deliveries = val
+}
+
+type WebhookDeliveryStatus string
+
+const (
+	WebhookDeliveryStatusPending   WebhookDeliveryStatus = "pending"
+	WebhookDeliveryStatusDelivered WebhookDeliveryStatus = "delivered"
+	WebhookDeliveryStatusFailed    WebhookDeliveryStatus = "failed"
+)
+
+// AllValues returns all WebhookDeliveryStatus values.
+func (WebhookDeliveryStatus) AllValues() []WebhookDeliveryStatus {
+	return []WebhookDeliveryStatus{
+		WebhookDeliveryStatusPending,
+		WebhookDeliveryStatusDelivered,
+		WebhookDeliveryStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookDeliveryStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookDeliveryStatusPending:
+		return []byte(s), nil
+	case WebhookDeliveryStatusDelivered:
+		return []byte(s), nil
+	case WebhookDeliveryStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookDeliveryStatus) UnmarshalText(data []byte) error {
+	switch WebhookDeliveryStatus(data) {
+	case WebhookDeliveryStatusPending:
+		*s = WebhookDeliveryStatusPending
+		return nil
+	case WebhookDeliveryStatusDelivered:
+		*s = WebhookDeliveryStatusDelivered
+		return nil
+	case WebhookDeliveryStatusFailed:
+		*s = WebhookDeliveryStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Whether one event came from a peer (incoming) or the owner (outgoing).
+// Ref: #/components/schemas/WebhookEventOrigin
+type WebhookEventOrigin string
+
+const (
+	WebhookEventOriginIncoming WebhookEventOrigin = "incoming"
+	WebhookEventOriginOutgoing WebhookEventOrigin = "outgoing"
+)
+
+// AllValues returns all WebhookEventOrigin values.
+func (WebhookEventOrigin) AllValues() []WebhookEventOrigin {
+	return []WebhookEventOrigin{
+		WebhookEventOriginIncoming,
+		WebhookEventOriginOutgoing,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookEventOrigin) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookEventOriginIncoming:
+		return []byte(s), nil
+	case WebhookEventOriginOutgoing:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookEventOrigin) UnmarshalText(data []byte) error {
+	switch WebhookEventOrigin(data) {
+	case WebhookEventOriginIncoming:
+		*s = WebhookEventOriginIncoming
+		return nil
+	case WebhookEventOriginOutgoing:
+		*s = WebhookEventOriginOutgoing
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Thread actions emit once when stored, including replies that do not change turns. Peering requests
+// emit when first stored; only the newest 100 such notifications per endpoint are retained, including
+// unsent ones. Delivery attempts do not emit events.
+// Ref: #/components/schemas/WebhookEventType
+type WebhookEventType string
+
+const (
+	WebhookEventTypeThreadOpen       WebhookEventType = "thread.open"
+	WebhookEventTypeThreadReply      WebhookEventType = "thread.reply"
+	WebhookEventTypeThreadAck        WebhookEventType = "thread.ack"
+	WebhookEventTypeThreadNeedsInput WebhookEventType = "thread.needs-input"
+	WebhookEventTypeThreadResolve    WebhookEventType = "thread.resolve"
+	WebhookEventTypeThreadDecline    WebhookEventType = "thread.decline"
+	WebhookEventTypeThreadClose      WebhookEventType = "thread.close"
+	WebhookEventTypeThreadReopen     WebhookEventType = "thread.reopen"
+	WebhookEventTypeThreadWithdraw   WebhookEventType = "thread.withdraw"
+	WebhookEventTypePeeringRequested WebhookEventType = "peering.requested"
+)
+
+// AllValues returns all WebhookEventType values.
+func (WebhookEventType) AllValues() []WebhookEventType {
+	return []WebhookEventType{
+		WebhookEventTypeThreadOpen,
+		WebhookEventTypeThreadReply,
+		WebhookEventTypeThreadAck,
+		WebhookEventTypeThreadNeedsInput,
+		WebhookEventTypeThreadResolve,
+		WebhookEventTypeThreadDecline,
+		WebhookEventTypeThreadClose,
+		WebhookEventTypeThreadReopen,
+		WebhookEventTypeThreadWithdraw,
+		WebhookEventTypePeeringRequested,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookEventType) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookEventTypeThreadOpen:
+		return []byte(s), nil
+	case WebhookEventTypeThreadReply:
+		return []byte(s), nil
+	case WebhookEventTypeThreadAck:
+		return []byte(s), nil
+	case WebhookEventTypeThreadNeedsInput:
+		return []byte(s), nil
+	case WebhookEventTypeThreadResolve:
+		return []byte(s), nil
+	case WebhookEventTypeThreadDecline:
+		return []byte(s), nil
+	case WebhookEventTypeThreadClose:
+		return []byte(s), nil
+	case WebhookEventTypeThreadReopen:
+		return []byte(s), nil
+	case WebhookEventTypeThreadWithdraw:
+		return []byte(s), nil
+	case WebhookEventTypePeeringRequested:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookEventType) UnmarshalText(data []byte) error {
+	switch WebhookEventType(data) {
+	case WebhookEventTypeThreadOpen:
+		*s = WebhookEventTypeThreadOpen
+		return nil
+	case WebhookEventTypeThreadReply:
+		*s = WebhookEventTypeThreadReply
+		return nil
+	case WebhookEventTypeThreadAck:
+		*s = WebhookEventTypeThreadAck
+		return nil
+	case WebhookEventTypeThreadNeedsInput:
+		*s = WebhookEventTypeThreadNeedsInput
+		return nil
+	case WebhookEventTypeThreadResolve:
+		*s = WebhookEventTypeThreadResolve
+		return nil
+	case WebhookEventTypeThreadDecline:
+		*s = WebhookEventTypeThreadDecline
+		return nil
+	case WebhookEventTypeThreadClose:
+		*s = WebhookEventTypeThreadClose
+		return nil
+	case WebhookEventTypeThreadReopen:
+		*s = WebhookEventTypeThreadReopen
+		return nil
+	case WebhookEventTypeThreadWithdraw:
+		*s = WebhookEventTypeThreadWithdraw
+		return nil
+	case WebhookEventTypePeeringRequested:
+		*s = WebhookEventTypePeeringRequested
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type WebhookEvents []WebhookEventsItem
+
+type WebhookEventsItem string
+
+const (
+	WebhookEventsItem_                         WebhookEventsItem = "*"
+	WebhookEventsItem_threadDotopen            WebhookEventsItem = "thread.open"
+	WebhookEventsItem_threadDotreply           WebhookEventsItem = "thread.reply"
+	WebhookEventsItem_threadDotack             WebhookEventsItem = "thread.ack"
+	WebhookEventsItem_threadDotneedsMinusinput WebhookEventsItem = "thread.needs-input"
+	WebhookEventsItem_threadDotresolve         WebhookEventsItem = "thread.resolve"
+	WebhookEventsItem_threadDotdecline         WebhookEventsItem = "thread.decline"
+	WebhookEventsItem_threadDotclose           WebhookEventsItem = "thread.close"
+	WebhookEventsItem_threadDotreopen          WebhookEventsItem = "thread.reopen"
+	WebhookEventsItem_threadDotwithdraw        WebhookEventsItem = "thread.withdraw"
+	WebhookEventsItem_peeringDotrequested      WebhookEventsItem = "peering.requested"
+)
+
+// AllValues returns all WebhookEventsItem values.
+func (WebhookEventsItem) AllValues() []WebhookEventsItem {
+	return []WebhookEventsItem{
+		WebhookEventsItem_,
+		WebhookEventsItem_threadDotopen,
+		WebhookEventsItem_threadDotreply,
+		WebhookEventsItem_threadDotack,
+		WebhookEventsItem_threadDotneedsMinusinput,
+		WebhookEventsItem_threadDotresolve,
+		WebhookEventsItem_threadDotdecline,
+		WebhookEventsItem_threadDotclose,
+		WebhookEventsItem_threadDotreopen,
+		WebhookEventsItem_threadDotwithdraw,
+		WebhookEventsItem_peeringDotrequested,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookEventsItem) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookEventsItem_:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotopen:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotreply:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotack:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotneedsMinusinput:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotresolve:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotdecline:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotclose:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotreopen:
+		return []byte(s), nil
+	case WebhookEventsItem_threadDotwithdraw:
+		return []byte(s), nil
+	case WebhookEventsItem_peeringDotrequested:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookEventsItem) UnmarshalText(data []byte) error {
+	switch WebhookEventsItem(data) {
+	case WebhookEventsItem_:
+		*s = WebhookEventsItem_
+		return nil
+	case WebhookEventsItem_threadDotopen:
+		*s = WebhookEventsItem_threadDotopen
+		return nil
+	case WebhookEventsItem_threadDotreply:
+		*s = WebhookEventsItem_threadDotreply
+		return nil
+	case WebhookEventsItem_threadDotack:
+		*s = WebhookEventsItem_threadDotack
+		return nil
+	case WebhookEventsItem_threadDotneedsMinusinput:
+		*s = WebhookEventsItem_threadDotneedsMinusinput
+		return nil
+	case WebhookEventsItem_threadDotresolve:
+		*s = WebhookEventsItem_threadDotresolve
+		return nil
+	case WebhookEventsItem_threadDotdecline:
+		*s = WebhookEventsItem_threadDotdecline
+		return nil
+	case WebhookEventsItem_threadDotclose:
+		*s = WebhookEventsItem_threadDotclose
+		return nil
+	case WebhookEventsItem_threadDotreopen:
+		*s = WebhookEventsItem_threadDotreopen
+		return nil
+	case WebhookEventsItem_threadDotwithdraw:
+		*s = WebhookEventsItem_threadDotwithdraw
+		return nil
+	case WebhookEventsItem_peeringDotrequested:
+		*s = WebhookEventsItem_peeringDotrequested
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Configured webhooks, sorted by name.
+// Ref: #/components/schemas/WebhookList
+type WebhookList struct {
+	Webhooks []Webhook `json:"webhooks"`
+}
+
+// GetWebhooks returns the value of Webhooks.
+func (s *WebhookList) GetWebhooks() []Webhook {
+	return s.Webhooks
+}
+
+// SetWebhooks sets the value of Webhooks.
+func (s *WebhookList) SetWebhooks(val []Webhook) {
+	s.Webhooks = val
+}
+
+// Incoming events from peers, outgoing owner actions, or both. Peering requests are incoming.
+// Ref: #/components/schemas/WebhookOrigin
+type WebhookOrigin string
+
+const (
+	WebhookOriginIncoming WebhookOrigin = "incoming"
+	WebhookOriginOutgoing WebhookOrigin = "outgoing"
+	WebhookOriginBoth     WebhookOrigin = "both"
+)
+
+// AllValues returns all WebhookOrigin values.
+func (WebhookOrigin) AllValues() []WebhookOrigin {
+	return []WebhookOrigin{
+		WebhookOriginIncoming,
+		WebhookOriginOutgoing,
+		WebhookOriginBoth,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookOrigin) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookOriginIncoming:
+		return []byte(s), nil
+	case WebhookOriginOutgoing:
+		return []byte(s), nil
+	case WebhookOriginBoth:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookOrigin) UnmarshalText(data []byte) error {
+	switch WebhookOrigin(data) {
+	case WebhookOriginIncoming:
+		*s = WebhookOriginIncoming
+		return nil
+	case WebhookOriginOutgoing:
+		*s = WebhookOriginOutgoing
+		return nil
+	case WebhookOriginBoth:
+		*s = WebhookOriginBoth
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type WebhookSecret string
+
+type WebhookSubject string
+
+type WebhookURL url.URL
+
+// Full replacement of settings, with an optional signing-key replacement.
+// Ref: #/components/schemas/WebhookUpdate
+type WebhookUpdate struct {
+	URL     WebhookURL       `json:"url"`
+	Events  WebhookEvents    `json:"events"`
+	Origin  WebhookOrigin    `json:"origin"`
+	Enabled bool             `json:"enabled"`
+	Secret  OptWebhookSecret `json:"secret"`
+}
+
+// GetURL returns the value of URL.
+func (s *WebhookUpdate) GetURL() WebhookURL {
+	return s.URL
+}
+
+// GetEvents returns the value of Events.
+func (s *WebhookUpdate) GetEvents() WebhookEvents {
+	return s.Events
+}
+
+// GetOrigin returns the value of Origin.
+func (s *WebhookUpdate) GetOrigin() WebhookOrigin {
+	return s.Origin
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *WebhookUpdate) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetSecret returns the value of Secret.
+func (s *WebhookUpdate) GetSecret() OptWebhookSecret {
+	return s.Secret
+}
+
+// SetURL sets the value of URL.
+func (s *WebhookUpdate) SetURL(val WebhookURL) {
+	s.URL = val
+}
+
+// SetEvents sets the value of Events.
+func (s *WebhookUpdate) SetEvents(val WebhookEvents) {
+	s.Events = val
+}
+
+// SetOrigin sets the value of Origin.
+func (s *WebhookUpdate) SetOrigin(val WebhookOrigin) {
+	s.Origin = val
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *WebhookUpdate) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetSecret sets the value of Secret.
+func (s *WebhookUpdate) SetSecret(val OptWebhookSecret) {
+	s.Secret = val
+}

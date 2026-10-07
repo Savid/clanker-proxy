@@ -2,6 +2,9 @@
 # response encoding and validation. There is no Unimplemented stub, so a new
 # operation fails to compile until internal/server implements it.
 generator:
+  # Webhooks describe external receivers; this package serves the daemon API.
+  filters:
+    path_regex: ^/api/v1/
   features:
     disable_all: true
     enable:

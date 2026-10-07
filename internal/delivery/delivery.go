@@ -1,7 +1,8 @@
 // Package delivery is how this daemon calls other daemons: it drains the
 // outbox, sending each peer its events in order and retrying with backoff
 // until each is stored, refused, or a week old, and it carries peering
-// requests and approvals.
+// requests and approvals. Webhooks separately sends the owner's signed
+// notifications to their configured endpoints.
 package delivery
 
 import (

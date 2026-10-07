@@ -45,6 +45,8 @@ Common tasks:
   read a thread                cpctl show <ref>
   wait for their answer        cpctl wait <ref> -timeout 30m
   act on a thread              cpctl show <ref>, then one of its "next:" commands
+  notify an HTTP receiver      cpctl help webhook add
+  inspect notification errors  cpctl webhook deliveries <name> -status failed
   check for a release          cpctl update -check
   update both local binaries   cpctl update
 
@@ -72,7 +74,8 @@ Output: text, ending with "next:" lines. -json prints cpd's API response
 instead, one JSON object per line (schemas: <cpd-url>/openapi.yaml), and
 errors as {"error":{...}} on stderr. A command's flags may come before or
 after its arguments, and so may -json; -url and -token go before the command.
-For update, -json prints {current,latest,available,installed} locally.
+For update, -json prints {current,latest,available,installed} locally, and
+for webhook events, {events}.
 
 Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 4 not found, 5 not allowed now or conflicts, 6 bad token, 7 cpd unreachable.

@@ -26,7 +26,159 @@ tags:
     description: Conversations with peers.
   - name: federation
     description: What peers call.
+  - name: webhooks
+    description: Signed notifications to owner-configured endpoints.
 paths:
+  /api/v1/webhooks:
+    get:
+      operationId: listWebhooks
+      tags: [webhooks]
+      summary: List webhooks
+      description: >-
+        List webhooks.
+      responses:
+        '200':
+          description: Configured endpoints, without signing keys.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createWebhook
+      tags: [webhooks]
+      summary: Create a webhook
+      description: >-
+        Only future matching events are queued; secrets are never returned.
+      requestBody:
+        required: true
+        description: Settings and signing key for the new endpoint.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCreate'
+      responses:
+        '201':
+          description: The new webhook, without its signing key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/webhooks/{name}:
+    parameters:
+      - $ref: '#/components/parameters/WebhookName'
+    get:
+      operationId: getWebhook
+      tags: [webhooks]
+      summary: Read a webhook
+      description: >-
+        Read a webhook.
+      responses:
+        '200':
+          description: The endpoint settings, without its signing key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: updateWebhook
+      tags: [webhooks]
+      summary: Update a webhook
+      description: >-
+        Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure backoff (pausedUntil).
+      requestBody:
+        required: true
+        description: Replacement settings and optional new signing key.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookUpdate'
+      responses:
+        '200':
+          description: The updated webhook, without its signing key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteWebhook
+      tags: [webhooks]
+      summary: Delete a webhook
+      description: >-
+        Deletes configuration and delivery history, including pending deliveries. An in-flight request may finish.
+      responses:
+        '204':
+          description: The webhook and its delivery history are gone.
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/webhooks/{name}/deliveries:
+    parameters:
+      - $ref: '#/components/parameters/WebhookName'
+    get:
+      operationId: listWebhookDeliveries
+      tags: [webhooks]
+      summary: List recent webhook deliveries
+      description: >-
+        Newest-first delivery history with cursor pagination. Pending deliveries retry for up to seven days; terminal history is kept for seven days. Delivery IDs stay fixed across retries. Delivery order is not guaranteed.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum records per page.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 100
+        - name: cursor
+          in: query
+          description: The preceding page's nextCursor.
+          schema:
+            type: string
+            pattern: '^[0-9]{1,19}$'
+            maxLength: 19
+        - name: status
+          in: query
+          description: Filter by delivery status.
+          schema:
+            type: string
+            enum: [pending, delivered, failed]
+      responses:
+        '200':
+          description: A page of deliveries, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/webhooks/{name}/deliveries/{id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/WebhookName'
+      - name: id
+        in: path
+        required: true
+        description: The delivery UUID.
+        schema:
+          $ref: '#/components/schemas/ID'
+    post:
+      operationId: retryWebhookDelivery
+      tags: [webhooks]
+      summary: Retry a failed webhook delivery
+      description: >-
+        Resets a failed delivery for another seven days of retries, retaining its ID and payload, and clears the endpoint's failure backoff. Requires an enabled webhook. Refuses pending or delivered items with 409.
+      responses:
+        '204':
+          description: The delivery is queued again.
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/health:
     get:
       operationId: getHealth
@@ -399,8 +551,52 @@ paths:
           description: Noted.
         default:
           $ref: '#/components/responses/Problem'
+webhooks:
+  notification:
+    post:
+      operationId: receiveWebhookNotification
+      tags: [webhooks]
+      summary: Receive an event notification
+      description: >-
+        Implemented by the configured receiver, not by cpd. Verify the signature
+        and timestamp, deduplicate by Webhook-Id, then durably enqueue before
+        returning 2xx. The payload schema documents the signing algorithm.
+      security:
+        - webhookSignature: []
+      parameters:
+        - name: Webhook-Id
+          in: header
+          required: true
+          description: Stable delivery ID, unchanged across retries.
+          schema:
+            $ref: '#/components/schemas/ID'
+        - name: Webhook-Timestamp
+          in: header
+          required: true
+          description: Unix seconds of this attempt, included in the signature.
+          schema:
+            type: string
+            pattern: '^[0-9]{1,12}$'
+            maxLength: 12
+      requestBody:
+        required: true
+        description: Event metadata, signed as raw bytes.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookPayload'
+      responses:
+        '204':
+          description: The receiver durably accepted the notification.
+        default:
+          description: A failed delivery; cpd interprets the HTTP status and ignores the response body.
 components:
   securitySchemes:
+    webhookSignature:
+      type: apiKey
+      in: header
+      name: Webhook-Signature
+      description: HMAC-SHA256 in Standard Webhooks v1 format, verified by the external receiver.
     ownerToken:
       type: http
       scheme: bearer
@@ -410,6 +606,13 @@ components:
       scheme: bearer
       description: The secret shared with one peer.
   parameters:
+    WebhookName:
+      name: name
+      in: path
+      required: true
+      description: The webhook name.
+      schema:
+        $ref: '#/components/schemas/Name'
     RequestID:
       name: id
       in: path
@@ -441,6 +644,193 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
   schemas:
+    WebhookEventType:
+      type: string
+      description: >-
+        Thread actions emit once when stored, including replies that do not change turns.
+        Peering requests emit when first stored; only the newest 100 such notifications per endpoint are retained, including unsent ones. Delivery attempts do not emit events.
+      enum: [thread.open, thread.reply, thread.ack, thread.needs-input, thread.resolve, thread.decline, thread.close, thread.reopen, thread.withdraw, peering.requested]
+    WebhookEvents:
+      type: array
+      description: A sole '*' subscribes to all current and future event types; otherwise an explicit nonempty list.
+      minItems: 1
+      maxItems: 10
+      uniqueItems: true
+      items:
+        type: string
+        enum: ['*', thread.open, thread.reply, thread.ack, thread.needs-input, thread.resolve, thread.decline, thread.close, thread.reopen, thread.withdraw, peering.requested]
+    WebhookOrigin:
+      type: string
+      description: Incoming events from peers, outgoing owner actions, or both. Peering requests are incoming.
+      enum: [incoming, outgoing, both]
+    WebhookEventOrigin:
+      type: string
+      description: Whether one event came from a peer (incoming) or the owner (outgoing).
+      enum: [incoming, outgoing]
+    WebhookURL:
+      type: string
+      format: uri
+      description: >-
+        A webhook destination: https, or http on a literal loopback address,
+        without credentials or fragment; at most 512 characters (checked by the
+        server; ogen cannot bound a URI). Queries may carry non-secret routing
+        parameters. Any host the daemon can reach is allowed.
+      maxLength: 512
+      examples: ['https://runner.example.com/hooks']
+    WebhookSecret:
+      type: string
+      description: Base64 encoding of a 32-byte signing key. Write-only; never returned or logged.
+      minLength: 44
+      maxLength: 44
+      pattern: '^[A-Za-z0-9+/]{43}=$'
+      writeOnly: true
+    Webhook:
+      type: object
+      description: >-
+        Owner-configured signed notifications, without the signing key.
+      required: [name, url, events, origin, enabled]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/WebhookURL'
+        events:
+          $ref: '#/components/schemas/WebhookEvents'
+        origin:
+          $ref: '#/components/schemas/WebhookOrigin'
+        enabled:
+          type: boolean
+        pausedUntil:
+          type: string
+          format: date-time
+          readOnly: true
+          description: >-
+            Set while the endpoint is backing off after failed attempts or a
+            receiver's Retry-After; no delivery is attempted before it. Any
+            update or manual retry clears it.
+    WebhookCreate:
+      type: object
+      description: >-
+        A new webhook. Secret is supplied by the owner and never returned.
+      required: [name, url, events, origin, enabled, secret]
+      properties:
+        name:
+          $ref: '#/components/schemas/Name'
+        url:
+          $ref: '#/components/schemas/WebhookURL'
+        events:
+          $ref: '#/components/schemas/WebhookEvents'
+        origin:
+          $ref: '#/components/schemas/WebhookOrigin'
+        enabled:
+          type: boolean
+        secret:
+          $ref: '#/components/schemas/WebhookSecret'
+    WebhookUpdate:
+      type: object
+      description: >-
+        Full replacement of settings, with an optional signing-key replacement.
+      required: [url, events, origin, enabled]
+      properties:
+        url:
+          $ref: '#/components/schemas/WebhookURL'
+        events:
+          $ref: '#/components/schemas/WebhookEvents'
+        origin:
+          $ref: '#/components/schemas/WebhookOrigin'
+        enabled:
+          type: boolean
+        secret:
+          $ref: '#/components/schemas/WebhookSecret'
+    WebhookList:
+      type: object
+      description: Configured webhooks, sorted by name.
+      required: [webhooks]
+      properties:
+        webhooks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Webhook'
+    WebhookDelivery:
+      type: object
+      description: Delivery metadata without the signing key or response body.
+      required: [id, event, origin, subject, status, attempts, createdAt, lastError]
+      properties:
+        id:
+          $ref: '#/components/schemas/ID'
+        event:
+          $ref: '#/components/schemas/WebhookEventType'
+        origin:
+          $ref: '#/components/schemas/WebhookEventOrigin'
+        subject:
+          $ref: '#/components/schemas/WebhookSubject'
+        status:
+          type: string
+          enum: [pending, delivered, failed]
+        attempts:
+          $ref: '#/components/schemas/Count'
+        createdAt:
+          type: string
+          format: date-time
+        nextAttemptAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+          description: A sanitized failure category or HTTP status, never a URL or response body.
+    WebhookSubject:
+      type: string
+      minLength: 1
+      maxLength: 36
+      description: Thread UUID, or peering request reference.
+    WebhookDeliveryList:
+      type: object
+      description: Recent deliveries, newest first.
+      required: [deliveries]
+      properties:
+        nextCursor:
+          type: string
+          description: Pass as cursor to fetch older records; omitted on the last page.
+          pattern: '^[0-9]{1,19}$'
+          maxLength: 19
+        deliveries:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/WebhookDelivery'
+    WebhookPayload:
+      type: object
+      description: >-
+        Signed HTTP POST body. Webhook-Id is this delivery id; Webhook-Timestamp is
+        the attempt's Unix time in seconds. Webhook-Signature is v1, followed by
+        base64 HMAC-SHA256 of id.timestamp.rawBody using the decoded signing key.
+        Verify the raw body, signature, timestamp freshness and duplicate IDs.
+        Treat this as a notification; fetch current state before acting.
+        Ignore unknown fields, and unknown types when subscribed to '*'.
+        For peering.requested, peer is the name the unauthenticated requester
+        asked for, which may match an existing peer.
+      required: [id, type, origin, at, subject, peer]
+      properties:
+        id:
+          $ref: '#/components/schemas/ID'
+        type:
+          $ref: '#/components/schemas/WebhookEventType'
+        origin:
+          $ref: '#/components/schemas/WebhookEventOrigin'
+        at:
+          type: string
+          format: date-time
+          description: When this daemon stored the event.
+        subject:
+          $ref: '#/components/schemas/WebhookSubject'
+        eventId:
+          $ref: '#/components/schemas/ID'
+        peer:
+          $ref: '#/components/schemas/Name'
+        state:
+          $ref: '#/components/schemas/ThreadState'
+        myTurn:
+          type: boolean
     Name:
       type: string
       description: >-

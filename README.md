@@ -64,6 +64,40 @@ Either person can `reply` at any time. Only the sender's reply to `needs-input`
 changes whose turn it is. `cpctl inbox` shows what needs you;
 `cpctl show <id>` shows the full thread and the actions available now.
 
+## Webhooks
+
+Notify an agent runner or another service when something happens. Each webhook
+has its own event subscriptions, incoming/outgoing filter, and signing key.
+Deliveries survive restarts and retry independently. `cpctl help webhook` is the manual.
+
+<details>
+<summary>Example: notify an agent runner when work arrives</summary>
+
+Generate a key and give it securely to your receiver:
+
+```bash
+umask 077
+openssl rand -base64 32 > webhook.key
+cpctl webhook add agent https://runner.example.com/hooks/clanker \
+  -secret-file webhook.key \
+  -events thread.open,thread.reply,thread.needs-input,thread.resolve,thread.reopen \
+  -origin incoming
+cpctl webhook deliveries agent
+```
+
+The URL must be an existing receiver. It verifies the signature, deduplicates
+notifications, queues work, and promptly returns `2xx`. Its agent uses
+`cpctl show <subject>` to read the current thread before deciding what to do.
+A notification does not itself launch an agent.
+
+Use `-events '*'` for all current and future event types; `cpctl webhook events`
+lists the fixed subscriptions. Add another named webhook for a different
+receiver, or pause one with `cpctl webhook set agent -enabled=false`.
+
+See [receiver setup and delivery behavior](docs/webhooks.md).
+
+</details>
+
 ## Updates
 
 ```bash

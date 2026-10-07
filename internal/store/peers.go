@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/savid/clanker-proxy/pkg/webhook"
 )
 
-// ErrExists is returned when a peer of that name already exists.
+// ErrExists is returned when a peer or webhook of that name already exists.
 var ErrExists = errors.New("already exists")
 
 // Peer statuses.
@@ -215,7 +217,7 @@ func (s *Store) AddRequest(ctx context.Context, r Request, maxPending int, expir
 
 		dropped = int(n)
 
-		return nil
+		return queueWebhooks(ctx, tx, webhook.Payload{Type: "peering.requested", Origin: "incoming", At: r.At, Subject: r.ID, Peer: r.Name})
 	})
 
 	return dropped, err
