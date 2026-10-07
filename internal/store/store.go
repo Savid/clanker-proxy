@@ -136,10 +136,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	if err = resetStaleWebhooks(ctx, db); err != nil {
+	if err = upgradeWebhooks(ctx, db); err != nil {
 		_ = db.Close()
 
-		return nil, fmt.Errorf("reset webhooks %s: %w", path, err)
+		return nil, fmt.Errorf("upgrade webhooks %s: %w", path, err)
 	}
 
 	if _, err = db.ExecContext(ctx, schema); err != nil {
@@ -151,11 +151,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// resetStaleWebhooks drops webhook tables created without destination types.
-// CREATE TABLE IF NOT EXISTS keeps an existing table as it is, so without this
-// every webhook query on such a database would fail. Their rows cannot be
-// carried over, so the owner adds those webhooks again.
-func resetStaleWebhooks(ctx context.Context, db *sql.DB) error {
+// upgradeWebhooks adds destination types and headers to a webhooks table
+// created before them, so configured webhooks survive an upgrade. CREATE
+// TABLE IF NOT EXISTS keeps an existing table as it is, and every webhook
+// query needs these columns. Those webhooks were all signed generic ones.
+func upgradeWebhooks(ctx context.Context, db *sql.DB) error {
 	var tables, typed int
 
 	err := db.QueryRowContext(ctx, `SELECT
@@ -166,9 +166,10 @@ func resetStaleWebhooks(ctx context.Context, db *sql.DB) error {
 	}
 
 	return (&Store{db: db}).tx(ctx, func(tx *sql.Tx) error {
-		_, dropErr := tx.ExecContext(ctx, `DROP TABLE IF EXISTS webhook_deliveries; DROP TABLE webhooks`)
+		_, alterErr := tx.ExecContext(ctx, `ALTER TABLE webhooks ADD COLUMN type TEXT NOT NULL DEFAULT 'generic';
+ALTER TABLE webhooks ADD COLUMN headers TEXT NOT NULL DEFAULT '[]'`)
 
-		return dropErr
+		return alterErr
 	})
 }
 

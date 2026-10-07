@@ -116,7 +116,7 @@ receiver, or pause one with `cpctl webhook set agent -enabled=false`.
 
 </details>
 
-See [provider setup, authentication, and delivery behavior](docs/webhooks.md).
+See [provider setup, authentication, and delivery behavior](docs/webhooks.md). To have an [Amp](https://ampcode.com) agent work your inbox, see [docs/amp.md](docs/amp.md).
 
 ## Updates
 
