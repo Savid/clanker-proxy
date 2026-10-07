@@ -168,7 +168,7 @@ func (d *Webhooks) deliverWebhook(ctx context.Context, job store.WebhookDelivery
 	next := latest(now.Add(webhookBackoff(job.ID, job.Attempts)), retryAfter)
 	if status == "pending" {
 		pause := webhookPause(hook, job, now, retryAfter)
-		if err = d.store.DeferWebhook(ctx, job.ID, hook.URL, pause); err != nil {
+		if err = d.store.DeferWebhook(ctx, job.ID, hook, pause); err != nil {
 			return err
 		}
 		// The delivery cannot go before its endpoint does; say so in nextAttemptAt.
@@ -227,14 +227,13 @@ func (d *Webhooks) postWebhook(ctx context.Context, hook webhook.Config, job sto
 		return "delivered", "", time.Time{}
 	}
 	message := fmt.Sprintf("HTTP %d", resp.StatusCode)
-	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 ||
-		(hook.Type == "apprise" && resp.StatusCode == http.StatusFailedDependency) {
+	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 		var cooldown time.Time
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			cooldown = webhookRetryAfter(resp.Header.Get("Retry-After"), d.now().UTC(), job.RetryUntil)
 		}
-		if hook.Type == "discord" && resp.StatusCode == http.StatusTooManyRequests {
-			cooldown = latest(cooldown, discordRetryAfter(body, d.now().UTC(), job.RetryUntil))
+		if provider, _ := webhook.LookupProvider(hook.Type); provider.RetryAfterBody && resp.StatusCode == http.StatusTooManyRequests {
+			cooldown = latest(cooldown, bodyRetryAfter(body, d.now().UTC(), job.RetryUntil))
 		}
 		return "pending", message, cooldown
 	}
@@ -269,24 +268,26 @@ func webhookBackoff(key string, attempts int) time.Duration {
 	return base + base*time.Duration(sum[0])/(4*255)
 }
 
-// webhookRetryAfter honors a receiver's Retry-After for at most maxBackoff, so
-// one misconfigured proxy cannot pause an endpoint for its whole retry window.
+// webhookRetryAfter honors a Retry-After header, in seconds or as a date.
 func webhookRetryAfter(value string, now, until time.Time) time.Time {
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return retryAt(time.Duration(min(seconds, int64(maxBackoff/time.Second)))*time.Second, now, until)
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return retryAt(at.Sub(now), now, until)
+	}
+	return time.Time{}
+}
+
+// retryAt honors a receiver's requested delay for at most maxBackoff, so one
+// misconfigured proxy cannot pause an endpoint for its whole retry window.
+func retryAt(delay time.Duration, now, until time.Time) time.Time {
 	limit := now.Add(maxBackoff)
 	if until.Before(limit) {
 		limit = until
 	}
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
-		if seconds >= int64(limit.Sub(now)/time.Second) {
-			return limit
-		}
-		return now.Add(time.Duration(seconds) * time.Second)
-	}
-	if at, err := http.ParseTime(value); err == nil && at.After(now) {
-		if at.After(limit) {
-			return limit
-		}
+	if at := now.Add(delay); at.Before(limit) {
 		return at
 	}
-	return time.Time{}
+	return limit
 }

@@ -136,6 +136,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
+	if err = resetStaleWebhooks(ctx, db); err != nil {
+		_ = db.Close()
+
+		return nil, fmt.Errorf("reset webhooks %s: %w", path, err)
+	}
+
 	if _, err = db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
 
@@ -143,6 +149,27 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 
 	return &Store{db: db}, nil
+}
+
+// resetStaleWebhooks drops webhook tables created without destination types.
+// CREATE TABLE IF NOT EXISTS keeps an existing table as it is, so without this
+// every webhook query on such a database would fail. Their rows cannot be
+// carried over, so the owner adds those webhooks again.
+func resetStaleWebhooks(ctx context.Context, db *sql.DB) error {
+	var tables, typed int
+
+	err := db.QueryRowContext(ctx, `SELECT
+ (SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='webhooks'),
+ (SELECT count(*) FROM pragma_table_info('webhooks') WHERE name='type')`).Scan(&tables, &typed)
+	if err != nil || tables == 0 || typed == 1 {
+		return err
+	}
+
+	return (&Store{db: db}).tx(ctx, func(tx *sql.Tx) error {
+		_, dropErr := tx.ExecContext(ctx, `DROP TABLE IF EXISTS webhook_deliveries; DROP TABLE webhooks`)
+
+		return dropErr
+	})
 }
 
 // Close closes the database.

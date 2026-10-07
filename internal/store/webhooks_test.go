@@ -189,3 +189,41 @@ func TestWebhookExpiryWaitsForActiveAttempt(t *testing.T) {
 		t.Fatal("successful in-flight response was lost to expiry")
 	}
 }
+
+func TestWebhookDeferIgnoresReplacedCredentials(t *testing.T) {
+	t.Parallel()
+	st := open(t)
+	ctx := t.Context()
+	c := hook("agent", "incoming", "*")
+	c.Secret = ""
+	c.Headers = []webhook.Header{{Name: "Authorization", Value: "Bearer stale"}}
+	if err := st.CreateWebhook(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	addThread(t, st, "aaaa0000-0000-4000-8000-000000000001", "bob", "me", nil, t0)
+	d := deliveries(t, st, "agent", 1)[0]
+	sent, err := st.WebhookDestination(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := []webhook.Header{{Name: "Authorization", Value: "Bearer fixed"}}
+	if _, err = st.UpdateWebhook(ctx, c.Name, webhook.Update{Headers: &fixed}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DeferWebhook(ctx, d.ID, sent, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Webhook(ctx, c.Name); !got.PausedUntil.IsZero() || got.Failures != 0 {
+		t.Fatalf("stale request paused the updated endpoint until %v", got.PausedUntil)
+	}
+	current, err := st.WebhookDestination(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DeferWebhook(ctx, d.ID, current, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Webhook(ctx, c.Name); !got.PausedUntil.Equal(t0.Add(time.Hour)) || got.Failures != 1 {
+		t.Fatalf("current failure not recorded: %v, %d", got.PausedUntil, got.Failures)
+	}
+}

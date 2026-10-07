@@ -102,7 +102,7 @@ Headers also support custom receivers and reverse proxies. There can be at most
 16, with case-insensitively unique names (up to 64 bytes) and single-line values
 (up to 4096 bytes). Transport, `Content-Type`, `User-Agent`, `Proxy-*`, and
 `Webhook-*` headers are managed by `cpd` and cannot be overridden. For ntfy,
-`Title` is set by the formatter. Header files and URLs are stored in the daemon's
+a `Title` header replaces the generated title. Header files and URLs are stored in the daemon's
 private database; they are not reread from the CLI machine on delivery.
 
 ### Apprise for additional services
@@ -119,11 +119,11 @@ cpctl webhook add notifications -type apprise -url-file apprise.url \
 
 Use `Authorization` in the headers file if your Apprise API requires it; omit
 the file otherwise. Configure the endpoint to return its normal synchronous
-HTTP result, without streaming. A `424` means at least one downstream delivery
-failed (or its configuration needs fixing), so `cpd` retries it. If the saved
-configuration fans out to several services, a retry can duplicate a message
-on destinations that already succeeded. Separate configurations and named
-webhooks give each destination its own retry state.
+HTTP result, without streaming. A `424` means at least one of its services
+failed while others may have succeeded, so `cpd` marks the delivery failed
+rather than resending it to every service. After fixing the failing service,
+`cpctl webhook retry` resends it to all of them. Separate configurations and
+named webhooks give each destination its own retry state.
 
 ## Event subscriptions
 
@@ -244,8 +244,8 @@ send concurrently.
 - `2xx`: delivered.
 - Connection failures, `408`, `429`, and `5xx`: retry, starting with a 15-second delay
   and doubling to a one-hour base delay, with up to 25% jitter, for up to seven days.
-- Apprise `424`: retry; some downstream destinations may already have received it.
-- Other statuses, including redirects: failed immediately.
+- Other statuses, including redirects: failed immediately. This includes Apprise
+  `424`, since some of its services may already have received the message.
 
 A retryable failure also pauses the whole endpoint, with its own backoff on
 consecutive failures (the same schedule), so a dead receiver is probed by one

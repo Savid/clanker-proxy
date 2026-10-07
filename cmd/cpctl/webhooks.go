@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"slices"
@@ -35,7 +37,7 @@ func webhookCommands() []*command {
 		{name: "webhook rm", args: "<name>", minArgs: 1, maxArgs: 1, summary: "delete a webhook and its queued deliveries", about: "Deletes delivery history too. A request already in flight may finish.", example: "cpctl webhook rm agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRemove }},
 		{
 			name: "webhook deliveries", args: "<name>", minArgs: 1, maxArgs: 1, summary: "page through delivery history",
-			about:   "2xx succeeds. Connection failures, 408, 429 and 5xx retry with jittered backoff for up to seven days, and pause the whole endpoint with its own backoff; Retry-After is honored up to an hour. Apprise 424 also retries. Other statuses fail immediately. webhook show reports the pause. Completed and failed history is kept for seven days. Delivery order is not guaranteed and retries can duplicate notifications or chat messages. Use -status failed to find errors and -cursor to read older pages. Inspect lastError, then retry failed deliveries after fixing the receiver.",
+			about:   "2xx succeeds. Connection failures, 408, 429 and 5xx retry with jittered backoff for up to seven days, and pause the whole endpoint with its own backoff; Retry-After is honored up to an hour. Other statuses fail immediately, including Apprise 424, which means at least one of its services failed. webhook show reports the pause. Completed and failed history is kept for seven days. Delivery order is not guaranteed and retries can duplicate notifications or chat messages. Use -status failed to find errors and -cursor to read older pages. Inspect lastError, then retry failed deliveries after fixing the receiver.",
 			example: "cpctl webhook deliveries agent", flags: webhookDeliveryFlags,
 		},
 		{name: "webhook retry", args: "<name> <delivery-id>", minArgs: 2, maxArgs: 2, summary: "retry a failed delivery", about: "Requires an enabled webhook and a failed delivery. Preserves its ID and event metadata; uses current destination credentials and a fresh seven-day retry window. Ends endpoint backoff.", example: "cpctl webhook retry agent 765a0b0c-0000-4000-8000-000000000001", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRetry }},
@@ -65,6 +67,9 @@ func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 		destination := ""
 		if len(pos) == 2 {
 			destination = pos[1]
+		}
+		if err := oneStdin(*urlFile, *secret, *headersFile); err != nil {
+			return err
 		}
 		destination, err := a.webhookDestination(destination, *urlFile)
 		if err != nil {
@@ -103,6 +108,9 @@ func webhookSetFlags(fs *flag.FlagSet) func(*app, []string) error {
 	return func(a *app, pos []string) error {
 		if *f == (webhookFlags{}) {
 			return usageError("provide at least one setting to change")
+		}
+		if err := oneStdin(f.urlFile, f.secret, f.headers); err != nil {
+			return err
 		}
 		return runWebhookSet(a, pos[0], f)
 	}
@@ -172,12 +180,32 @@ func (a *app) readWebhookKey(path string) (string, error) {
 	return key, nil
 }
 
+// oneStdin rejects reading several files from stdin: the first read would
+// consume it and leave the others empty.
+func oneStdin(paths ...string) error {
+	stdin := 0
+	for _, path := range paths {
+		if path == "-" {
+			stdin++
+		}
+	}
+	if stdin > 1 {
+		return usageError("only one of -url-file, -secret-file and -headers-file can read stdin (-)")
+	}
+	return nil
+}
+
 func (a *app) readWebhookFile(path, label string, limit int64) ([]byte, error) {
 	reader := a.stdin
 	if path != "-" {
 		f, err := os.Open(path)
-		if err != nil {
-			return nil, usageError("cannot open %s file", label)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil, usageError("%s file %s does not exist", label, path)
+		case errors.Is(err, fs.ErrPermission):
+			return nil, usageError("no permission to read %s file %s", label, path)
+		case err != nil:
+			return nil, usageError("cannot open %s file %s", label, path)
 		}
 		defer f.Close()
 		reader = f

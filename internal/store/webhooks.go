@@ -330,7 +330,7 @@ func (s *Store) MaintainWebhooks(ctx context.Context, now time.Time, active []st
 // WebhookDestination resolves a still-queued delivery to its current destination.
 // A deleted and recreated name must never receive the deleted hook's in-flight work.
 func (s *Store) WebhookDestination(ctx context.Context, id string) (webhook.Config, error) {
-	c, err := scanWebhook(s.db.QueryRowContext(ctx, `SELECT w.name,w.type,w.url,w.events,w.origin,w.enabled,w.secret,w.headers,w.retry_after,w.failures FROM webhooks w JOIN webhook_deliveries d ON d.webhook=w.name WHERE d.id=? AND d.status='pending'`, id))
+	c, err := scanWebhook(s.db.QueryRowContext(ctx, `SELECT `+webhookColumns+` FROM webhooks WHERE name=(SELECT webhook FROM webhook_deliveries WHERE id=? AND status='pending')`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -338,9 +338,17 @@ func (s *Store) WebhookDestination(ctx context.Context, id string) (webhook.Conf
 }
 
 // DeferWebhook records a retryable endpoint failure and holds all pending work
-// at that endpoint until the given time. The URL guard keeps a failure of a
-// replaced destination from pausing the new one.
-func (s *Store) DeferWebhook(ctx context.Context, id, requestedURL string, until time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after=max(retry_after,?), failures=failures+1 WHERE name=(SELECT webhook FROM webhook_deliveries WHERE id=?) AND url=?`, formatTime(until), id, requestedURL)
+// at that endpoint until the given time. It applies only while the endpoint
+// still has the type, URL, signing key and headers the request was sent with,
+// so a request that fails after an owner update cannot pause the repaired
+// destination.
+func (s *Store) DeferWebhook(ctx context.Context, id string, sent webhook.Config, until time.Time) error {
+	headers, err := json.Marshal(sent.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE webhooks SET retry_after=max(retry_after,?), failures=failures+1
+ WHERE name=(SELECT webhook FROM webhook_deliveries WHERE id=?) AND type=? AND url=? AND secret=? AND headers=?`,
+		formatTime(until), id, sent.Type, sent.URL, sent.Secret, string(headers))
 	return err
 }

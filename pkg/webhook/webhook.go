@@ -16,9 +16,11 @@ import (
 	"github.com/savid/clanker-proxy/pkg/thread"
 )
 
+var types = []string{"thread.open", "thread.reply", "thread.ack", "thread.needs-input", "thread.resolve", "thread.decline", "thread.close", "thread.reopen", "thread.withdraw", "peering.requested"}
+
 // Types is the event catalog. A wildcard also subscribes to future types.
 func Types() []string {
-	return []string{"thread.open", "thread.reply", "thread.ack", "thread.needs-input", "thread.resolve", "thread.decline", "thread.close", "thread.reopen", "thread.withdraw", "peering.requested"}
+	return slices.Clone(types)
 }
 
 // Config describes one owner-controlled destination. URL, Secret and header
@@ -84,7 +86,8 @@ func (c Config) Validate() error {
 	if n, ok := thread.NormalizeName(c.Name); !ok || n != c.Name {
 		return errors.New("invalid webhook name")
 	}
-	if !slices.ContainsFunc(Providers(), func(p Provider) bool { return p.Type == c.Type }) {
+	provider, ok := LookupProvider(c.Type)
+	if !ok {
 		return errors.New("unsupported webhook type; see cpctl webhook types")
 	}
 	u, err := url.Parse(c.URL)
@@ -98,28 +101,28 @@ func (c Config) Validate() error {
 	if c.Origin != "incoming" && c.Origin != "outgoing" && c.Origin != "both" {
 		return errors.New("webhook origin must be incoming, outgoing or both")
 	}
-	if len(c.Events) == 0 || len(c.Events) > len(Types()) {
+	if len(c.Events) == 0 || len(c.Events) > len(types) {
 		return errors.New("select '*' or a nonempty list of webhook event types")
 	}
 	for i, event := range c.Events {
 		if event == "*" && len(c.Events) == 1 {
 			continue
 		}
-		if !slices.Contains(Types(), event) || slices.Contains(c.Events[:i], event) {
+		if !slices.Contains(types, event) || slices.Contains(c.Events[:i], event) {
 			return errors.New("invalid or repeated webhook event; use '*' alone or supported event types")
 		}
 	}
-	if err = c.validateSigning(); err != nil {
+	if err = c.validateSigning(provider); err != nil {
 		return err
 	}
 	return validateHeaders(c.Headers)
 }
 
-func (c Config) validateSigning() error {
+func (c Config) validateSigning(provider Provider) error {
 	if c.Secret == "" {
 		return nil
 	}
-	if c.Type != "generic" {
+	if !provider.Signed {
 		return errors.New("signing keys apply only to generic webhooks; provider destinations use their URL or authentication headers")
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(c.Secret)

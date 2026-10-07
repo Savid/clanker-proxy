@@ -4,32 +4,55 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
 
-// Provider describes a destination for agent-facing discovery and help.
+// Provider describes a destination for agent-facing discovery and help, and
+// how delivery talks to it.
 type Provider struct {
 	Type        string `json:"type"`
 	Description string `json:"description"`
 	Auth        string `json:"auth"`
 	ExampleURL  string `json:"exampleUrl"`
+
+	// Signed destinations get Webhook-Id and Webhook-Timestamp headers and
+	// accept an optional signing key.
+	Signed bool `json:"-"`
+	// Query parameters are set on every request.
+	Query map[string]string `json:"-"`
+	// RetryAfterBody means a 429 response carries retry_after, in seconds,
+	// in its JSON body.
+	RetryAfterBody bool `json:"-"`
+}
+
+var providers = []Provider{
+	{Type: "generic", Description: "Event JSON for automation; optional Standard Webhooks signing", Auth: "Optional signing key or custom headers", ExampleURL: "https://runner.example.com/hooks/clanker", Signed: true},
+	// Discord can acknowledge a non-persisted message unless wait is enabled.
+	{Type: "discord", Description: "Discord channel embed; mentions disabled", Auth: "Secret webhook URL", ExampleURL: "https://discord.com/api/webhooks/ID/TOKEN", Query: map[string]string{"wait": "true"}, RetryAfterBody: true},
+	{Type: "slack", Description: "Slack incoming webhook with plain-text blocks", Auth: "Secret webhook URL", ExampleURL: "https://hooks.slack.com/services/TEAM/CHANNEL/TOKEN"},
+	{Type: "teams", Description: "Teams Workflows Adaptive Card; use a webhook callable by Anyone", Auth: "Secret workflow URL", ExampleURL: "https://WORKFLOW-HOST/WORKFLOW-PATH?sig=TOKEN"},
+	{Type: "google-chat", Description: "Google Chat space message", Auth: "Secret webhook URL", ExampleURL: "https://chat.googleapis.com/v1/spaces/SPACE/messages?key=KEY&token=TOKEN"},
+	{Type: "mattermost", Description: "Mattermost incoming webhook", Auth: "Secret webhook URL", ExampleURL: "https://mattermost.example.com/hooks/TOKEN"},
+	{Type: "rocketchat", Description: "Rocket.Chat incoming integration", Auth: "Secret webhook URL", ExampleURL: "https://chat.example.com/hooks/ID/TOKEN"},
+	{Type: "ntfy", Description: "Plain-text notification to a topic URL", Auth: "Optional Authorization header", ExampleURL: "https://ntfy.example.com/TOPIC"},
+	{Type: "gotify", Description: "Gotify application message", Auth: "X-Gotify-Key header or token query parameter", ExampleURL: "https://gotify.example.com/message"},
+	{Type: "apprise", Description: "Apprise API saved configuration; routes to additional providers", Auth: "Configured API authentication headers", ExampleURL: "https://apprise.example.com/notify/CONFIG"},
 }
 
 // Providers is the destination catalog, separate from event Types.
 func Providers() []Provider {
-	return []Provider{
-		{"generic", "Event JSON for automation; optional Standard Webhooks signing", "Optional signing key or custom headers", "https://runner.example.com/hooks/clanker"},
-		{"discord", "Discord channel embed; mentions disabled", "Secret webhook URL", "https://discord.com/api/webhooks/ID/TOKEN"},
-		{"slack", "Slack incoming webhook with plain-text blocks", "Secret webhook URL", "https://hooks.slack.com/services/TEAM/CHANNEL/TOKEN"},
-		{"teams", "Teams Workflows Adaptive Card; use a webhook callable by Anyone", "Secret workflow URL", "https://WORKFLOW-HOST/WORKFLOW-PATH?sig=TOKEN"},
-		{"google-chat", "Google Chat space message", "Secret webhook URL", "https://chat.googleapis.com/v1/spaces/SPACE/messages?key=KEY&token=TOKEN"},
-		{"mattermost", "Mattermost incoming webhook", "Secret webhook URL", "https://mattermost.example.com/hooks/TOKEN"},
-		{"rocketchat", "Rocket.Chat incoming integration", "Secret webhook URL", "https://chat.example.com/hooks/ID/TOKEN"},
-		{"ntfy", "Plain-text notification to a topic URL", "Optional Authorization header", "https://ntfy.example.com/TOPIC"},
-		{"gotify", "Gotify application message", "X-Gotify-Key header or token query parameter", "https://gotify.example.com/message"},
-		{"apprise", "Apprise API saved configuration; routes to additional providers", "Configured API authentication headers", "https://apprise.example.com/notify/CONFIG"},
+	return slices.Clone(providers)
+}
+
+// LookupProvider returns the catalog entry for a destination type.
+func LookupProvider(kind string) (Provider, bool) {
+	i := slices.IndexFunc(providers, func(p Provider) bool { return p.Type == kind })
+	if i < 0 {
+		return Provider{}, false
 	}
+	return providers[i], true
 }
 
 // Message is a provider's wire payload, without transport or credentials.
@@ -102,21 +125,23 @@ func providerJSON(kind string, p Payload, title, body string) (any, error) {
 	}
 }
 
+var eventLabels = map[string]string{
+	"thread.open": "New thread", "thread.reply": "New reply", "thread.ack": "Thread acknowledged",
+	"thread.needs-input": "Input requested", "thread.resolve": "Result ready", "thread.decline": "Thread declined",
+	"thread.close": "Thread closed", "thread.reopen": "Thread reopened", "thread.withdraw": "Thread withdrawn",
+	"peering.requested": "Peering request",
+}
+
+// Metadata names are bounded identifiers, but neutralizing mention and markup
+// delimiters also keeps imported events from pinging a channel unexpectedly.
+var neutralize = strings.NewReplacer("@", "@\u200b", "<", "‹", ">", "›", "&", "＆", "\r", " ", "\n", " ")
+
 func summary(p Payload) (string, string) {
-	labels := map[string]string{
-		"thread.open": "New thread", "thread.reply": "New reply", "thread.ack": "Thread acknowledged",
-		"thread.needs-input": "Input requested", "thread.resolve": "Result ready", "thread.decline": "Thread declined",
-		"thread.close": "Thread closed", "thread.reopen": "Thread reopened", "thread.withdraw": "Thread withdrawn",
-		"peering.requested": "Peering request",
-	}
-	label := labels[p.Type]
+	label := eventLabels[p.Type]
 	if label == "" {
 		label = "Thread update"
 	}
-	// Metadata names are bounded identifiers, but neutralizing mention and markup
-	// delimiters also keeps imported events from pinging a channel unexpectedly.
-	clean := strings.NewReplacer("@", "@\u200b", "<", "‹", ">", "›", "&", "＆", "\r", " ", "\n", " ")
-	peer := clean.Replace(p.Peer)
+	peer := neutralize.Replace(p.Peer)
 	title := "clanker-proxy: " + label
 	body := fmt.Sprintf("Event: %s (%s)\nPeer: %s", p.Type, p.Origin, peer)
 	if p.Type == "peering.requested" {

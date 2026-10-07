@@ -84,7 +84,9 @@ func TestProviderFailurePolicies(t *testing.T) {
 		{"discord malformed rate limit", "discord", `{"retry_after":"bad"}`, "pending", 429, 0},
 		{"slack gone", "slack", `private-url`, "failed", 410, 0},
 		{"teams expired", "teams", `private-url`, "failed", 401, 0},
-		{"apprise downstream failure", "apprise", `private-url`, "pending", 424, 0},
+		// Apprise sends 424 when any service in the configuration failed, even
+		// if others succeeded; a retry would resend to all of them.
+		{"apprise partial failure", "apprise", `private-url`, "failed", 424, 0},
 		{"generic failed dependency", "generic", `private-url`, "failed", 424, 0},
 	}
 	for _, tc := range cases {
@@ -140,5 +142,25 @@ func TestPendingWebhookUsesChangedHeadersAndSigning(t *testing.T) {
 	drainHooks(t, st, t0)
 	if history(t, st, "notify")[0].Status != "delivered" {
 		t.Fatal("pending delivery failed")
+	}
+}
+
+func TestNtfyOwnerTitleReplacesGenerated(t *testing.T) {
+	t.Parallel()
+	st := webhookStore(t)
+	var title atomic.Value
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		title.Store(r.Header.Values("Title"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer receiver.Close()
+	c := webhook.Config{Name: "phone", Type: "ntfy", URL: receiver.URL + "/topic", Origin: "outgoing", Events: []string{"*"}, Enabled: true, Headers: []webhook.Header{{Name: "title", Value: "Prod alerts"}}}
+	if err := st.CreateWebhook(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
+	queue(t, st, 1)
+	drainHooks(t, st, t0)
+	if got, _ := title.Load().([]string); len(got) != 1 || got[0] != "Prod alerts" {
+		t.Fatalf("Title headers %q", got)
 	}
 }

@@ -255,3 +255,21 @@ func TestWebhookReachesReceiver(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestWebhookFileErrors(t *testing.T) {
+	t.Parallel()
+	p := newPerson(t, "alice")
+	missing := filepath.Join(t.TempDir(), "missing.url")
+	output, err := p.try(t, "webhook", "add", "chat", "-type", "slack", "-url-file", missing)
+	if exitOf(err) != exitUsage || !strings.Contains(output, "destination URL file "+missing+" does not exist") {
+		t.Fatalf("missing file: %v: %s", err, output)
+	}
+	output, err = p.try(t, "webhook", "add", "chat", "-type", "slack", "-url-file", "-", "-headers-file", "-")
+	if exitOf(err) != exitUsage || !strings.Contains(output, "only one of") {
+		t.Fatalf("shared stdin: %v: %s", err, output)
+	}
+	p.cp(t, "webhook", "add", "agent", "https://runner.example/hook")
+	if output, err = p.try(t, "webhook", "set", "agent", "-secret-file", "-", "-headers-file", "-"); exitOf(err) != exitUsage || !strings.Contains(output, "only one of") {
+		t.Fatalf("shared stdin on set: %v: %s", err, output)
+	}
+}
