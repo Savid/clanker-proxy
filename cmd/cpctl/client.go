@@ -168,9 +168,12 @@ func problemFailure(p *rest.ProblemStatusCode, cmd *command, ref string) *failur
 		f.exit, f.hint = exitNotFound, notFoundHint(name)
 	case http.StatusConflict, http.StatusUnprocessableEntity:
 		f.exit = exitRefused
-		if strings.HasPrefix(name, "webhook ") {
-			f.hint = "cpctl webhook ls lists names and enabled state; cpctl webhook deliveries <name> lists delivery status; only failed deliveries of enabled webhooks can be retried"
-		} else if ref != "" {
+		switch {
+		case name == "webhook add":
+			f.hint = "choose another name, or change the existing one with cpctl webhook set <name>"
+		case name == "webhook retry":
+			f.hint = "only failed deliveries of enabled webhooks can be retried; cpctl webhook deliveries <name> -status failed lists them, and cpctl webhook set <name> -enabled=true resumes a paused webhook"
+		case ref != "":
 			f.hint = "cpctl show " + ref + " lists what you can do now, as commands"
 		}
 	case http.StatusBadGateway:

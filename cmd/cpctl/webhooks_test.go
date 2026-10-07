@@ -1,11 +1,18 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/savid/clanker-proxy/api/rest"
 )
@@ -23,7 +30,7 @@ func TestWebhookCLI(t *testing.T) {
 		t.Fatal("unsafe or incomplete output")
 	}
 	output, duplicateErr := p.try(t, "webhook", "add", "agent", "https://runner.example/hook", "-secret-file", file)
-	if exitOf(duplicateErr) != exitRefused || !strings.Contains(output, "hint: cpctl webhook ls") {
+	if exitOf(duplicateErr) != exitRefused || !strings.Contains(output, "hint: choose another name") {
 		t.Fatalf("conflict guidance: %v: %s", duplicateErr, output)
 	}
 	var h rest.Webhook
@@ -68,7 +75,8 @@ func TestWebhookDeliveryPagination(t *testing.T) {
 	if err := os.WriteFile(file, []byte(key), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	alice.cp(t, "webhook", "add", "agent", "https://runner.example/hook?project=testing", "-secret-file", file, "-origin", "outgoing")
+	// Nothing listens on loopback port 1, so every delivery stays pending.
+	alice.cp(t, "webhook", "add", "agent", "http://127.0.0.1:1/hook?project=testing", "-secret-file", file, "-origin", "outgoing")
 	var th threadJSON
 	alice.json(t, &th, "send", "bob", "Pagination test", "-m", "test")
 	for range 4 {
@@ -103,5 +111,73 @@ func TestWebhookDeliveryPagination(t *testing.T) {
 	alice.json(t, &page, "webhook", "deliveries", "agent", "-status", "failed")
 	if len(page.Deliveries) != 0 {
 		t.Fatal("status filter ignored")
+	}
+}
+
+func TestWebhookReachesReceiver(t *testing.T) {
+	t.Parallel()
+	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")
+	peer(t, alice, bob)
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	file := filepath.Join(t.TempDir(), "hook.key")
+	if err := os.WriteFile(file, []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	type attempt struct {
+		header http.Header
+		body   []byte
+	}
+	got := make(chan attempt, 10)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		got <- attempt{r.Header.Clone(), body}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer receiver.Close()
+	bob.cp(t, "webhook", "add", "agent", receiver.URL+"/hook", "-secret-file", file, "-events", "thread.open")
+	var th threadJSON
+	alice.json(t, &th, "send", "bob", "Webhook test", "-m", "test")
+	var a attempt
+	select {
+	case a = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("bob's daemon never notified the receiver")
+	}
+	raw, err := base64.StdEncoding.DecodeString(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, raw)
+	_, _ = mac.Write([]byte(a.header.Get("Webhook-Id") + "." + a.header.Get("Webhook-Timestamp") + "."))
+	_, _ = mac.Write(a.body)
+	if a.header.Get("Webhook-Signature") != "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
+		t.Fatal("receiver could not verify the signature")
+	}
+	var payload struct {
+		ID, Type, Origin, Subject, Peer string
+		MyTurn                          bool `json:"myTurn"`
+	}
+	if err = json.Unmarshal(a.body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Type != "thread.open" || payload.Origin != "incoming" || payload.Subject != th.ID ||
+		payload.Peer != "alice" || !payload.MyTurn || payload.ID != a.header.Get("Webhook-Id") {
+		t.Fatalf("payload %s", a.body)
+	}
+	// The attempt is recorded just after the receiver answers.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var page rest.WebhookDeliveryList
+		bob.json(t, &page, "webhook", "deliveries", "agent")
+		if len(page.Deliveries) == 1 && page.Deliveries[0].Status == "delivered" && string(page.Deliveries[0].Subject) == th.ID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deliveries %+v", page.Deliveries)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

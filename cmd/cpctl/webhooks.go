@@ -2,14 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/pkg/webhook"
@@ -26,17 +29,17 @@ func webhookCommands() []*command {
 		{name: "webhook ls", summary: "list configured webhooks", example: "cpctl webhook ls", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhooks }},
 		{name: "webhook show", args: "<name>", minArgs: 1, maxArgs: 1, summary: "show a webhook without its signing key", example: "cpctl webhook show agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookShow }},
 		{
-			name: "webhook set", args: "<name> [flags]", minArgs: 1, maxArgs: 1, summary: "change a webhook's settings or pause it",
-			about:   "Unspecified settings stay unchanged. Pausing stops new notifications and holds queued ones; their seven-day retry window still expires. Pending deliveries use the current URL and signing key. A request already in flight may finish after a change.",
+			name: "webhook set", args: "<name>", minArgs: 1, maxArgs: 1, summary: "change a webhook's settings or pause it",
+			about:   "Unspecified settings stay unchanged. Pausing stops new notifications and holds queued ones; their seven-day retry window still expires. Pending deliveries use the current URL and signing key. Any change, including -enabled=true, ends the endpoint's failure backoff (paused until) so delivery resumes now. A request already in flight may finish after a change. Rotating the key: have the receiver accept both keys first, since pending deliveries are signed with the new key at once.",
 			example: "cpctl webhook set agent -enabled=false", flags: webhookSetFlags,
 		},
 		{name: "webhook rm", args: "<name>", minArgs: 1, maxArgs: 1, summary: "delete a webhook and its queued deliveries", about: "Deletes delivery history too. A request already in flight may finish.", example: "cpctl webhook rm agent", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRemove }},
 		{
 			name: "webhook deliveries", args: "<name>", minArgs: 1, maxArgs: 1, summary: "page through delivery history",
-			about:   "2xx succeeds. Connection failures, 408, 429 and 5xx retry with jittered backoff for up to seven days (429/503 respect Retry-After and pause that endpoint); other statuses fail immediately. Completed history is kept for seven days. Delivery order is not guaranteed and retries can duplicate notifications. Use -status failed to find errors and -cursor to read older pages. Inspect lastError, then retry failed deliveries after fixing the receiver.",
+			about:   "2xx succeeds. Connection failures, 408, 429 and 5xx retry with jittered backoff for up to seven days, and pause the whole endpoint with its own backoff (429/503 Retry-After is honored up to an hour); other statuses fail immediately. webhook show reports the pause. Completed history is kept for seven days. Delivery order is not guaranteed and retries can duplicate notifications. Use -status failed to find errors and -cursor to read older pages. Inspect lastError, then retry failed deliveries after fixing the receiver.",
 			example: "cpctl webhook deliveries agent", flags: webhookDeliveryFlags,
 		},
-		{name: "webhook retry", args: "<name> <delivery-id>", minArgs: 2, maxArgs: 2, summary: "retry a failed delivery", about: "Requires an enabled webhook and a failed delivery. Preserves its ID and payload; starts a new seven-day retry window.", example: "cpctl webhook retry agent 765a0b0c-0000-4000-8000-000000000001", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRetry }},
+		{name: "webhook retry", args: "<name> <delivery-id>", minArgs: 2, maxArgs: 2, summary: "retry a failed delivery", about: "Requires an enabled webhook and a failed delivery. Preserves its ID and payload; starts a new seven-day retry window and ends the endpoint's failure backoff.", example: "cpctl webhook retry agent 765a0b0c-0000-4000-8000-000000000001", flags: func(*flag.FlagSet) func(*app, []string) error { return runWebhookRetry }},
 		{
 			name: "webhook events", summary: "list supported event subscriptions", local: true,
 			about:   "Use '*' alone for all current and future types, or comma-separated types for a fixed subscription. Origin is incoming (peer events), outgoing (owner actions), or both. peering.requested is incoming. Replies notify even when the turn stays the same. Only the newest 100 peering-request notifications per endpoint are retained, including unsent ones. Retries and delivery status changes never produce notifications.",
@@ -61,7 +64,7 @@ func webhookAddFlags(fs *flag.FlagSet) func(*app, []string) error {
 			return usageError("%v", err)
 		}
 		u, _ := url.Parse(cfg.URL)
-		hook, err := a.client.CreateWebhook(a.ctx, &rest.WebhookCreate{Name: rest.Name(cfg.Name), URL: rest.DaemonURL(*u), Events: wireWebhookEvents(cfg.Events), Origin: rest.WebhookOrigin(cfg.Origin), Enabled: true, Secret: rest.WebhookSecret(key)})
+		hook, err := a.client.CreateWebhook(a.ctx, &rest.WebhookCreate{Name: rest.Name(cfg.Name), URL: rest.WebhookURL(*u), Events: wireWebhookEvents(cfg.Events), Origin: rest.WebhookOrigin(cfg.Origin), Enabled: true, Secret: rest.WebhookSecret(key)})
 		if err != nil {
 			return err
 		}
@@ -95,7 +98,7 @@ func runWebhookSet(a *app, name string, f *webhookFlags) error {
 		if e != nil {
 			return usageError("invalid webhook URL")
 		}
-		req.URL = rest.DaemonURL(*u)
+		req.URL = rest.WebhookURL(*u)
 	}
 	if f.events != "" {
 		req.Events = wireWebhookEvents(strings.Split(f.events, ","))
@@ -129,8 +132,13 @@ func readWebhookKey(path string) (string, error) {
 		return "", usageError("-secret-file is required; generate one with: umask 077; openssl rand -base64 32 > webhook.key")
 	}
 	f, err := os.Open(path)
-	if err != nil {
-		return "", usageError("cannot open signing-key file")
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", usageError("signing-key file %s does not exist", path)
+	case errors.Is(err, fs.ErrPermission):
+		return "", usageError("no permission to read signing-key file %s", path)
+	case err != nil:
+		return "", usageError("cannot open signing-key file %s", path)
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, 128))
@@ -154,9 +162,19 @@ func wireWebhookEvents(events []string) rest.WebhookEvents {
 
 func printWebhook(a *app, h *rest.Webhook) error {
 	return a.print(h, func(w io.Writer) {
-		fmt.Fprintf(w, "%s → %s (enabled: %t, origin: %s)\nevents: %s\n", h.Name, urlString(h.URL), h.Enabled, h.Origin, joinWebhookEvents(h.Events))
-		next(w, step{"cpctl webhook deliveries " + string(h.Name), "inspect delivery status"})
+		fmt.Fprintf(w, "%s → %s (enabled: %t, origin: %s)\nevents: %s\n", h.Name, webhookURL(h.URL), h.Enabled, h.Origin, joinWebhookEvents(h.Events))
+		steps := []step{{"cpctl webhook deliveries " + string(h.Name), "inspect delivery status"}}
+		if until, ok := h.PausedUntil.Get(); ok {
+			fmt.Fprintf(w, "paused until %s after failed attempts\n", until.UTC().Format(time.RFC3339))
+			steps = append(steps, step{"cpctl webhook set " + string(h.Name) + " -enabled=true", "resume now, once the receiver is fixed"})
+		}
+		next(w, steps...)
 	})
+}
+
+func webhookURL(u rest.WebhookURL) string {
+	plain := url.URL(u)
+	return plain.String()
 }
 
 func joinWebhookEvents(events rest.WebhookEvents) string {
@@ -178,7 +196,7 @@ func runWebhooks(a *app, _ []string) error {
 		}
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		for _, h := range hooks.Webhooks {
-			fmt.Fprintf(tw, "%s\tenabled: %t\t%s\t%s\t%s\n", h.Name, h.Enabled, h.Origin, joinWebhookEvents(h.Events), urlString(h.URL))
+			fmt.Fprintf(tw, "%s\tenabled: %t\t%s\t%s\t%s\n", h.Name, h.Enabled, h.Origin, joinWebhookEvents(h.Events), webhookURL(h.URL))
 		}
 		_ = tw.Flush()
 		next(w, step{"cpctl help webhook add", "configure a receiver"}, step{"cpctl webhook events", "see available subscriptions"})
@@ -197,10 +215,11 @@ func runWebhookRemove(a *app, pos []string) error {
 	if err := a.client.DeleteWebhook(a.ctx, rest.DeleteWebhookParams{Name: rest.Name(pos[0])}); err != nil {
 		return err
 	}
-	return a.print(json.RawMessage(`{"deleted":true}`), func(w io.Writer) {
-		fmt.Fprintln(w, "webhook deleted")
-		next(w, step{"cpctl webhook ls", "see remaining webhooks"})
-	})
+	if !a.json {
+		fmt.Fprintf(a.stdout, "deleted webhook %s and its delivery history\n", pos[0])
+		next(a.stdout, step{"cpctl webhook ls", "see remaining webhooks"})
+	}
+	return nil
 }
 
 func webhookDeliveryFlags(fs *flag.FlagSet) func(*app, []string) error {
@@ -231,17 +250,33 @@ func runWebhookDeliveries(a *app, p rest.ListWebhookDeliveriesParams) error {
 		if len(ds.Deliveries) == 0 {
 			fmt.Fprintln(w, "no deliveries")
 		}
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		failed := false
 		for _, d := range ds.Deliveries {
-			fmt.Fprintf(w, "%s  %s  %s  attempts: %d  %s\n", d.ID, d.Event, d.Status, d.Attempts, d.LastError)
+			detail := d.LastError
+			if at, ok := d.NextAttemptAt.Get(); ok {
+				detail = strings.TrimSpace("next attempt " + at.UTC().Format(time.RFC3339) + "  " + detail)
+			}
+			failed = failed || d.Status == rest.WebhookDeliveryStatusFailed
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\tattempts: %d\t%s\n", d.ID, d.CreatedAt.UTC().Format(time.RFC3339), d.Event, d.Subject, d.Status, d.Attempts, detail)
 		}
+		_ = tw.Flush()
+		var steps []step
 		if cursor, ok := ds.NextCursor.Get(); ok {
 			command := "cpctl webhook deliveries " + string(p.Name) + " -cursor " + cursor + " -limit " + strconv.Itoa(int(p.Limit.Or(100)))
 			if status, filtered := p.Status.Get(); filtered {
 				command += " -status " + string(status)
 			}
-			next(w, step{command, "read older deliveries"})
+			steps = append(steps, step{command, "read older deliveries"})
 		}
-		next(w, step{"cpctl webhook retry " + string(p.Name) + " <delivery-id>", "retry a failed delivery after fixing its receiver"})
+		switch {
+		case failed:
+			steps = append(steps, step{"cpctl webhook retry " + string(p.Name) + " <delivery-id>", "retry a failed delivery after fixing its receiver"})
+		case !p.Status.Set:
+			steps = append(steps, step{"cpctl webhook deliveries " + string(p.Name) + " -status failed", "list only failures"})
+		}
+		steps = append(steps, step{"cpctl webhook show " + string(p.Name), "check whether the endpoint is paused"})
+		next(w, steps...)
 	})
 }
 
@@ -249,10 +284,11 @@ func runWebhookRetry(a *app, pos []string) error {
 	if err := a.client.RetryWebhookDelivery(a.ctx, rest.RetryWebhookDeliveryParams{Name: rest.Name(pos[0]), ID: rest.ID(pos[1])}); err != nil {
 		return err
 	}
-	return a.print(json.RawMessage(`{"queued":true}`), func(w io.Writer) {
-		fmt.Fprintln(w, "delivery queued")
-		next(w, step{"cpctl webhook deliveries " + pos[0], "check the next attempt"})
-	})
+	if !a.json {
+		fmt.Fprintf(a.stdout, "delivery %s queued\n", pos[1])
+		next(a.stdout, step{"cpctl webhook deliveries " + pos[0], "check the next attempt"})
+	}
+	return nil
 }
 
 func runWebhookEvents(a *app, _ []string) error {

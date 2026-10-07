@@ -2884,8 +2884,9 @@ func (s *Server) handleRequestPeeringRequest(args [0]string, argsEscaped bool, w
 
 // handleRetryWebhookDeliveryRequest handles retryWebhookDelivery operation.
 //
-// Resets a failed delivery for another seven days of retries, retaining its ID and payload. Requires
-// an enabled webhook. Refuses pending or delivered items with 409.
+// Resets a failed delivery for another seven days of retries, retaining its ID and payload, and clears
+// the endpoint's failure backoff. Requires an enabled webhook. Refuses pending or delivered items with
+// 409.
 //
 // POST /api/v1/webhooks/{name}/deliveries/{id}/retry
 func (s *Server) handleRetryWebhookDeliveryRequest(args [2]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -3032,7 +3033,7 @@ func (s *Server) handleRetryWebhookDeliveryRequest(args [2]string, argsEscaped b
 //
 // Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
 // key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-// finish.
+// finish. Any update clears the endpoint's failure backoff (pausedUntil).
 //
 // PUT /api/v1/webhooks/{name}
 func (s *Server) handleUpdateWebhookRequest(args [1]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

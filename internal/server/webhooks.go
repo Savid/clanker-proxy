@@ -2,10 +2,7 @@ package server
 
 import (
 	"context"
-	"strconv"
-
-	"github.com/savid/clanker-proxy/internal/inbox"
-	"github.com/savid/clanker-proxy/internal/store"
+	"net/url"
 
 	"github.com/savid/clanker-proxy/api/rest"
 	"github.com/savid/clanker-proxy/pkg/webhook"
@@ -16,8 +13,17 @@ func webhookResponse(c webhook.Config) *rest.Webhook {
 	for _, event := range c.Events {
 		events = append(events, rest.WebhookEventsItem(event))
 	}
-	u, _ := parseURL(c.URL)
-	return &rest.Webhook{Name: rest.Name(c.Name), URL: u, Events: events, Origin: rest.WebhookOrigin(c.Origin), Enabled: c.Enabled}
+	u, _ := url.Parse(c.URL)
+	out := &rest.Webhook{Name: rest.Name(c.Name), URL: rest.WebhookURL(*u), Events: events, Origin: rest.WebhookOrigin(c.Origin), Enabled: c.Enabled}
+	if !c.PausedUntil.IsZero() {
+		out.PausedUntil = rest.NewOptDateTime(c.PausedUntil)
+	}
+	return out
+}
+
+func webhookURL(u rest.WebhookURL) string {
+	plain := url.URL(u)
+	return plain.String()
 }
 
 func webhookEvents(events rest.WebhookEvents) []string {
@@ -49,7 +55,7 @@ func (o *operations) GetWebhook(ctx context.Context, p rest.GetWebhookParams) (*
 }
 
 func (o *operations) CreateWebhook(ctx context.Context, r *rest.WebhookCreate) (*rest.Webhook, error) {
-	c, err := o.inbox.CreateWebhook(ctx, webhook.Config{Name: string(r.Name), URL: urlString(r.URL), Secret: string(r.Secret), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
+	c, err := o.inbox.CreateWebhook(ctx, webhook.Config{Name: string(r.Name), URL: webhookURL(r.URL), Secret: string(r.Secret), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +63,7 @@ func (o *operations) CreateWebhook(ctx context.Context, r *rest.WebhookCreate) (
 }
 
 func (o *operations) UpdateWebhook(ctx context.Context, r *rest.WebhookUpdate, p rest.UpdateWebhookParams) (*rest.Webhook, error) {
-	c, err := o.inbox.UpdateWebhook(ctx, webhook.Config{Name: string(p.Name), URL: urlString(r.URL), Secret: string(r.Secret.Or("")), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
+	c, err := o.inbox.UpdateWebhook(ctx, webhook.Config{Name: string(p.Name), URL: webhookURL(r.URL), Secret: string(r.Secret.Or("")), Events: webhookEvents(r.Events), Origin: string(r.Origin), Enabled: r.Enabled})
 	if err != nil {
 		return nil, err
 	}
@@ -69,25 +75,16 @@ func (o *operations) DeleteWebhook(ctx context.Context, p rest.DeleteWebhookPara
 }
 
 func (o *operations) ListWebhookDeliveries(ctx context.Context, p rest.ListWebhookDeliveriesParams) (*rest.WebhookDeliveryList, error) {
-	f := store.WebhookFilter{Limit: int(p.Limit.Or(100)) + 1, Status: string(p.Status.Or(""))}
-	if cursor := p.Cursor.Or(""); cursor != "" {
-		before, err := strconv.ParseInt(cursor, 10, 64)
-		if err != nil || before <= 0 {
-			return nil, &inbox.Error{Kind: inbox.KindInvalid, Msg: "invalid delivery cursor"}
-		}
-		f.Before = before
-	}
-	ds, err := o.inbox.WebhookDeliveries(ctx, string(p.Name), f)
+	ds, cursor, err := o.inbox.WebhookDeliveries(ctx, string(p.Name), p.Cursor.Or(""), int(p.Limit.Or(100)), string(p.Status.Or("")))
 	if err != nil {
 		return nil, err
 	}
 	out := &rest.WebhookDeliveryList{Deliveries: make([]rest.WebhookDelivery, 0, len(ds))}
-	if len(ds) == f.Limit {
-		ds = ds[:len(ds)-1]
-		out.NextCursor = rest.NewOptString(strconv.FormatInt(ds[len(ds)-1].Seq, 10))
+	if cursor != "" {
+		out.NextCursor = rest.NewOptString(cursor)
 	}
 	for _, d := range ds {
-		r := rest.WebhookDelivery{ID: rest.ID(d.ID), Event: rest.WebhookEventType(d.Event), Origin: rest.WebhookOrigin(d.Origin), Status: rest.WebhookDeliveryStatus(d.Status), Attempts: count(d.Attempts), CreatedAt: d.CreatedAt, LastError: d.LastError}
+		r := rest.WebhookDelivery{ID: rest.ID(d.ID), Event: rest.WebhookEventType(d.Event), Origin: rest.WebhookEventOrigin(d.Origin), Subject: rest.WebhookSubject(d.Subject), Status: rest.WebhookDeliveryStatus(d.Status), Attempts: count(d.Attempts), CreatedAt: d.CreatedAt, LastError: d.LastError}
 		if d.Status == "pending" {
 			r.NextAttemptAt = rest.NewOptDateTime(d.NextAttemptAt)
 		}

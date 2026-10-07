@@ -38,7 +38,9 @@ Destinations require HTTPS, except literal loopback addresses such as
 `cpctl` configures the daemon's destination: loopback refers to the daemon's
 machine or container, not the CLI's. URL credentials and fragments are refused.
 Non-secret query parameters can select a project or route; use the signing key
-for authentication. Redirects are never followed.
+for authentication. Redirects are never followed. Any host the daemon can reach
+is allowed, including private addresses over HTTPS, so treat webhook
+configuration as owner-only access to the daemon's network.
 
 The notification contains metadata, without message bodies, titles, owner
 tokens, peer secrets, or signing keys:
@@ -58,9 +60,12 @@ tokens, peer secrets, or signing keys:
 ```
 
 `subject` identifies the thread, or the pending peering request. Peering
-notifications omit `eventId`, `state`, and `myTurn`. `at` is when this daemon
-stored the source event; it does not order thread history. The complete schema
-is `WebhookPayload` in `/openapi.yaml`.
+notifications omit `eventId`, `state`, and `myTurn`, and their `peer` is the
+name the unauthenticated requester asked for, which may match an existing peer;
+check `cpctl requests` before trusting it. `at` is when this daemon stored the
+source event; it does not order thread history. Ignore unknown fields, and
+unknown types when subscribed to `*`. The complete schema is `WebhookPayload`
+in `/openapi.yaml`.
 
 Signatures follow the [Standard Webhooks signing format](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md):
 
@@ -84,16 +89,23 @@ configured owner credential for `cpctl`; the webhook signing key grants no API a
 ## Delivery and management
 
 Notifications are queued atomically with their source event. Each endpoint has
-independent retry state. Transient delivery errors can be retried while later
-notifications proceed; endpoint backpressure pauses all its deliveries. Up to
-four endpoints send concurrently.
+independent retry state, and sends one request at a time; up to four endpoints
+send concurrently.
 
 - `2xx`: delivered.
 - Connection failures, `408`, `429`, and `5xx`: retry, starting with a 15-second delay
   and doubling to a one-hour base delay, with up to 25% jitter, for up to seven days.
-  `429` and `503` pause the endpoint's other deliveries too; valid `Retry-After`
-  delays (seconds or HTTP-date) are respected within that retry window.
 - Other statuses, including redirects: failed immediately.
+
+A retryable failure also pauses the whole endpoint, with its own backoff on
+consecutive failures (the same schedule), so a dead receiver is probed by one
+delivery at a time; the first success resets it. A valid `Retry-After` on `429`
+or `503` (seconds or HTTP-date) extends the pause, up to one hour.
+`cpctl webhook show <name>` reports `paused until`; any `webhook set`, such as
+`-enabled=true`, or a `webhook retry` ends the pause at once. `lastError` names
+the failure without the URL or response body: `HTTP <status>`,
+`DNS lookup failed`, `TLS certificate rejected`, `TLS handshake failed`,
+`timed out`, `connection refused`, or `connection failed`.
 
 Delivery is best effort with persistent retries: it can duplicate, and it can
 fail permanently. `cpctl webhook deliveries <name>` shows a page of up to 100
@@ -104,9 +116,11 @@ to retry a failed record with its original ID and body and a fresh seven-day
 retry window.
 
 New endpoints receive only future matching events. Changing event or origin
-filters affects future events;
-existing queued deliveries remain. Changing URL or signing key affects pending
+filters affects future events; existing queued deliveries remain. Changing URL or signing key affects pending
 deliveries too. Omitting `-secret-file` on `webhook set` keeps the existing key.
+Each request carries one signature, made with the current key, so to rotate it
+have the receiver accept both the old and new keys, then run
+`webhook set <name> -secret-file new.key`, then retire the old key.
 
 Pausing with `-enabled=false` stops new notifications and holds pending ones;
 their retry window continues to expire. Re-enable with `-enabled=true`.

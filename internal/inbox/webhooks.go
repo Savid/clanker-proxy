@@ -3,18 +3,34 @@ package inbox
 import (
 	"context"
 	"errors"
+	"strconv"
+	"time"
 
 	"github.com/savid/clanker-proxy/internal/store"
 	"github.com/savid/clanker-proxy/pkg/webhook"
 )
 
 // Webhooks returns owner-managed destinations.
-func (b *Inbox) Webhooks(ctx context.Context) ([]webhook.Config, error) { return b.store.Webhooks(ctx) }
+func (b *Inbox) Webhooks(ctx context.Context) ([]webhook.Config, error) {
+	hooks, err := b.store.Webhooks(ctx)
+	for i := range hooks {
+		hooks[i] = b.pause(hooks[i])
+	}
+	return hooks, err
+}
 
 // Webhook returns one destination. API serialization must omit its signing key.
 func (b *Inbox) Webhook(ctx context.Context, name string) (webhook.Config, error) {
 	c, err := b.store.Webhook(ctx, name)
-	return c, webhookError(err)
+	return b.pause(c), webhookError(err)
+}
+
+// pause clears a backoff that has already ended, so PausedUntil means paused now.
+func (b *Inbox) pause(c webhook.Config) webhook.Config {
+	if !c.PausedUntil.After(b.now()) {
+		c.PausedUntil = time.Time{}
+	}
+	return c
 }
 
 // CreateWebhook validates a new notification destination.
@@ -49,23 +65,44 @@ func (b *Inbox) DeleteWebhook(ctx context.Context, name string) error {
 	return webhookError(b.store.DeleteWebhook(ctx, name))
 }
 
-// WebhookDeliveries returns recent delivery metadata.
-func (b *Inbox) WebhookDeliveries(ctx context.Context, name string, f store.WebhookFilter) ([]store.WebhookDelivery, error) {
-	if _, err := b.Webhook(ctx, name); err != nil {
-		return nil, err
+// WebhookDeliveries returns a newest-first page of delivery metadata and the
+// cursor for the next page, empty on the last one.
+func (b *Inbox) WebhookDeliveries(ctx context.Context, name, cursor string, limit int, status string) ([]store.WebhookDelivery, string, error) {
+	f := store.WebhookFilter{Limit: limit + 1, Status: status}
+	if cursor != "" {
+		before, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || before <= 0 {
+			return nil, "", errorf(KindInvalid, "invalid delivery cursor")
+		}
+		f.Before = before
 	}
-	return b.store.WebhookDeliveries(ctx, name, f)
+	if _, err := b.Webhook(ctx, name); err != nil {
+		return nil, "", err
+	}
+	ds, err := b.store.WebhookDeliveries(ctx, name, f)
+	if err != nil || len(ds) < f.Limit {
+		return ds, "", err
+	}
+	ds = ds[:limit]
+	return ds, strconv.FormatInt(ds[limit-1].Seq, 10), nil
 }
 
 // RetryWebhook explicitly retries a terminal failure.
 func (b *Inbox) RetryWebhook(ctx context.Context, name, id string) error {
-	return webhookError(b.store.RetryWebhook(ctx, name, id, b.now()))
+	if _, err := b.Webhook(ctx, name); err != nil {
+		return err
+	}
+	err := b.store.RetryWebhook(ctx, name, id, b.now())
+	if errors.Is(err, store.ErrNotFound) {
+		return errorf(KindNotFound, "webhook %s has no delivery %s", name, id)
+	}
+	return webhookError(err)
 }
 
 func webhookError(err error) error {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return errorf(KindNotFound, "webhook or delivery not found")
+		return errorf(KindNotFound, "webhook not found")
 	case errors.Is(err, store.ErrExists):
 		return errorf(KindConflict, "webhook name already exists")
 	case errors.Is(err, store.ErrWebhookRetry):

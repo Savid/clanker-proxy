@@ -36,7 +36,7 @@ type Inbox interface {
 	CreateWebhook(context.Context, webhook.Config) (webhook.Config, error)
 	UpdateWebhook(context.Context, webhook.Config) (webhook.Config, error)
 	DeleteWebhook(context.Context, string) error
-	WebhookDeliveries(context.Context, string, store.WebhookFilter) ([]store.WebhookDelivery, error)
+	WebhookDeliveries(ctx context.Context, name, cursor string, limit int, status string) ([]store.WebhookDelivery, string, error)
 	RetryWebhook(context.Context, string, string) error
 	Self() string
 	URL() string

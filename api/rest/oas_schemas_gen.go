@@ -2584,15 +2584,17 @@ func (s *ThreadSummaryRole) UnmarshalText(data []byte) error {
 
 type Title string
 
-// Owner-configured signed notifications. HTTPS, or HTTP on literal loopback. No URL credentials or
-// fragment. Queries may contain non-secret routing parameters.
+// Owner-configured signed notifications, without the signing key.
 // Ref: #/components/schemas/Webhook
 type Webhook struct {
 	Name    Name          `json:"name"`
-	URL     DaemonURL     `json:"url"`
+	URL     WebhookURL    `json:"url"`
 	Events  WebhookEvents `json:"events"`
 	Origin  WebhookOrigin `json:"origin"`
 	Enabled bool          `json:"enabled"`
+	// Set while the endpoint is backing off after failed attempts or a receiver's Retry-After; no delivery
+	// is attempted before it. Any update or manual retry clears it.
+	PausedUntil OptDateTime `json:"pausedUntil"`
 }
 
 // GetName returns the value of Name.
@@ -2601,7 +2603,7 @@ func (s *Webhook) GetName() Name {
 }
 
 // GetURL returns the value of URL.
-func (s *Webhook) GetURL() DaemonURL {
+func (s *Webhook) GetURL() WebhookURL {
 	return s.URL
 }
 
@@ -2620,13 +2622,18 @@ func (s *Webhook) GetEnabled() bool {
 	return s.Enabled
 }
 
+// GetPausedUntil returns the value of PausedUntil.
+func (s *Webhook) GetPausedUntil() OptDateTime {
+	return s.PausedUntil
+}
+
 // SetName sets the value of Name.
 func (s *Webhook) SetName(val Name) {
 	s.Name = val
 }
 
 // SetURL sets the value of URL.
-func (s *Webhook) SetURL(val DaemonURL) {
+func (s *Webhook) SetURL(val WebhookURL) {
 	s.URL = val
 }
 
@@ -2645,11 +2652,16 @@ func (s *Webhook) SetEnabled(val bool) {
 	s.Enabled = val
 }
 
+// SetPausedUntil sets the value of PausedUntil.
+func (s *Webhook) SetPausedUntil(val OptDateTime) {
+	s.PausedUntil = val
+}
+
 // A new webhook. Secret is supplied by the owner and never returned.
 // Ref: #/components/schemas/WebhookCreate
 type WebhookCreate struct {
 	Name    Name          `json:"name"`
-	URL     DaemonURL     `json:"url"`
+	URL     WebhookURL    `json:"url"`
 	Events  WebhookEvents `json:"events"`
 	Origin  WebhookOrigin `json:"origin"`
 	Enabled bool          `json:"enabled"`
@@ -2662,7 +2674,7 @@ func (s *WebhookCreate) GetName() Name {
 }
 
 // GetURL returns the value of URL.
-func (s *WebhookCreate) GetURL() DaemonURL {
+func (s *WebhookCreate) GetURL() WebhookURL {
 	return s.URL
 }
 
@@ -2692,7 +2704,7 @@ func (s *WebhookCreate) SetName(val Name) {
 }
 
 // SetURL sets the value of URL.
-func (s *WebhookCreate) SetURL(val DaemonURL) {
+func (s *WebhookCreate) SetURL(val WebhookURL) {
 	s.URL = val
 }
 
@@ -2721,7 +2733,8 @@ func (s *WebhookCreate) SetSecret(val WebhookSecret) {
 type WebhookDelivery struct {
 	ID            ID                    `json:"id"`
 	Event         WebhookEventType      `json:"event"`
-	Origin        WebhookOrigin         `json:"origin"`
+	Origin        WebhookEventOrigin    `json:"origin"`
+	Subject       WebhookSubject        `json:"subject"`
 	Status        WebhookDeliveryStatus `json:"status"`
 	Attempts      Count                 `json:"attempts"`
 	CreatedAt     time.Time             `json:"createdAt"`
@@ -2741,8 +2754,13 @@ func (s *WebhookDelivery) GetEvent() WebhookEventType {
 }
 
 // GetOrigin returns the value of Origin.
-func (s *WebhookDelivery) GetOrigin() WebhookOrigin {
+func (s *WebhookDelivery) GetOrigin() WebhookEventOrigin {
 	return s.Origin
+}
+
+// GetSubject returns the value of Subject.
+func (s *WebhookDelivery) GetSubject() WebhookSubject {
+	return s.Subject
 }
 
 // GetStatus returns the value of Status.
@@ -2781,8 +2799,13 @@ func (s *WebhookDelivery) SetEvent(val WebhookEventType) {
 }
 
 // SetOrigin sets the value of Origin.
-func (s *WebhookDelivery) SetOrigin(val WebhookOrigin) {
+func (s *WebhookDelivery) SetOrigin(val WebhookEventOrigin) {
 	s.Origin = val
+}
+
+// SetSubject sets the value of Subject.
+func (s *WebhookDelivery) SetSubject(val WebhookSubject) {
+	s.Subject = val
 }
 
 // SetStatus sets the value of Status.
@@ -2880,6 +2903,49 @@ func (s *WebhookDeliveryStatus) UnmarshalText(data []byte) error {
 		return nil
 	case WebhookDeliveryStatusFailed:
 		*s = WebhookDeliveryStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Whether one event came from a peer (incoming) or the owner (outgoing).
+// Ref: #/components/schemas/WebhookEventOrigin
+type WebhookEventOrigin string
+
+const (
+	WebhookEventOriginIncoming WebhookEventOrigin = "incoming"
+	WebhookEventOriginOutgoing WebhookEventOrigin = "outgoing"
+)
+
+// AllValues returns all WebhookEventOrigin values.
+func (WebhookEventOrigin) AllValues() []WebhookEventOrigin {
+	return []WebhookEventOrigin{
+		WebhookEventOriginIncoming,
+		WebhookEventOriginOutgoing,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s WebhookEventOrigin) MarshalText() ([]byte, error) {
+	switch s {
+	case WebhookEventOriginIncoming:
+		return []byte(s), nil
+	case WebhookEventOriginOutgoing:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *WebhookEventOrigin) UnmarshalText(data []byte) error {
+	switch WebhookEventOrigin(data) {
+	case WebhookEventOriginIncoming:
+		*s = WebhookEventOriginIncoming
+		return nil
+	case WebhookEventOriginOutgoing:
+		*s = WebhookEventOriginOutgoing
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
@@ -3161,10 +3227,14 @@ func (s *WebhookOrigin) UnmarshalText(data []byte) error {
 
 type WebhookSecret string
 
+type WebhookSubject string
+
+type WebhookURL url.URL
+
 // Full replacement of settings, with an optional signing-key replacement.
 // Ref: #/components/schemas/WebhookUpdate
 type WebhookUpdate struct {
-	URL     DaemonURL        `json:"url"`
+	URL     WebhookURL       `json:"url"`
 	Events  WebhookEvents    `json:"events"`
 	Origin  WebhookOrigin    `json:"origin"`
 	Enabled bool             `json:"enabled"`
@@ -3172,7 +3242,7 @@ type WebhookUpdate struct {
 }
 
 // GetURL returns the value of URL.
-func (s *WebhookUpdate) GetURL() DaemonURL {
+func (s *WebhookUpdate) GetURL() WebhookURL {
 	return s.URL
 }
 
@@ -3197,7 +3267,7 @@ func (s *WebhookUpdate) GetSecret() OptWebhookSecret {
 }
 
 // SetURL sets the value of URL.
-func (s *WebhookUpdate) SetURL(val DaemonURL) {
+func (s *WebhookUpdate) SetURL(val WebhookURL) {
 	s.URL = val
 }
 

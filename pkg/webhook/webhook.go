@@ -20,14 +20,19 @@ func Types() []string {
 	return []string{"thread.open", "thread.reply", "thread.ack", "thread.needs-input", "thread.resolve", "thread.decline", "thread.close", "thread.reopen", "thread.withdraw", "peering.requested"}
 }
 
-// Config describes one owner-controlled destination. Secret never appears in JSON.
+// Config describes one owner-controlled destination. API responses must omit Secret.
 type Config struct {
-	Name    string   `json:"name"`
-	URL     string   `json:"url"`
-	Events  []string `json:"events"`
-	Origin  string   `json:"origin"`
-	Enabled bool     `json:"enabled"`
-	Secret  string   `json:"-"`
+	Name    string
+	URL     string
+	Events  []string
+	Origin  string
+	Enabled bool
+	Secret  string
+
+	// PausedUntil and Failures are endpoint backoff kept by delivery; owner
+	// updates reset them, and Validate ignores them.
+	PausedUntil time.Time
+	Failures    int
 }
 
 // Validate checks the same constraints for HTTP and in-process callers.

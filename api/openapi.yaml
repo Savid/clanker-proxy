@@ -60,7 +60,7 @@ paths:
               $ref: '#/components/schemas/WebhookCreate'
       responses:
         '201':
-          description: Create a webhook.
+          description: The new webhook, without its signing key.
           content:
             application/json:
               schema:
@@ -90,7 +90,7 @@ paths:
       tags: [webhooks]
       summary: Update a webhook
       description: >-
-        Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may finish.
+        Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may finish. Any update clears the endpoint's failure backoff (pausedUntil).
       requestBody:
         required: true
         description: Replacement settings and optional new signing key.
@@ -100,7 +100,7 @@ paths:
               $ref: '#/components/schemas/WebhookUpdate'
       responses:
         '200':
-          description: Update a webhook.
+          description: The updated webhook, without its signing key.
           content:
             application/json:
               schema:
@@ -115,7 +115,7 @@ paths:
         Deletes configuration and delivery history, including pending deliveries. An in-flight request may finish.
       responses:
         '204':
-          description: Delete a webhook.
+          description: The webhook and its delivery history are gone.
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/webhooks/{name}/deliveries:
@@ -152,7 +152,7 @@ paths:
             enum: [pending, delivered, failed]
       responses:
         '200':
-          description: List recent webhook deliveries.
+          description: A page of deliveries, newest first.
           content:
             application/json:
               schema:
@@ -173,10 +173,10 @@ paths:
       tags: [webhooks]
       summary: Retry a failed webhook delivery
       description: >-
-        Resets a failed delivery for another seven days of retries, retaining its ID and payload. Requires an enabled webhook. Refuses pending or delivered items with 409.
+        Resets a failed delivery for another seven days of retries, retaining its ID and payload, and clears the endpoint's failure backoff. Requires an enabled webhook. Refuses pending or delivered items with 409.
       responses:
         '204':
-          description: Retry a failed webhook delivery.
+          description: The delivery is queued again.
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/health:
@@ -663,6 +663,20 @@ components:
       type: string
       description: Incoming events from peers, outgoing owner actions, or both. Peering requests are incoming.
       enum: [incoming, outgoing, both]
+    WebhookEventOrigin:
+      type: string
+      description: Whether one event came from a peer (incoming) or the owner (outgoing).
+      enum: [incoming, outgoing]
+    WebhookURL:
+      type: string
+      format: uri
+      description: >-
+        A webhook destination: https, or http on a literal loopback address,
+        without credentials or fragment; at most 512 characters (checked by the
+        server; ogen cannot bound a URI). Queries may carry non-secret routing
+        parameters. Any host the daemon can reach is allowed.
+      maxLength: 512
+      examples: ['https://runner.example.com/hooks']
     WebhookSecret:
       type: string
       description: Base64 encoding of a 32-byte signing key. Write-only; never returned or logged.
@@ -673,19 +687,27 @@ components:
     Webhook:
       type: object
       description: >-
-        Owner-configured signed notifications. HTTPS, or HTTP on literal loopback. No URL credentials or fragment. Queries may contain non-secret routing parameters.
+        Owner-configured signed notifications, without the signing key.
       required: [name, url, events, origin, enabled]
       properties:
         name:
           $ref: '#/components/schemas/Name'
         url:
-          $ref: '#/components/schemas/DaemonURL'
+          $ref: '#/components/schemas/WebhookURL'
         events:
           $ref: '#/components/schemas/WebhookEvents'
         origin:
           $ref: '#/components/schemas/WebhookOrigin'
         enabled:
           type: boolean
+        pausedUntil:
+          type: string
+          format: date-time
+          readOnly: true
+          description: >-
+            Set while the endpoint is backing off after failed attempts or a
+            receiver's Retry-After; no delivery is attempted before it. Any
+            update or manual retry clears it.
     WebhookCreate:
       type: object
       description: >-
@@ -695,7 +717,7 @@ components:
         name:
           $ref: '#/components/schemas/Name'
         url:
-          $ref: '#/components/schemas/DaemonURL'
+          $ref: '#/components/schemas/WebhookURL'
         events:
           $ref: '#/components/schemas/WebhookEvents'
         origin:
@@ -711,7 +733,7 @@ components:
       required: [url, events, origin, enabled]
       properties:
         url:
-          $ref: '#/components/schemas/DaemonURL'
+          $ref: '#/components/schemas/WebhookURL'
         events:
           $ref: '#/components/schemas/WebhookEvents'
         origin:
@@ -732,14 +754,16 @@ components:
     WebhookDelivery:
       type: object
       description: Delivery metadata without the signing key or response body.
-      required: [id, event, origin, status, attempts, createdAt, lastError]
+      required: [id, event, origin, subject, status, attempts, createdAt, lastError]
       properties:
         id:
           $ref: '#/components/schemas/ID'
         event:
           $ref: '#/components/schemas/WebhookEventType'
         origin:
-          $ref: '#/components/schemas/WebhookOrigin'
+          $ref: '#/components/schemas/WebhookEventOrigin'
+        subject:
+          $ref: '#/components/schemas/WebhookSubject'
         status:
           type: string
           enum: [pending, delivered, failed]
@@ -754,6 +778,11 @@ components:
         lastError:
           type: string
           description: A sanitized failure category or HTTP status, never a URL or response body.
+    WebhookSubject:
+      type: string
+      minLength: 1
+      maxLength: 36
+      description: Thread UUID, or peering request reference.
     WebhookDeliveryList:
       type: object
       description: Recent deliveries, newest first.
@@ -777,6 +806,9 @@ components:
         base64 HMAC-SHA256 of id.timestamp.rawBody using the decoded signing key.
         Verify the raw body, signature, timestamp freshness and duplicate IDs.
         Treat this as a notification; fetch current state before acting.
+        Ignore unknown fields, and unknown types when subscribed to '*'.
+        For peering.requested, peer is the name the unauthenticated requester
+        asked for, which may match an existing peer.
       required: [id, type, origin, at, subject, peer]
       properties:
         id:
@@ -784,16 +816,13 @@ components:
         type:
           $ref: '#/components/schemas/WebhookEventType'
         origin:
-          $ref: '#/components/schemas/WebhookOrigin'
+          $ref: '#/components/schemas/WebhookEventOrigin'
         at:
           type: string
           format: date-time
           description: When this daemon stored the event.
         subject:
-          type: string
-          minLength: 1
-          maxLength: 36
-          description: Thread UUID, or peering request reference.
+          $ref: '#/components/schemas/WebhookSubject'
         eventId:
           $ref: '#/components/schemas/ID'
         peer:

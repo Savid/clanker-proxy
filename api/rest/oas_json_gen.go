@@ -4441,14 +4441,21 @@ func (s *Webhook) encodeFields(e *jx.Encoder) {
 		e.FieldStart("enabled")
 		e.Bool(s.Enabled)
 	}
+	{
+		if s.PausedUntil.Set {
+			e.FieldStart("pausedUntil")
+			s.PausedUntil.Encode(e, json.EncodeDateTime)
+		}
+	}
 }
 
-var jsonFieldsNameOfWebhook = [5]string{
+var jsonFieldsNameOfWebhook = [6]string{
 	0: "name",
 	1: "url",
 	2: "events",
 	3: "origin",
 	4: "enabled",
+	5: "pausedUntil",
 }
 
 // Decode decodes Webhook from json.
@@ -4511,6 +4518,16 @@ func (s *Webhook) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"enabled\"")
+			}
+		case "pausedUntil":
+			if err := func() error {
+				s.PausedUntil.Reset()
+				if err := s.PausedUntil.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"pausedUntil\"")
 			}
 		default:
 			return d.Skip()
@@ -4761,6 +4778,10 @@ func (s *WebhookDelivery) encodeFields(e *jx.Encoder) {
 		s.Origin.Encode(e)
 	}
 	{
+		e.FieldStart("subject")
+		s.Subject.Encode(e)
+	}
+	{
 		e.FieldStart("status")
 		s.Status.Encode(e)
 	}
@@ -4784,15 +4805,16 @@ func (s *WebhookDelivery) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfWebhookDelivery = [8]string{
+var jsonFieldsNameOfWebhookDelivery = [9]string{
 	0: "id",
 	1: "event",
 	2: "origin",
-	3: "status",
-	4: "attempts",
-	5: "createdAt",
-	6: "nextAttemptAt",
-	7: "lastError",
+	3: "subject",
+	4: "status",
+	5: "attempts",
+	6: "createdAt",
+	7: "nextAttemptAt",
+	8: "lastError",
 }
 
 // Decode decodes WebhookDelivery from json.
@@ -4800,7 +4822,7 @@ func (s *WebhookDelivery) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode WebhookDelivery to nil")
 	}
-	var requiredBitSet [1]uint8
+	var requiredBitSet [2]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
@@ -4834,8 +4856,18 @@ func (s *WebhookDelivery) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"origin\"")
 			}
-		case "status":
+		case "subject":
 			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				if err := s.Subject.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"subject\"")
+			}
+		case "status":
+			requiredBitSet[0] |= 1 << 4
 			if err := func() error {
 				if err := s.Status.Decode(d); err != nil {
 					return err
@@ -4845,7 +4877,7 @@ func (s *WebhookDelivery) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"status\"")
 			}
 		case "attempts":
-			requiredBitSet[0] |= 1 << 4
+			requiredBitSet[0] |= 1 << 5
 			if err := func() error {
 				if err := s.Attempts.Decode(d); err != nil {
 					return err
@@ -4855,7 +4887,7 @@ func (s *WebhookDelivery) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"attempts\"")
 			}
 		case "createdAt":
-			requiredBitSet[0] |= 1 << 5
+			requiredBitSet[0] |= 1 << 6
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -4877,7 +4909,7 @@ func (s *WebhookDelivery) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"nextAttemptAt\"")
 			}
 		case "lastError":
-			requiredBitSet[0] |= 1 << 7
+			requiredBitSet[1] |= 1 << 0
 			if err := func() error {
 				v, err := d.Str()
 				s.LastError = string(v)
@@ -4897,8 +4929,9 @@ func (s *WebhookDelivery) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [1]uint8{
-		0b10111111,
+	for i, mask := range [2]uint8{
+		0b01111111,
+		0b00000001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -5105,6 +5138,46 @@ func (s WebhookDeliveryStatus) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *WebhookDeliveryStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes WebhookEventOrigin as json.
+func (s WebhookEventOrigin) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes WebhookEventOrigin from json.
+func (s *WebhookEventOrigin) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode WebhookEventOrigin to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch WebhookEventOrigin(v) {
+	case WebhookEventOriginIncoming:
+		*s = WebhookEventOriginIncoming
+	case WebhookEventOriginOutgoing:
+		*s = WebhookEventOriginOutgoing
+	default:
+		*s = WebhookEventOrigin(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s WebhookEventOrigin) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *WebhookEventOrigin) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -5457,6 +5530,86 @@ func (s WebhookSecret) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *WebhookSecret) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes WebhookSubject as json.
+func (s WebhookSubject) Encode(e *jx.Encoder) {
+	unwrapped := string(s)
+
+	e.Str(unwrapped)
+}
+
+// Decode decodes WebhookSubject from json.
+func (s *WebhookSubject) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode WebhookSubject to nil")
+	}
+	var unwrapped string
+	if err := func() error {
+		v, err := d.Str()
+		unwrapped = string(v)
+		if err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = WebhookSubject(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s WebhookSubject) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *WebhookSubject) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes WebhookURL as json.
+func (s WebhookURL) Encode(e *jx.Encoder) {
+	unwrapped := url.URL(s)
+
+	json.EncodeURI(e, unwrapped)
+}
+
+// Decode decodes WebhookURL from json.
+func (s *WebhookURL) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode WebhookURL to nil")
+	}
+	var unwrapped url.URL
+	if err := func() error {
+		v, err := json.DecodeURI(d)
+		unwrapped = v
+		if err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = WebhookURL(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s WebhookURL) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *WebhookURL) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

@@ -157,8 +157,9 @@ type Handler interface {
 	RequestPeering(ctx context.Context, req *PeeringRequest) (*RequestReceipt, error)
 	// RetryWebhookDelivery implements retryWebhookDelivery operation.
 	//
-	// Resets a failed delivery for another seven days of retries, retaining its ID and payload. Requires
-	// an enabled webhook. Refuses pending or delivered items with 409.
+	// Resets a failed delivery for another seven days of retries, retaining its ID and payload, and clears
+	// the endpoint's failure backoff. Requires an enabled webhook. Refuses pending or delivered items with
+	// 409.
 	//
 	// POST /api/v1/webhooks/{name}/deliveries/{id}/retry
 	RetryWebhookDelivery(ctx context.Context, params RetryWebhookDeliveryParams) error
@@ -166,7 +167,7 @@ type Handler interface {
 	//
 	// Replaces filters and settings. Omit secret to keep it. Pending deliveries use the current URL and
 	// key. Disabled webhooks queue no new events and pause existing deliveries; an in-flight request may
-	// finish.
+	// finish. Any update clears the endpoint's failure backoff (pausedUntil).
 	//
 	// PUT /api/v1/webhooks/{name}
 	UpdateWebhook(ctx context.Context, req *WebhookUpdate, params UpdateWebhookParams) (*Webhook, error)

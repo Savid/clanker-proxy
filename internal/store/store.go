@@ -77,28 +77,30 @@ CREATE TABLE IF NOT EXISTS threads (
 );
 CREATE INDEX IF NOT EXISTS threads_updated ON threads(updated_at);
 CREATE TABLE IF NOT EXISTS webhooks (
- name TEXT PRIMARY KEY,
- url TEXT NOT NULL,
- events TEXT NOT NULL,
- origin TEXT NOT NULL,
- enabled INTEGER NOT NULL,
- retry_after TEXT NOT NULL DEFAULT '',
- secret TEXT NOT NULL
+	name        TEXT PRIMARY KEY,
+	url         TEXT NOT NULL,
+	events      TEXT NOT NULL,
+	origin      TEXT NOT NULL,
+	enabled     INTEGER NOT NULL,
+	secret      TEXT NOT NULL,
+	retry_after TEXT NOT NULL DEFAULT '',
+	failures    INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
- seq INTEGER PRIMARY KEY AUTOINCREMENT,
- id TEXT NOT NULL UNIQUE,
- webhook TEXT NOT NULL REFERENCES webhooks(name) ON DELETE CASCADE,
- event TEXT NOT NULL,
- origin TEXT NOT NULL,
- payload BLOB NOT NULL,
- status TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
- attempts INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL,
- next_attempt_at TEXT NOT NULL,
- retry_until TEXT NOT NULL,
- finished_at TEXT,
- last_error TEXT NOT NULL DEFAULT ''
+	seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+	id              TEXT NOT NULL UNIQUE,
+	webhook         TEXT NOT NULL REFERENCES webhooks(name) ON DELETE CASCADE,
+	event           TEXT NOT NULL,
+	origin          TEXT NOT NULL,
+	subject         TEXT NOT NULL,
+	payload         BLOB NOT NULL,
+	status          TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+	attempts        INTEGER NOT NULL DEFAULT 0,
+	created_at      TEXT NOT NULL,
+	next_attempt_at TEXT NOT NULL,
+	retry_until     TEXT NOT NULL,
+	finished_at     TEXT,
+	last_error      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries(webhook, status, next_attempt_at, seq);
 CREATE INDEX IF NOT EXISTS webhook_expiry ON webhook_deliveries(status, retry_until);

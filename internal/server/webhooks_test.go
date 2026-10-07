@@ -5,9 +5,36 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/savid/clanker-proxy/api/rest"
+	"github.com/savid/clanker-proxy/pkg/webhook"
 )
+
+// The catalog is listed in the spec twice and in pkg/webhook once; WebhookEvents'
+// maxItems must also grow with it.
+func TestWebhookCatalogMatchesSpec(t *testing.T) {
+	t.Parallel()
+	var types, items []string
+	for _, v := range rest.WebhookEventType("").AllValues() {
+		types = append(types, string(v))
+	}
+	for _, v := range rest.WebhookEventsItem("").AllValues() {
+		items = append(items, string(v))
+	}
+	if !slices.Equal(types, webhook.Types()) || !slices.Equal(items, append([]string{"*"}, webhook.Types()...)) {
+		t.Fatalf("spec %v / %v, pkg/webhook %v", types, items, webhook.Types())
+	}
+	events := make(rest.WebhookEvents, 0, len(items)-1)
+	for _, v := range items[1:] {
+		events = append(events, rest.WebhookEventsItem(v))
+	}
+	if err := events.Validate(); err != nil {
+		t.Fatalf("the spec refuses a subscription to every type: %v", err)
+	}
+}
 
 func TestWebhookInputAndSecretRedaction(t *testing.T) {
 	t.Parallel()

@@ -1809,6 +1809,17 @@ func (s *WebhookDelivery) Validate() error {
 		})
 	}
 	if err := func() error {
+		if err := s.Subject.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "subject",
+			Error: err,
+		})
+	}
+	if err := func() error {
 		if err := s.Status.Validate(); err != nil {
 			return err
 		}
@@ -1921,6 +1932,17 @@ func (s WebhookDeliveryStatus) Validate() error {
 	case "delivered":
 		return nil
 	case "failed":
+		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
+}
+
+func (s WebhookEventOrigin) Validate() error {
+	switch s {
+	case "incoming":
+		return nil
+	case "outgoing":
 		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)
@@ -2082,6 +2104,26 @@ func (s WebhookSecret) Validate() error {
 		Email:         false,
 		Hostname:      false,
 		Regex:         regexMap["^[A-Za-z0-9+/]{43}=$"],
+		MinNumeric:    0,
+		MinNumericSet: false,
+		MaxNumeric:    0,
+		MaxNumericSet: false,
+	}).Validate(string(alias)); err != nil {
+		return errors.Wrap(err, "string")
+	}
+	return nil
+}
+
+func (s WebhookSubject) Validate() error {
+	alias := (string)(s)
+	if err := (validate.String{
+		MinLength:     1,
+		MinLengthSet:  true,
+		MaxLength:     36,
+		MaxLengthSet:  true,
+		Email:         false,
+		Hostname:      false,
+		Regex:         nil,
 		MinNumeric:    0,
 		MinNumericSet: false,
 		MaxNumeric:    0,
