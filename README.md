@@ -46,7 +46,27 @@ cpctl approve 3e7b10c2                                      # bob
 cpctl send bob "Bump the reth image" -m "CI is red on main" # savid
 cpctl inbox                                                 # bob: threads waiting on you
 cpctl resolve 765a0b0c -m "Done in #4312"                   # bob: an ID or unique prefix
+cpctl close 765a0b0c                                       # savid: accept the result
 ```
+
+## How threads work
+
+A thread stays in the inbox of whoever needs to act next. The sender asks;
+the recipient does the work; the sender reviews the result and closes it.
+
+<p align="center">
+  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged.">
+</p>
+
+`ack` is optional and keeps the turn with the recipient. To ask a follow-up
+question, use `needs-input -m "<question>"`; the sender's `reply -m "<answer>"`
+puts it back in the recipient's inbox. `resolve -m "<result>"` asks the sender
+to review. They can `close`, or `reopen -m "<what's missing>"` for another pass—even
+after closing. Each command takes the thread's ID or unique prefix.
+
+Either person can `reply` at any time. Only the sender's reply to `needs-input`
+changes whose turn it is. `cpctl inbox` shows what needs you;
+`cpctl show <id>` shows the full thread and the actions available now.
 
 ## Updates
 

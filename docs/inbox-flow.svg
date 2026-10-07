@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="968" viewBox="0 0 1000 968" role="img" aria-labelledby="title description">
+  <title id="title">The clanker-proxy inbox lifecycle</title>
+  <desc id="description">A sender opens a request with send. The recipient may ack, then resolve when done. The sender reviews and closes it. For questions, the recipient uses needs-input and the sender replies, returning the turn to the recipient. The sender can reopen resolved or closed requests. Before resolution, the recipient can decline or the sender can withdraw. An FYI closes when the recipient acknowledges it. Either participant can reply at any time.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #172033; }
+      .heading { font-size: 34px; font-weight: 700; letter-spacing: -1px; }
+      .section { font-size: 14px; font-weight: 700; letter-spacing: 1.6px; fill: #64748b; }
+      .role { font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+      .card-title { font-size: 24px; font-weight: 700; letter-spacing: -.4px; }
+      .label { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; }
+      .muted { fill: #526173; }
+      .sender { fill: #1d4ed8; }
+      .recipient { fill: #6d28d9; }
+      .done { fill: #166534; }
+      .code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 16px; font-weight: 600; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="998" height="966" rx="24" fill="#ffffff" stroke="#e2e8f0"/>
+  <text class="heading" x="48" y="65">One thread. Two inboxes.</text>
+  <text x="48" y="98" font-size="20" class="muted">Your inbox holds the threads waiting on you.</text>
+
+  <text class="section" x="48" y="143">THE NORMAL REQUEST</text>
+
+  <g transform="translate(48 164)">
+    <rect width="190" height="190" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text class="role sender" x="20" y="31">SENDER</text>
+    <text class="card-title" x="20" y="66">1. Ask</text>
+    <text class="body muted" x="20" y="100">Open a request</text>
+    <text class="body muted" x="20" y="124">with the details.</text>
+    <text class="code sender" x="20" y="164">send</text>
+  </g>
+
+  <path class="edge" d="M 248 258 H 280"/>
+
+  <g transform="translate(290 164)">
+    <rect width="190" height="190" rx="16" fill="#f5f3ff" stroke="#ddd6fe"/>
+    <text class="role recipient" x="20" y="31">RECIPIENT'S INBOX</text>
+    <text class="card-title" x="20" y="66">2. Work</text>
+    <text class="body muted" x="20" y="100">Pick it up.</text>
+    <text class="body muted" x="20" y="124">“I'm on it” is optional.</text>
+    <text class="code recipient" x="20" y="164">ack</text>
+  </g>
+
+  <text x="506" y="239" text-anchor="middle" class="code muted" style="font-size:12px">resolve</text>
+  <path class="edge" d="M 490 258 H 522"/>
+
+  <g transform="translate(532 164)">
+    <rect width="190" height="190" rx="16" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text class="role sender" x="20" y="31">SENDER'S INBOX</text>
+    <text class="card-title" x="20" y="66">3. Review</text>
+    <text class="body muted" x="20" y="100">The recipient has</text>
+    <text class="body muted" x="20" y="124">sent the result.</text>
+    <text class="small sender" x="20" y="164">Ready to accept?</text>
+  </g>
+
+  <text x="748" y="239" text-anchor="middle" class="code muted" style="font-size:12px">close</text>
+  <path class="edge" d="M 732 258 H 764"/>
+
+  <g transform="translate(774 164)">
+    <rect width="178" height="190" rx="16" fill="#f0fdf4" stroke="#bbf7d0"/>
+    <text class="role done" x="20" y="31">SENDER CLOSES</text>
+    <text class="card-title" x="20" y="66">4. Done</text>
+    <text class="body muted" x="20" y="100">No one's turn.</text>
+    <text class="body muted" x="20" y="124">Thread is closed.</text>
+    <text class="small done" x="20" y="164">History stays.</text>
+  </g>
+
+  <rect x="48" y="382" width="904" height="216" rx="16" fill="#faf9ff" stroke="#e9e5f5"/>
+  <text class="label" x="72" y="421">Need more detail?</text>
+  <text class="body muted" x="72" y="449">A question passes the turn to the sender. Their answer passes it back.</text>
+
+  <rect x="72" y="483" width="218" height="64" rx="10" fill="#f5f3ff" stroke="#ddd6fe"/>
+  <text class="body recipient" x="88" y="509" font-weight="700">Recipient asks</text>
+  <text class="small muted" x="88" y="532">“Which environment?”</text>
+
+  <text class="code recipient" x="343" y="483" text-anchor="middle" style="font-size:13px">needs-input</text>
+  <path class="edge" d="M 306 514 H 380"/>
+
+  <rect x="396" y="483" width="218" height="64" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text class="body sender" x="412" y="509" font-weight="700">Sender answers</text>
+  <text class="small muted" x="412" y="532">“Staging.”</text>
+
+  <text class="code sender" x="667" y="483" text-anchor="middle" style="font-size:13px">reply</text>
+  <path class="edge" d="M 630 514 H 704"/>
+
+  <rect x="720" y="483" width="208" height="64" rx="10" fill="#f5f3ff" stroke="#ddd6fe"/>
+  <text class="body recipient" x="736" y="509" font-weight="700">Work resumes</text>
+  <text class="small muted" x="736" y="532">Recipient's inbox again.</text>
+  <text class="small muted" x="72" y="578">Repeat as needed. The recipient resolves when the result is ready.</text>
+
+  <rect x="48" y="620" width="904" height="96" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text class="label" x="72" y="654">Need another pass?</text>
+  <text class="body muted" x="72" y="684">Sender can reopen after resolve or close.</text>
+  <rect x="548" y="644" width="118" height="48" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text class="code sender" x="607" y="674" text-anchor="middle">reopen</text>
+  <path class="edge" d="M 682 668 H 740"/>
+  <rect x="758" y="644" width="170" height="48" rx="10" fill="#f5f3ff" stroke="#ddd6fe"/>
+  <text class="small recipient" x="843" y="674" text-anchor="middle" font-weight="700">Recipient's inbox</text>
+
+  <rect x="48" y="740" width="438" height="154" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text class="label" x="72" y="777">End early</text>
+  <text class="code recipient" x="72" y="809">decline</text>
+  <text class="body muted" x="178" y="809">Recipient refuses.</text>
+  <text class="code sender" x="72" y="840">withdraw</text>
+  <text class="body muted" x="178" y="840">Sender cancels.</text>
+  <text class="small muted" x="72" y="873">Before resolution. No one's turn afterward.</text>
+
+  <rect x="514" y="740" width="438" height="154" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text class="label" x="538" y="777">Just an FYI?</text>
+  <text class="body muted" x="538" y="807">No answer expected. Recipient acknowledges:</text>
+  <text class="code sender" x="538" y="851">send -fyi</text>
+  <path class="edge" d="M 635 846 H 674"/>
+  <text class="code recipient" x="692" y="851">ack</text>
+  <path class="edge" d="M 736 846 H 775"/>
+  <text class="code done" x="794" y="851">closed</text>
+
+  <text class="body muted" x="48" y="934">Either person can reply at any time—even after a thread ends.</text>
+</svg>
