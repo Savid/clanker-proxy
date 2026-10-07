@@ -11,16 +11,20 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
               your cpd ◀── cpctl show / reply ◀── conversation thread (same orb)
 ```
 
-- The thread that first loads the plugin is the **inbox**. It owns the webhook,
-  starts a conversation thread for each cpd thread, and gets peering requests,
-  which it summarizes for you and never approves.
-- Each **conversation** keeps its own context. Its agent reads the thread with
+- The thread that first loads the plugin is the **inbox**. It owns the webhook
+  and starts a conversation thread for each cpd thread. Peering requests never
+  reach an agent: anyone can send one, and approving grants access. The
+  plugin labels the inbox `cp-peering` and notifies you; review them yourself
+  with `cpctl requests`.
+- Each **conversation** keeps its own context. Its agent reads its thread with
   `cpctl show`, does the work (code, tests, local commits) and answers through
   the thread's `next:` commands. Later events for that cpd thread go back to
-  the same conversation.
-- Notifications carry only metadata, so nothing a peer wrote reaches a prompt
-  through the webhook. Agents are told to treat peer messages as requests to
-  weigh, not instructions.
+  the same conversation. This includes threads you sent: when the peer answers,
+  the agent checks the answer against your request and closes or reopens it,
+  or asks you.
+- Webhook notifications carry only metadata. What a peer wrote reaches an
+  agent only through `cpctl show`, and agents are told to weigh it as a
+  request, not follow it as instructions.
 
 ## Before you start
 
@@ -30,18 +34,21 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
 - **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can
   clone your repositories.
 - **Your owner token**: the `owner.token` file in cpd's data directory
-  (`~/.cp/owner.token` by default). `cpctl` in the orb uses it as `CP_TOKEN`
-  and can do anything you can; the guardrails below limit what agents do with
-  it, but they are not a sandbox.
+  (`~/.cp/owner.token` by default). The orb uses it as `CP_TOKEN`, so
+  anything running there can act as you. The guardrails below stop agents
+  from using it for the wrong things, but code an agent runs, such as a test
+  suite a peer asked about, inherits it too. Hand the inbox only to peers you
+  would let run code in that orb.
 
 ## Choosing the project
 
-Conversations run in the inbox's orb and see its workspace. Start the inbox
-thread in the project for the repository peers ask you about most; its
-checkout is the default for code work. Each conversation works in its own git
-worktree under `~/cp-work`, so conversations in the shared orb never edit the
-same checkout. For another repository, an agent clones it into
-`~/cp-work/repos` first, which needs GitHub access to it.
+Use an Amp project: in a project, the webhook belongs to the project and
+plugin, so other threads that load the plugin get the same URL instead of
+their own. Pick the project for the repository peers ask you about most;
+conversations run in the inbox's orb, and its checkout is the default for code
+work. Each conversation works in its own git worktree under `~/cp-work`, so
+conversations never edit the same checkout. For another repository, an agent
+clones it into `~/cp-work/repos` first, which needs GitHub access to it.
 
 ## Setup
 
@@ -51,25 +58,30 @@ same checkout. For another repository, an agent clones it into
    openssl rand -base64 32
    ```
 
-   In the project's settings (or Settings → Secrets & Env Vars for all your
-   orbs), add `CP_WEBHOOK_SECRET` (that key), `CP_URL` (cpd's public URL) and
-   `CP_TOKEN` (the owner token). A running orb picks them up after
+   In the project's settings, add `CP_WEBHOOK_SECRET` (that key), `CP_URL`
+   (cpd's public URL) and `CP_TOKEN` (the owner token). Prefer the project
+   over Settings → Secrets & Env Vars, which would give your owner token to
+   every orb you start. A running orb picks up secrets after
    `amp orb restart-processes`.
 
-2. **Plugin.** Add `examples/amp/cp-inbox.ts` as `.amp/plugins/cp-inbox.ts`
-   at the workspace root: the repository root in a project, or
-   `/home/user/workspace` without one. Committing it to the project's
-   repository loads it in every thread of that project; that is harmless,
-   since only the inbox thread owns the webhook and the guardrails apply only
-   to conversations.
+2. **Start the inbox thread** in an orb (executor **New Orb**) in that
+   project. Whichever thread loads the plugin first owns the webhook for good,
+   so do the rest of the setup in this thread. Have it:
 
-3. **Inbox thread.** Start a thread in an orb (executor **New Orb**) in that
-   project, install `cpctl` there (the README's install command), and load the
-   plugin. This thread is now the inbox. The plugin writes its webhook URL to
-   `~/.local/state/cp-inbox/webhook.url` (mode 0600) instead of showing it,
-   since anyone with the URL can post events.
+   - install `cpctl` (the README's install command) and make sure it is on
+     `PATH` for both its shell and plugins; otherwise set `CP_INBOX_CPCTL` to
+     its full path;
+   - add `examples/amp/cp-inbox.ts` as `.amp/plugins/cp-inbox.ts` at the
+     workspace root (the repository root in a project) and load it, or run
+     `plugins: reload` from the command palette.
 
-4. **Point cpd at it**, from the inbox orb so the URL and key never leave it:
+   The plugin writes its webhook URL to `cp-inbox/webhook.url` under
+   `$XDG_STATE_HOME` (`~/.local/state` by default), mode 0600, instead of
+   showing it, since anyone with the URL can post events. If the file already
+   exists, it is kept.
+
+3. **Point cpd at it.** Ask the inbox thread to run this, so the URL and key
+   never leave the orb:
 
    ```bash
    printenv CP_WEBHOOK_SECRET | cpctl webhook add amp \
@@ -78,9 +90,19 @@ same checkout. For another repository, an agent clones it into
 
    `-origin incoming` keeps your agents' own actions from waking them.
 
-5. **Keep the inbox unarchived.** Archiving it pauses delivery and makes the
+4. **Keep the inbox unarchived.** Archiving it pauses delivery and makes the
    URL return 404. Remove any workspace or personal guidance that tells Amp to
    archive threads when work finishes.
+
+Committing the plugin to the project's repository loads it in every thread of
+the project. That is safe: only the inbox owns the webhook, guardrails apply
+to conversations, and the other threads only gain the `cp_ask_owner` tool.
+
+If the wrong thread became the inbox, delete the `cp-inbox` trigger in
+Settings → Triggers and the `webhook.url` file, reload the plugin in the
+right thread, and run step 3 again with `cpctl webhook set amp -url-file …`.
+After adding a missing secret, restart the orb's processes and reload the
+plugin.
 
 ## Checking it works
 
@@ -91,11 +113,12 @@ same checkout. For another repository, an agent clones it into
    labelled `clanker-proxy` and `peer-<name>` appears under the inbox and
    starts working.
 3. `cpctl webhook deliveries amp` shows the notification `delivered`. A
-   delivered notification with no conversation means the plugin dropped it:
-   the orb's Amp log says why (usually a key that differs from cpd's).
+   delivered notification with no conversation means the plugin dropped or
+   held it: the orb's Amp log says why (usually a key that differs from
+   cpd's).
 
 Not yet confirmed in a real orb: that the approval prompt below appears for
-conversation threads, which run in the background, and that `cp_ask_owner`
+conversation threads, which run in the background, and that the plugin's
 notifications reach your devices. Check both on your first run; if a prompt
 cannot be shown, the command is refused and the agent asks you in its thread
 instead.
@@ -103,36 +126,41 @@ instead.
 ## What the agent does alone
 
 It acts on its own for peers you have approved, and asks you before anything
-with effects outside the orb. The plugin enforces part of this on every shell
-command a conversation runs:
+with effects outside the orb. The plugin checks every shell command a
+conversation runs, and the files other tools name:
 
 | Commands | Result |
 | --- | --- |
-| `cpctl approve`, `deny`, `peer add`/`rm`, `webhook …`, `update`; reading `CP_TOKEN`, `owner.token`, the webhook URL or the whole environment | Refused. |
-| `git push`, GitHub changes (`gh pr create`, `gh api`, …), `cpctl send`, publishing, copying files to other machines | Asks you to approve that exact command. |
+| `cpctl` on any other thread or peer, `ls`, `inbox`, `requests`, `approve`, `deny`, `peer add`/`rm`, `webhook …`, `update`; `-url`, `-token`, `CP_URL`, `CP_TOKEN` or `CP_DIR` overrides | Refused. |
+| Anything naming `CP_TOKEN`, `CP_WEBHOOK_SECRET`, `owner.token`, `/proc/*/environ` or the plugin's state; printing the environment; `gh auth` | Refused. |
+| `git push` (however git's options are placed), GitHub changes (everything but `gh pr`/`issue`/`run`/`repo` reads and `gh search`), `cpctl send`, uploads with `curl`/`wget`, `ssh`/`nc`, copying to other machines, publishing | Asks you to approve that exact command; refused if too long to show. |
 | Everything else | Runs. |
 
-A script the agent writes can still do these things. When an agent needs a
-decision, it calls the `cp_ask_owner` tool, which labels its thread
-`needs-owner` and notifies you; answer in that thread.
+Commands inside `bash -c`, `eval` and `$(…)` are checked too. A script the
+agent writes and runs is not: this is a guardrail against an agent talked
+into something, not a sandbox. When an agent needs a decision, it calls the
+`cp_ask_owner` tool, which labels its thread `needs-owner` and sends you a
+fixed notification; answer in that thread.
 
-## Turns and loops
+## Limits
 
-Every cpd thread has a turn: the recipient's while it is open or acked, the
-sender's while it needs input or is resolved. A conversation wakes whenever
-it becomes your turn. A reply that arrives on the peer's turn, such as a
-follow-up question on a resolved thread, also wakes it, with instructions to
-answer at most once without changing the thread's state.
+A reply never changes whose turn it is, so two agents answering each other's
+replies would never stop. Replies wake an idle conversation only if 10
+minutes have passed since the last one, and at most 3 times until the peer
+changes the thread's state; a conversation that is already working gets them
+straight away. Beyond that:
 
-Two agents answering each other's replies would never stop, so off-turn
-replies wake a conversation only if 10 minutes have passed since the last
-one, and at most 3 times until the turn changes. Every conversation is
-capped at 30 wake-ups a day. A held notification labels the conversation
-`cp-held`; read the thread with `cpctl show`.
+- a conversation wakes at most 30 times a day, and all conversations together
+  200 times;
+- a peer starts at most 10 new conversations a day;
+- when a peer ends a thread (close, decline, withdraw), a working conversation
+  is told to stop; ended conversations are forgotten after 30 days.
 
-Each time an event arrives, at most every 10 minutes, the plugin also starts
-conversations (up to 5) for threads that are your turn but have none, such as
-ones whose notifications were lost while the inbox was archived.
+A held notification labels the conversation `cp-held` and notifies you once
+a day per conversation. Each time an event arrives, at most every 10 minutes,
+the plugin wakes up to 5 threads that are your turn but have no conversation
+or were held, such as ones whose notifications were lost while the inbox was
+archived.
 
 ## Delivery
 

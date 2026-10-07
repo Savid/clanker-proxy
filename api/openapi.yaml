@@ -686,7 +686,7 @@ components:
         A webhook destination: https, or http on a literal loopback address,
         without userinfo or fragment. Paths and queries may contain provider
         credentials, so the entire URL is write-only. Any host the daemon can
-        reach is allowed. Validation errors never echo the URL.
+        reach is allowed. At most 2048 bytes. Validation errors never echo the URL.
       minLength: 1
       maxLength: 2048
       writeOnly: true
@@ -697,7 +697,7 @@ components:
       enum: [generic, discord, slack, teams, google-chat, mattermost, rocketchat, ntfy, gotify, apprise]
     WebhookHeaderName:
       type: string
-      description: An HTTP header name. Transport, content-type, user-agent and webhook signing headers are reserved.
+      description: An HTTP header name. Transport, Content-Type, User-Agent, Idempotency-Key, Proxy-* and Webhook-* headers are reserved.
       minLength: 1
       maxLength: 64
       pattern: '^[A-Za-z0-9!#$%&''*+.^_`|~-]+$'
@@ -716,7 +716,7 @@ components:
             minLength: 1
             maxLength: 4096
             writeOnly: true
-            description: A single-line value, without control characters.
+            description: A single-line value of at most 4096 bytes, without control characters.
     WebhookSecret:
       type: string
       description: Optional base64 encoding of a 32-byte signing key for generic destinations only. Empty disables signing. Write-only; never returned or logged.

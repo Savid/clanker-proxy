@@ -3363,7 +3363,7 @@ type WebhookHeaders []WebhookHeadersItem
 
 type WebhookHeadersItem struct {
 	Name WebhookHeaderName `json:"name"`
-	// A single-line value, without control characters.
+	// A single-line value of at most 4096 bytes, without control characters.
 	Value string `json:"value"`
 }
 

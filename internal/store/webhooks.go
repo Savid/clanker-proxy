@@ -23,8 +23,12 @@ const WebhookTTL = 7 * 24 * time.Hour
 // ErrWebhookRetry means a delivery is not failed, or its webhook is disabled.
 var ErrWebhookRetry = errors.New("only failed deliveries of enabled webhooks can be retried")
 
-// ErrWebhookInvalid marks validation failures inside an atomic settings update.
-var ErrWebhookInvalid = errors.New("invalid webhook settings")
+// InvalidWebhookError is a validation failure inside an atomic settings update.
+type InvalidWebhookError struct{ Err error }
+
+func (e *InvalidWebhookError) Error() string { return e.Err.Error() }
+
+func (e *InvalidWebhookError) Unwrap() error { return e.Err }
 
 const webhookColumns = `name, type, url, events, origin, enabled, secret, headers, retry_after, failures`
 
@@ -105,7 +109,7 @@ func (s *Store) UpdateWebhook(ctx context.Context, name string, change webhook.U
 		}
 		c = change.Apply(c)
 		if err = c.Validate(); err != nil {
-			return fmt.Errorf("%w: %w", ErrWebhookInvalid, err)
+			return &InvalidWebhookError{Err: err}
 		}
 		events, err := json.Marshal(c.Events)
 		if err != nil {

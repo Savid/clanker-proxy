@@ -122,7 +122,7 @@ func (c Config) validateSigning(provider Provider) error {
 	if c.Secret == "" {
 		return nil
 	}
-	if !provider.Signed {
+	if !provider.StandardWebhooks {
 		return errors.New("signing keys apply only to generic webhooks; provider destinations use their URL or authentication headers")
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(c.Secret)

@@ -87,6 +87,7 @@ func (b *Inbox) RetryWebhook(ctx context.Context, name, id string) error {
 }
 
 func webhookError(err error) error {
+	var invalid *store.InvalidWebhookError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return errorf(KindNotFound, "webhook not found")
@@ -94,8 +95,8 @@ func webhookError(err error) error {
 		return errorf(KindConflict, "webhook name already exists")
 	case errors.Is(err, store.ErrWebhookRetry):
 		return errorf(KindConflict, "only failed deliveries of enabled webhooks can be retried")
-	case errors.Is(err, store.ErrWebhookInvalid):
-		return errorf(KindInvalid, "%v", err)
+	case errors.As(err, &invalid):
+		return errorf(KindInvalid, "%v", invalid.Err)
 	default:
 		return err
 	}

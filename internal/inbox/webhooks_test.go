@@ -49,8 +49,6 @@ func TestWebhookReceiveDeduplicatesAndFiltersOrigin(t *testing.T) {
 		t.Fatal("reply did not notify while still owner's turn")
 	}
 	oldKey := c.Secret
-	c.Secret = ""
-	c.Enabled = false
 	if _, err = ib.UpdateWebhook(t.Context(), c.Name, webhook.Update{Enabled: new(false)}); err != nil {
 		t.Fatal(err)
 	}

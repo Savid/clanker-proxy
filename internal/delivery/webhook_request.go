@@ -46,7 +46,7 @@ func webhookRequest(ctx context.Context, hook webhook.Config, job store.WebhookD
 	}
 	req.Header.Set("Content-Type", message.ContentType)
 	req.Header.Set("User-Agent", "cpd")
-	if provider.Signed {
+	if provider.StandardWebhooks {
 		timestamp := strconv.FormatInt(now.Unix(), 10)
 		req.Header.Set("Webhook-Id", job.ID)
 		req.Header.Set("Idempotency-Key", job.ID)

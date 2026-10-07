@@ -17,9 +17,10 @@ type Provider struct {
 	Auth        string `json:"auth"`
 	ExampleURL  string `json:"exampleUrl"`
 
-	// Signed destinations get Webhook-Id and Webhook-Timestamp headers and
-	// accept an optional signing key.
-	Signed bool `json:"-"`
+	// StandardWebhooks destinations get the event JSON itself, with
+	// Webhook-Id, Webhook-Timestamp and Idempotency-Key headers, and accept an
+	// optional signing key.
+	StandardWebhooks bool `json:"-"`
 	// Query parameters are set on every request.
 	Query map[string]string `json:"-"`
 	// RetryAfterBody means a 429 response carries retry_after, in seconds,
@@ -28,7 +29,7 @@ type Provider struct {
 }
 
 var providers = []Provider{
-	{Type: "generic", Description: "Event JSON for automation; optional Standard Webhooks signing", Auth: "Optional signing key or custom headers", ExampleURL: "https://runner.example.com/hooks/clanker", Signed: true},
+	{Type: "generic", Description: "Event JSON for automation; optional Standard Webhooks signing", Auth: "Optional signing key or custom headers", ExampleURL: "https://runner.example.com/hooks/clanker", StandardWebhooks: true},
 	// Discord can acknowledge a non-persisted message unless wait is enabled.
 	{Type: "discord", Description: "Discord channel embed; mentions disabled", Auth: "Secret webhook URL", ExampleURL: "https://discord.com/api/webhooks/ID/TOKEN", Query: map[string]string{"wait": "true"}, RetryAfterBody: true},
 	{Type: "slack", Description: "Slack incoming webhook with plain-text blocks", Auth: "Secret webhook URL", ExampleURL: "https://hooks.slack.com/services/TEAM/CHANNEL/TOKEN"},
@@ -65,7 +66,7 @@ type Message struct {
 // Render formats stored metadata without fetching mutable thread content.
 // A retry therefore describes the same event even if the thread has moved on.
 func Render(kind string, raw []byte) (Message, error) {
-	if kind == "generic" {
+	if provider, ok := LookupProvider(kind); ok && provider.StandardWebhooks {
 		return Message{Body: raw, ContentType: "application/json"}, nil
 	}
 	var p Payload

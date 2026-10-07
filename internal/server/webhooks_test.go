@@ -162,3 +162,35 @@ func TestWebhookInputAndSecretRedaction(t *testing.T) {
 		t.Fatal("invalid key accepted or exposed")
 	}
 }
+
+func TestWebhookInvalidUpdateChangesNothing(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+f.owner)
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := call(http.MethodPost, "/api/v1/webhooks", `{"name":"chat","type":"discord","url":"https://discord.com/api/webhooks/id/token","events":["*"],"origin":"both","enabled":true}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	// Each passes the schema and fails validation of the merged settings.
+	for body, detail := range map[string]string{
+		`{"secret":"` + key + `","enabled":false}`:       "signing keys apply only to generic webhooks",
+		`{"url":"http://example.com/x","enabled":false}`: "webhook URL requires HTTPS",
+	} {
+		rec := call(http.MethodPatch, "/api/v1/webhooks/chat", body)
+		var p rest.Problem
+		if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || rec.Code != http.StatusBadRequest || !strings.HasPrefix(p.Detail.Or(""), detail) {
+			t.Fatalf("%s: %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	var h rest.Webhook
+	if err := json.Unmarshal(call(http.MethodGet, "/api/v1/webhooks/chat", "").Body.Bytes(), &h); err != nil || !h.Enabled || h.Destination != "https://discord.com" || h.Signing {
+		t.Fatalf("refused update changed the webhook: %+v %v", h, err)
+	}
+}
