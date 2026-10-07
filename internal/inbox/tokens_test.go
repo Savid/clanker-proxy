@@ -31,17 +31,6 @@ func TestAgentTokens(t *testing.T) {
 	if _, _, err = b.CreateAgentToken(ctx, "Bad Name", nil, time.Time{}); status(err) != http.StatusBadRequest {
 		t.Fatalf("bad name: %v", err)
 	}
-	for _, peers := range [][]string{{"not a name"}, {"bob", "Bob"}} {
-		if _, _, err = b.CreateAgentToken(ctx, "scoped", peers, time.Time{}); status(err) != http.StatusBadRequest {
-			t.Fatalf("peers %v: %v", peers, err)
-		}
-	}
-	if _, scoped, scopeErr := b.CreateAgentToken(ctx, "bob-agent", []string{"Bob"}, time.Time{}); scopeErr != nil || len(scoped.Peers) != 1 || scoped.Peers[0] != "bob" {
-		t.Fatalf("scoped token: %+v %v", scoped, scopeErr)
-	}
-	if err = b.DeleteAgentToken(ctx, "bob-agent"); err != nil {
-		t.Fatal(err)
-	}
 	if _, _, err = b.CreateAgentToken(ctx, "late", nil, now); status(err) != http.StatusBadRequest {
 		t.Fatalf("expiry not in the future: %v", err)
 	}
@@ -90,5 +79,26 @@ func TestAgentTokens(t *testing.T) {
 	}
 	if err = b.DeleteAgentToken(ctx, "amp"); status(err) != http.StatusNotFound {
 		t.Fatalf("revoke twice: %v", err)
+	}
+}
+
+func TestAgentTokenPeers(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "cp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	b := New(slog.New(slog.DiscardHandler), st, nil, Config{Self: "me"})
+
+	for _, peers := range [][]string{{"not a name"}, {"bob", "Bob"}} {
+		if _, _, err = b.CreateAgentToken(ctx, "scoped", peers, time.Time{}); err == nil {
+			t.Fatalf("peers %v accepted", peers)
+		}
+	}
+	_, scoped, err := b.CreateAgentToken(ctx, "bob-agent", []string{"Bob"}, time.Time{})
+	if err != nil || len(scoped.Peers) != 1 || scoped.Peers[0] != "bob" {
+		t.Fatalf("scoped token: %+v %v", scoped, err)
 	}
 }
