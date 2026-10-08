@@ -273,14 +273,14 @@ straight away. Beyond that:
 - a conversation wakes at most 30 times a day, one peer's conversations 60
   times, and all conversations together 200 times;
 - a peer starts at most 10 new conversations a day;
-- when a peer ends a thread (close, decline, withdraw), a working conversation
-  checks the current state and stops if it is still ended; ended conversations
-  are forgotten after 30 days.
+- when a peer ends a thread (close, decline, withdraw), the plugin rereads the
+  thread with `cpctl show` and drops the notice if it was reopened since; a
+  working conversation is told to recheck and stop if it is still ended.
+  Ended conversations are forgotten after 30 days.
 
 cpd bounds what a peer can do on its side: each side has room for 1000 events
 and 4 MiB of bodies in a thread, after which only close, decline or withdraw
-without a body remain, a peer may have at most 200 threads open at once
-(including reopened threads), and a move that changes nothing sends no notification.
+without a body remain, and a move that changes nothing sends no notification.
 
 A held notification labels the conversation `cp-held` and notifies you at
 most once a day per peer. Each time an event arrives, at most every 10 minutes,

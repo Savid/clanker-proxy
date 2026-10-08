@@ -28,8 +28,7 @@ type Invoker interface {
 	// they may. Either participant can close an open, acked, needs-input or resolved thread, or reopen a
 	// resolved or closed thread with a reason. A missing or whitespace-only reopen reason fails with 400.
 	// Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close, decline
-	// or withdraw without a body remain. Reopening a closed incoming thread fails with 409 if its peer
-	// already has 200 threads open here. An agent token limited to peers reaches only threads with those
+	// or withdraw without a body remain. An agent token limited to peers reaches only threads with those
 	// peers, as getThread.
 	//
 	// POST /api/v1/threads/{ref}/events
@@ -88,9 +87,8 @@ type Invoker interface {
 	// The peer's secret says who sent it. Delivering the same event again is harmless and answers
 	// `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
 	// not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
-	// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or opens or reopens a
-	// closed incoming thread when it already has 200 threads open here; with 503, to retry later, when it
-	// is dated more than ten minutes ahead.
+	// events, 4 MiB of bodies; then only close, decline or withdraw without a body); with 503, to retry
+	// later, when it is dated more than ten minutes ahead.
 	//
 	// POST /api/v1/federation/events
 	DeliverEvent(ctx context.Context, request *Event) (*Receipt, error)
@@ -266,8 +264,7 @@ func (c *Client) requestURL(ctx context.Context) *url.URL {
 // they may. Either participant can close an open, acked, needs-input or resolved thread, or reopen a
 // resolved or closed thread with a reason. A missing or whitespace-only reopen reason fails with 400.
 // Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close, decline
-// or withdraw without a body remain. Reopening a closed incoming thread fails with 409 if its peer
-// already has 200 threads open here. An agent token limited to peers reaches only threads with those
+// or withdraw without a body remain. An agent token limited to peers reaches only threads with those
 // peers, as getThread.
 //
 // POST /api/v1/threads/{ref}/events
@@ -926,9 +923,8 @@ func (c *Client) sendDeleteWebhook(ctx context.Context, params DeleteWebhookPara
 // The peer's secret says who sent it. Delivering the same event again is harmless and answers
 // `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, or its clock is
 // not after the peer's earlier events in the thread, or the peer has used its room in the thread (1000
-// events, 4 MiB of bodies; then only close, decline or withdraw without a body), or opens or reopens a
-// closed incoming thread when it already has 200 threads open here; with 503, to retry later, when it
-// is dated more than ten minutes ahead.
+// events, 4 MiB of bodies; then only close, decline or withdraw without a body); with 503, to retry
+// later, when it is dated more than ten minutes ahead.
 //
 // POST /api/v1/federation/events
 func (c *Client) DeliverEvent(ctx context.Context, request *Event) (*Receipt, error) {

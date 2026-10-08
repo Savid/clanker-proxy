@@ -255,6 +255,9 @@ func TestEitherParticipantClosesAndReopens(t *testing.T) {
 	var sent threadJSON
 	alice.json(t, &sent, "send", "bob", "Amp smoke test")
 	bob.waitTurn(t, "")
+	if out := agent.cp(t, "show", sent.ID); !strings.Contains(out, "end it without a result") {
+		t.Fatalf("recipient's open guidance = %s", out)
+	}
 	agent.cp(t, "resolve", sent.ID, "-m", "pong")
 	converge(t, alice, bob, sent.ID, "resolved", 2)
 

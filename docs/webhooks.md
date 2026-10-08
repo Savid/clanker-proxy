@@ -155,12 +155,6 @@ means the action was stored; concurrent events can leave an action unapplied
 by the workflow. Fetch the current thread and its available actions before
 acting. Transport retries and delivery-status changes generate no notifications.
 
-A local notification does not confirm the peer accepted the event. If a peer
-refuses a reopen at its 200-thread cap, the sender's copy stays `acked` while
-the recipient's stays `closed`. `cpctl show` marks the event undeliverable.
-The refusal is final: freeing capacity does not retry it, and later replies
-do not reconcile the two copies.
-
 Public peering requests are bounded separately: each endpoint retains only its
 newest 100 peering-request notifications, including pending deliveries. Older
 ones can be dropped during a flood, just as old requests leave the bounded

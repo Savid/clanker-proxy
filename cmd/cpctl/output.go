@@ -123,8 +123,11 @@ func threadSteps(t rest.ThreadSummary) []step {
 	for _, act := range stepOrder {
 		if slices.Contains(t.Actions, rest.Action(act)) && (act != thread.ActionAck || !fyiAck) && (act != thread.ActionComment || !answering) {
 			s := actionSteps[act](ref)
-			if act == thread.ActionClose && t.State == rest.ThreadStateResolved && t.Role == rest.ThreadSummaryRoleRecipient {
-				s.why = "only if the sender has agreed; ends the thread for both sides"
+			if act == thread.ActionClose && t.Role == rest.ThreadSummaryRoleRecipient {
+				s.why = "end it without a result, e.g. no longer needed; to report work, resolve"
+				if t.State == rest.ThreadStateResolved {
+					s.why = "only if the sender has agreed; ends the thread for both sides"
+				}
 			}
 			steps = append(steps, s)
 		}
@@ -215,9 +218,9 @@ func standing(t rest.ThreadSummary) string {
 	sender := t.Role == rest.ThreadSummaryRoleSender
 
 	switch {
-	case t.Kind == rest.ThreadKindFyi && t.Turn.Set && sender:
+	case t.Kind == rest.ThreadKindFyi && t.State == rest.ThreadStateOpen && sender:
 		return "fyi: nothing is needed from you; it closes when " + peer + " acks it."
-	case t.Kind == rest.ThreadKindFyi && t.Turn.Set:
+	case t.Kind == rest.ThreadKindFyi && t.State == rest.ThreadStateOpen:
 		return "fyi: no answer expected; ack it to say you have seen it, which closes it."
 	}
 

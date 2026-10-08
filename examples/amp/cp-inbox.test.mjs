@@ -103,6 +103,9 @@ test('delayed close cannot end a conversation already reopened', async (t) => {
 test('terminal notification checks the current thread and leaves the agent a race-safe instruction', async (t) => {
 	const f = await fixture(t)
 	for (const state of ['closed', 'declined', 'withdrawn']) {
+		await f.respond({ state: 'acked' })
+		await f.deliver(f.event('thread.reopen', 'acked', true))
+		assert.equal((await f.readState()).conversations[subject].ended, 0)
 		await f.respond({ state })
 		await f.deliver(f.event('thread.close', 'closed'))
 		assert.ok((await f.readState()).conversations[subject].ended > 0)
@@ -110,8 +113,9 @@ test('terminal notification checks the current thread and leaves the agent a rac
 		assert.match(f.messages.at(-1), /Stop work only if it is still closed, declined or withdrawn/)
 	}
 	await f.respond({ state: 'acked', log: [{ body: 'a'.repeat(2 * 1024 * 1024) }] })
+	await f.deliver(f.event('thread.reopen', 'acked', true))
 	await f.deliver(f.event('thread.close', 'closed'))
-	assert.equal(f.messages.length, 3)
+	assert.equal(f.messages.length, 7)
 	assert.equal((await f.readState()).conversations[subject].ended, 0)
 })
 

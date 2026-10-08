@@ -114,10 +114,6 @@ type Receipt struct {
 	Duplicate bool
 }
 
-// MaxOpenThreadsFromPeer bounds the threads one peer may have open here at
-// once, so one peer cannot bury the owner's inbox and notifications.
-const MaxOpenThreadsFromPeer = 200
-
 // Receive stores an event peer delivered. e's From and To are ignored: the
 // peer sent it, to the owner.
 func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Receipt, error) {
@@ -199,9 +195,6 @@ func (b *Inbox) Open(ctx context.Context, n NewThread) (View, error) {
 func (b *Inbox) Act(ctx context.Context, ref string, scope []string, action thread.Action, body string) (View, error) {
 	if action == thread.ActionOpen {
 		return View{}, errorf(KindInvalid, "open a thread by opening it, not as an action")
-	}
-	if action == thread.ActionReopen && strings.TrimSpace(body) == "" {
-		return View{}, errorf(KindInvalid, "reopen requires a reason")
 	}
 
 	id, err := b.resolve(ctx, ref, scope)
@@ -340,12 +333,7 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 			e.Clock = 1
 		}
 
-		t, openErr := opened(*e, len(stored) > 0)
-		if openErr != nil {
-			return thread.Thread{}, openErr
-		}
-
-		return t, b.checkActiveLimit(ctx, thread.Thread{}, t, own)
+		return opened(*e, len(stored) > 0)
 	}
 
 	if len(stored) == 0 {
@@ -377,37 +365,21 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 	if own {
 		e.Clock = t.NextClock()
 
-		if err = t.Check(*e); err != nil {
+		if err = t.Check(*e); errors.Is(err, thread.ErrNoReason) {
+			return thread.Thread{}, errorf(KindInvalid, "%v", err)
+		} else if err != nil {
 			return thread.Thread{}, errorf(KindConflict, "%v; you can now %s", err, actionList(t.Allowed(e.From)))
 		}
 	} else if err = t.CheckClock(*e); err != nil {
 		return thread.Thread{}, errorf(KindUnprocessable, "%v", err)
 	}
 
-	next, err := thread.Replay(append(events, *e))
+	t, err = thread.Replay(append(events, *e))
 	if err != nil {
 		return thread.Thread{}, fmt.Errorf("replay thread %s: %w", e.Thread, err)
 	}
 
-	return next, b.checkActiveLimit(ctx, t, next, own)
-}
-
-func (b *Inbox) checkActiveLimit(ctx context.Context, before, after thread.Thread, own bool) error {
-	if after.Sender == b.self || after.Turn() == "" || before.Turn() != "" {
-		return nil
-	}
-
-	n, err := b.store.OpenThreadsFrom(ctx, after.Sender)
-	if err != nil || n < MaxOpenThreadsFromPeer {
-		return err
-	}
-
-	kind := KindUnprocessable
-	if own {
-		kind = KindConflict
-	}
-
-	return errorf(kind, "%s already has %d threads open here; end some first", after.Sender, n)
+	return t, nil
 }
 
 func actionList(actions []thread.Action) string {

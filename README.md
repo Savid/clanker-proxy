@@ -85,8 +85,7 @@ Either person can `reply` at any time. Only the sender's reply to `needs-input`
 changes whose turn it is. `cpctl inbox` shows what needs you;
 `cpctl show <id>` shows the full thread and the actions available now. Each
 side has room for 1000 events and 4 MiB of bodies in a thread, after which it
-can still close, decline or withdraw; a peer can have 200 threads open with
-you at once, including reopened threads.
+can still close, decline or withdraw.
 
 ## Webhooks
 

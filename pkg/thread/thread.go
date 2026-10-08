@@ -77,8 +77,8 @@ type Thread struct {
 }
 
 // Applied is an event and its effect. An event that could not apply (the
-// other side's action came first, or it was not its author's to take) is
-// kept, with Ignored saying why; its body still reads as a comment.
+// other side's action came first, or the workflow refused it) is kept, with
+// Ignored saying why; its body still reads as a comment.
 type Applied struct {
 	Event
 	Ignored string
@@ -86,6 +86,9 @@ type Applied struct {
 
 // ErrNoOpen is returned by Replay when no event opens the thread.
 var ErrNoOpen = errors.New("thread has no open event")
+
+// ErrNoReason is returned by Check for a reopen whose body is blank.
+var ErrNoReason = errors.New("reopen requires a reason")
 
 // Replay orders events and folds them into a thread. The open event comes
 // first; the rest follow by clock, then ID, so two peers holding the same
@@ -221,7 +224,7 @@ func (t Thread) Check(e Event) error {
 	}
 
 	if e.Action == ActionReopen && strings.TrimSpace(e.Body) == "" {
-		return errors.New("reopen requires a reason")
+		return ErrNoReason
 	}
 
 	return nil

@@ -301,6 +301,14 @@ func TestReplayErrors(t *testing.T) {
 	if err != nil || got.Events[1].Ignored == "" {
 		t.Errorf("outsider comment: %v, ignored %q", err, got.Events[1].Ignored)
 	}
+
+	unknown := b.ev(bob, thread.ActionAck)
+	unknown.Action = "merge"
+
+	got, err = thread.Replay([]thread.Event{b.open(thread.KindRequest), unknown})
+	if err != nil || got.Events[1].Ignored == "" {
+		t.Errorf("unknown action: %v, ignored %q", err, got.Events[1].Ignored)
+	}
 }
 
 func TestCheckClock(t *testing.T) {

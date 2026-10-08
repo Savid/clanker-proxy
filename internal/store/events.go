@@ -383,16 +383,3 @@ func nonNil(s []string) []string {
 
 	return s
 }
-
-// OpenThreadsFrom counts threads peer opened that have not ended.
-func (s *Store) OpenThreadsFrom(ctx context.Context, peer string) (int, error) {
-	var n int
-
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM threads WHERE peer = ?1 AND sender = ?1
-		AND state NOT IN ('closed', 'declined', 'withdrawn')`, peer).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("count threads from %s: %w", peer, err)
-	}
-
-	return n, nil
-}
