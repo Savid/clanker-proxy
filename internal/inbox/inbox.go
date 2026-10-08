@@ -114,10 +114,6 @@ type Receipt struct {
 	Duplicate bool
 }
 
-// MaxOpenThreadsFromPeer bounds the threads one peer may have open here at
-// once, so one peer cannot bury the owner's inbox and notifications.
-const MaxOpenThreadsFromPeer = 200
-
 // Receive stores an event peer delivered. e's From and To are ignored: the
 // peer sent it, to the owner.
 func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Receipt, error) {
@@ -144,17 +140,6 @@ func (b *Inbox) Receive(ctx context.Context, peer string, e thread.Event) (Recei
 	dup, err := b.duplicate(ctx, e)
 	if err != nil || dup {
 		return Receipt{ID: e.ID, Duplicate: dup}, err
-	}
-
-	if e.Action == thread.ActionOpen {
-		n, countErr := b.store.OpenThreadsFrom(ctx, peer)
-		if countErr != nil {
-			return Receipt{}, countErr
-		}
-
-		if n >= MaxOpenThreadsFromPeer {
-			return Receipt{}, errorf(KindUnprocessable, "%s already has %d threads open here; end some first", peer, n)
-		}
 	}
 
 	t, err := b.next(ctx, &e, false)
@@ -380,7 +365,9 @@ func (b *Inbox) next(ctx context.Context, e *thread.Event, own bool) (thread.Thr
 	if own {
 		e.Clock = t.NextClock()
 
-		if err = t.Check(*e); err != nil {
+		if err = t.Check(*e); errors.Is(err, thread.ErrNoReason) {
+			return thread.Thread{}, errorf(KindInvalid, "%v", err)
+		} else if err != nil {
 			return thread.Thread{}, errorf(KindConflict, "%v; you can now %s", err, actionList(t.Allowed(e.From)))
 		}
 	} else if err = t.CheckClock(*e); err != nil {

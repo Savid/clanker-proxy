@@ -190,11 +190,11 @@ func actionCommands() []*command {
 			`cpctl decline 765a0b0c -m "out of scope"`,
 		},
 		{
-			thread.ActionClose, "<ref> [-m <note>]", "sender: accept the resolution; ends the thread",
+			thread.ActionClose, "<ref> [-m <note>]", "either side: end an open, acked, needs-input or resolved thread",
 			`cpctl close 765a0b0c -m "thanks, merged"`,
 		},
 		{
-			thread.ActionReopen, "<ref> -m <why>", "sender: not done after all; back to the recipient",
+			thread.ActionReopen, "<ref> -m <why>", "either side: reopen a resolved or closed thread; back to the recipient",
 			`cpctl reopen 765a0b0c -m "still failing"`,
 		},
 		{
@@ -698,7 +698,7 @@ func actionFlags(action thread.Action) func(fs *flag.FlagSet) func(*app, []strin
 				return err
 			}
 
-			if text == "" && needsBody(action) {
+			if strings.TrimSpace(text) == "" && needsBody(action) {
 				return usageError(`%s needs a body: -m "<text>", or -m - to read stdin`, actionCommand(action))
 			}
 

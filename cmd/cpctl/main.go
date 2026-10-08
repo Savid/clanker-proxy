@@ -55,10 +55,12 @@ Common tasks:
 Commands:
 %s
 Threads:
-  kind      request: the recipient resolves it, the sender closes it.
+  kind      request: the recipient resolves it with a result; either side closes it.
             fyi: no answer expected; the recipient's ack closes it.
   states    open, acked, needs-input, resolved: in progress.
-            closed, declined, withdrawn: ended (a closed one can be reopened).
+            closed, declined, withdrawn: ended.
+  closing   either side can close a thread in progress, or reopen a resolved
+            or closed one with a reason; work returns to the recipient.
   answering resolve when done, with the result in the body; needs-input to ask
             the sender something; decline to refuse; reply for anything else.
             ack is optional on a request (it says you are on it); on an fyi it
@@ -91,7 +93,7 @@ Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 4 not found, 5 not allowed now, conflicts, or an agent token refused,
 6 bad token, 7 cpd unreachable.
 
-Environment: CP_URL (default http://127.0.0.1:8080); CP_TOKEN, the owner token
+Environment: CP_URL (default http://127.0.0.1:18471); CP_TOKEN, the owner token
 or an agent token (default: the owner.token in CP_DIR, else ~/.cp). CP_NO_UPDATE_CHECK=1 disables daily
 release notices. Notices go to stderr; -json and CI skip automatic checks.
 Updates replace local cpd and cpctl together; restart cpd to use the new version.

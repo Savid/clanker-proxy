@@ -14,6 +14,7 @@ make generate    # regenerate api/rest from api/openapi.yaml (ogen)
 make check       # CI: lint, generate-check, test, govulncheck, tidy-check
 make fmt         # gofumpt + goimports
 make build       # build/bin/cpd, build/bin/cpctl
+make test-amp    # node tests for examples/amp; run when changing it
 ```
 
 ## Trying it by hand

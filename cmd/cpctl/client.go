@@ -73,7 +73,7 @@ func defaultURL() string {
 		return v
 	}
 
-	return "http://127.0.0.1:8080"
+	return "http://127.0.0.1:18471"
 }
 
 // requestTimeout bounds every call but the stream.

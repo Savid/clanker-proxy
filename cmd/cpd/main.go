@@ -81,7 +81,7 @@ func parse(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.name, "name", "", "your name, offered to peers (default: your login name); remembered")
 	fs.StringVar(&o.url, "url", "", "where peers reach this daemon, e.g. https://cp.example.com; remembered")
 	fs.StringVar(&o.dir, "dir", defaultDir(), "data directory: database and owner token (env CP_DIR)")
-	fs.StringVar(&o.listen, "listen", "127.0.0.1:8080", "listen address; put TLS in front of it")
+	fs.StringVar(&o.listen, "listen", "127.0.0.1:18471", "listen address; put TLS in front of it")
 	fs.StringVar(&o.logFormat, "log-format", "text", "log format: text or json")
 	fs.TextVar(&o.logLevel, "log-level", o.logLevel, "log level: DEBUG, INFO, WARN or ERROR")
 	fs.BoolVar(&o.version, "version", false, "print the version and exit")

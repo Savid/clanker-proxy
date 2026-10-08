@@ -1,12 +1,12 @@
 .DEFAULT_GOAL := help
-.PHONY: help build image run check lint lint-go lint-api lint-install generate generate-check vuln tidy-check fmt test test-install release-check clean
+.PHONY: help build image run check lint lint-go lint-api lint-install generate generate-check vuln tidy-check fmt test test-install test-amp release-check clean
 
 BIN_DIR ?= build/bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # GOWORK=off: never pick up a go.work from a parent directory.
 GO := GOWORK=off go
 GO_BUILD := GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)"
-LISTEN ?= 127.0.0.1:8080
+LISTEN ?= 127.0.0.1:18471
 # The spec linter, run with go run so CI needs only Go.
 VACUUM := github.com/daveshanley/vacuum@v0.30.6
 
@@ -23,7 +23,7 @@ build:
 image:
 	docker build -t clanker-proxy:local --build-arg VERSION=$(VERSION) .
 
-## run: build and start cpd on LISTEN (default 127.0.0.1:8080)
+## run: build and start cpd on LISTEN (default 127.0.0.1:18471)
 run: build
 	$(BIN_DIR)/cpd -listen $(LISTEN)
 
@@ -71,6 +71,10 @@ test: test-install
 ## test-install: exercise the installer without network access
 test-install:
 	sh scripts/install_test.sh
+
+## test-amp: run Amp plugin regression tests (requires Node.js 24)
+test-amp:
+	node --test examples/amp/cp-inbox.test.mjs
 
 ## release-check: build release archives locally without publishing (requires GoReleaser)
 release-check:

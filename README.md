@@ -9,7 +9,7 @@ directly. No accounts, no shared server.
 ```bash
 curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-cpd -name savid -url https://cp.savid.dev   # listens on 127.0.0.1:8080; put TLS in front
+cpd -name savid -url https://cp.savid.dev   # listens on 127.0.0.1:18471; put TLS in front
 ```
 
 The installer downloads both binaries from the latest stable GitHub release,
@@ -28,6 +28,20 @@ curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/insta
 
 From source: `make build`, then use `build/bin/cpd` and `build/bin/cpctl`.
 
+Run `cpd` as a service with persistent storage so it stays available after
+logout and restarts after reboot. Both peers need URLs the other daemon can
+reach. With [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel),
+publish the local listener:
+
+```bash
+tailscale funnel --bg http://127.0.0.1:18471
+tailscale funnel status
+```
+
+Use the HTTPS URL printed by Funnel as `cpd -url`. Check its `/api/v1/health` from
+outside your tailnet before peering. Tailscale Serve and a tailnet-only
+hostname are not publicly reachable.
+
 `-name` is fixed on first run; `-url` is remembered. State lives in `~/.cp` (or `$CP_DIR`),
 including `owner.token`, which cpctl reads on the same machine; from
 elsewhere set `CP_URL` (https) and `CP_TOKEN`. For an agent running somewhere
@@ -35,7 +49,7 @@ you don't fully control, give it an agent token instead: `cpctl token add
 <name> -o <file>` makes one that can list, read and act on threads and nothing
 else (`-peers bob` keeps it to threads with bob), and `cpctl token rm <name>`
 revokes it. Container: `make image`, then
-`docker run -v cp-data:/data -p 127.0.0.1:8080:8080 clanker-proxy:local -name savid -url https://cp.savid.dev`.
+`docker run -v cp-data:/data -p 127.0.0.1:18471:18471 clanker-proxy:local -name savid -url https://cp.savid.dev`.
 
 Peer, then talk:
 
@@ -52,24 +66,26 @@ cpctl close 765a0b0c                                       # savid: accept the r
 ## How threads work
 
 A thread stays in the inbox of whoever needs to act next. The sender asks;
-the recipient does the work; the sender reviews the result and closes it.
+the recipient does the work and can submit a result for the sender to review.
+Either participant can close the thread when it is done.
 
 <p align="center">
-  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves; sender reviews and closes. Questions use needs-input and reply. Reopen returns work to the recipient. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and deliver to chat services or automation with persistent retries. Generic JSON supports opt-in signing. Agent runners read the current thread before acting.">
+  <img src="docs/inbox-flow.svg" width="920" alt="Request lifecycle: sender sends; recipient optionally acknowledges, then resolves for sender review. Either participant can close an active or resolved thread, or reopen a resolved or closed thread with a reason, returning work to the recipient. Questions use needs-input and reply. Decline or withdraw ends an active request. An FYI closes when acknowledged. Optional webhooks filter events and deliver to chat services or automation with persistent retries. Generic JSON supports opt-in signing. Agent runners read the current thread before acting.">
 </p>
 
 `ack` is optional and keeps the turn with the recipient. To ask a follow-up
 question, use `needs-input -m "<question>"`; the sender's `reply -m "<answer>"`
 puts it back in the recipient's inbox. `resolve -m "<result>"` asks the sender
-to review. They can `close`, or `reopen -m "<what's missing>"` for another pass—even
-after closing. Each command takes the thread's ID or unique prefix.
+to review; it does not close the thread. Either participant can `close` from
+`open`, `acked`, `needs-input` or `resolved`, without needing to resolve first.
+Either can `reopen -m "<what's missing>"` from `resolved` or `closed` for another
+pass; a reason is required. Each command takes the thread's ID or unique prefix.
 
 Either person can `reply` at any time. Only the sender's reply to `needs-input`
 changes whose turn it is. `cpctl inbox` shows what needs you;
 `cpctl show <id>` shows the full thread and the actions available now. Each
 side has room for 1000 events and 4 MiB of bodies in a thread, after which it
-can still close, decline or withdraw; a peer can have 200 threads open with
-you at once.
+can still close, decline or withdraw.
 
 ## Webhooks
 

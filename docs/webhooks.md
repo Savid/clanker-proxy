@@ -144,8 +144,8 @@ Each endpoint subscribes to `*` (all current and future types) or a fixed list:
 | `thread.needs-input` | The recipient asked a question |
 | `thread.resolve` | The recipient submitted a result |
 | `thread.decline` | The recipient declined |
-| `thread.close` | The sender closed the thread |
-| `thread.reopen` | The sender reopened it |
+| `thread.close` | Either participant closed the thread |
+| `thread.reopen` | Either participant reopened it with a reason |
 | `thread.withdraw` | The sender withdrew it |
 | `peering.requested` | A new incoming peering request was stored |
 

@@ -15,7 +15,8 @@ func (s *ProblemStatusCode) Error() string {
 }
 
 // What an event does. The recipient acks, asks (`needs-input`), resolves and declines; the sender
-// closes, reopens and withdraws; either comments.
+// withdraws. Either participant comments, closes an open, acked, needs-input or resolved thread, or
+// reopens a resolved or closed thread with a reason.
 // Ref: #/components/schemas/Action
 type Action string
 
@@ -2211,8 +2212,9 @@ type Thread struct {
 	Sender    Name       `json:"sender"`
 	Recipient Name       `json:"recipient"`
 	Peer      Name       `json:"peer"`
-	// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
-	// asked and ack, ask, resolve or decline it.
+	// The owner's part. `sender`: they opened it and can withdraw it. `recipient`: they were asked and can
+	// ack, ask, resolve or decline it. Either participant can comment, close or reopen when the thread's
+	// state allows it.
 	Role  ThreadRole  `json:"role"`
 	State ThreadState `json:"state"`
 	Turn  OptName     `json:"turn"`
@@ -2592,8 +2594,9 @@ func (s *ThreadList) SetThreads(val []ThreadSummary) {
 	s.Threads = val
 }
 
-// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
-// asked and ack, ask, resolve or decline it.
+// The owner's part. `sender`: they opened it and can withdraw it. `recipient`: they were asked and can
+// ack, ask, resolve or decline it. Either participant can comment, close or reopen when the thread's
+// state allows it.
 type ThreadRole string
 
 const (
@@ -2635,8 +2638,8 @@ func (s *ThreadRole) UnmarshalText(data []byte) error {
 	}
 }
 
-// Where a thread is in its workflow. `closed`, `declined` and `withdrawn` end it; a closed thread can
-// be reopened.
+// Where a thread is in its workflow. `closed`, `declined` and `withdrawn` end it; either participant
+// can reopen a closed thread.
 // Ref: #/components/schemas/ThreadState
 type ThreadState string
 
@@ -2724,8 +2727,9 @@ type ThreadSummary struct {
 	Sender    Name       `json:"sender"`
 	Recipient Name       `json:"recipient"`
 	Peer      Name       `json:"peer"`
-	// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
-	// asked and ack, ask, resolve or decline it.
+	// The owner's part. `sender`: they opened it and can withdraw it. `recipient`: they were asked and can
+	// ack, ask, resolve or decline it. Either participant can comment, close or reopen when the thread's
+	// state allows it.
 	Role  ThreadSummaryRole `json:"role"`
 	State ThreadState       `json:"state"`
 	Turn  OptName           `json:"turn"`
@@ -2923,8 +2927,9 @@ func (s *ThreadSummary) SetFailed(val Count) {
 	s.Failed = val
 }
 
-// The owner's part. `sender`: they opened it and close, reopen or withdraw it. `recipient`: they were
-// asked and ack, ask, resolve or decline it.
+// The owner's part. `sender`: they opened it and can withdraw it. `recipient`: they were asked and can
+// ack, ask, resolve or decline it. Either participant can comment, close or reopen when the thread's
+// state allows it.
 type ThreadSummaryRole string
 
 const (

@@ -22,7 +22,7 @@ COPY --from=go /out/cpd /out/cpctl /usr/local/bin/
 # A new volume copies this directory's owner, so nonroot can write to it.
 COPY --from=go --chown=65532:65532 /out/data /data
 VOLUME /data
-EXPOSE 8080
+EXPOSE 18471
 ENV CP_DIR=/data
 ENV CP_NO_UPDATE_CHECK=1
-ENTRYPOINT ["/usr/local/bin/cpd", "-listen", "0.0.0.0:8080"]
+ENTRYPOINT ["/usr/local/bin/cpd", "-listen", "0.0.0.0:18471"]

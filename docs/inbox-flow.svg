@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1450" viewBox="0 0 1000 1450" role="img" aria-labelledby="title description">
   <title id="title">The clanker-proxy inbox lifecycle and webhooks</title>
-  <desc id="description">A sender opens a request with send. The recipient may ack, then resolve when done. The sender reviews and closes it. For questions, the recipient uses needs-input and the sender replies, returning the turn to the recipient. The sender can reopen resolved or closed requests. Before resolution, the recipient can decline or the sender can withdraw. An FYI closes when the recipient acknowledges it. Either participant can reply at any time. Optional webhooks filter thread events and incoming peering requests, then deliver to chat services or automation with persistent retries. Choose generic JSON, Discord, Slack, Teams Workflows, Google Chat, Mattermost, Rocket.Chat, ntfy, Gotify, or Apprise. Generic signing is opt-in; providers use their URL or authentication headers. Agent runners read the current thread with cpctl show before acting; a webhook alone does not launch an agent.</desc>
+  <desc id="description">A sender opens a request with send. The recipient may ack, then resolve to submit a result for sender review. Either participant can close an open, acked, needs-input or resolved thread; resolution is optional. For questions, the recipient uses needs-input and the sender replies, returning the turn to the recipient. Either participant can reopen resolved or closed requests with a reason. Before resolution, the recipient can decline or the sender can withdraw. An FYI closes when the recipient acknowledges it. Either participant can reply at any time. Optional webhooks filter thread events and incoming peering requests, then deliver to chat services or automation with persistent retries. Choose generic JSON, Discord, Slack, Teams Workflows, Google Chat, Mattermost, Rocket.Chat, ntfy, Gotify, or Apprise. Generic signing is opt-in; providers use their URL or authentication headers. Agent runners read the current thread with cpctl show before acting; a webhook alone does not launch an agent.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -66,12 +66,14 @@
 
   <g transform="translate(774 164)">
     <rect width="178" height="190" rx="16" fill="#f0fdf4" stroke="#bbf7d0"/>
-    <text class="role done" x="20" y="31">SENDER CLOSES</text>
+    <text class="role done" x="20" y="31">EITHER CLOSES</text>
     <text class="card-title" x="20" y="66">4. Done</text>
     <text class="body muted" x="20" y="100">No one's turn.</text>
     <text class="body muted" x="20" y="124">Thread is closed.</text>
     <text class="small done" x="20" y="164">History stays.</text>
   </g>
+
+  <text class="small muted" x="48" y="374">Either participant can also close before resolution: open, acked or needs-input.</text>
 
   <rect x="48" y="382" width="904" height="216" rx="16" fill="#faf9ff" stroke="#e9e5f5"/>
   <text class="label" x="72" y="421">Need more detail?</text>
@@ -98,9 +100,10 @@
 
   <rect x="48" y="620" width="904" height="96" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
   <text class="label" x="72" y="654">Need another pass?</text>
-  <text class="body muted" x="72" y="684">Sender can reopen after resolve or close.</text>
-  <rect x="548" y="644" width="118" height="48" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
-  <text class="code sender" x="607" y="674" text-anchor="middle">reopen</text>
+  <text class="small muted" x="72" y="678">Either participant can reopen after resolve or close.</text>
+  <text class="small muted" x="72" y="701">A reason is required.</text>
+  <rect x="548" y="644" width="118" height="48" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text class="code muted" x="607" y="674" text-anchor="middle">reopen</text>
   <path class="edge" d="M 682 668 H 740"/>
   <rect x="758" y="644" width="170" height="48" rx="10" fill="#f5f3ff" stroke="#ddd6fe"/>
   <text class="small recipient" x="843" y="674" text-anchor="middle" font-weight="700">Recipient's inbox</text>

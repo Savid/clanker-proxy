@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,10 +109,12 @@ func (p *person) json(t *testing.T, v any, args ...string) {
 
 // threadJSON is enough of a thread to check.
 type threadJSON struct {
-	ID     string `json:"id"`
-	State  string `json:"state"`
-	MyTurn bool   `json:"myTurn"`
-	Log    []struct {
+	ID      string   `json:"id"`
+	State   string   `json:"state"`
+	Role    string   `json:"role"`
+	Actions []string `json:"actions"`
+	MyTurn  bool     `json:"myTurn"`
+	Log     []struct {
 		Action   string `json:"action"`
 		From     string `json:"from"`
 		Body     string `json:"body"`
@@ -234,6 +238,99 @@ func TestPeersWorkAThread(t *testing.T) {
 	converge(t, alice, bob, ref, "closed", 6)
 }
 
+func TestEitherParticipantClosesAndReopens(t *testing.T) {
+	t.Parallel()
+
+	alice, bob := newPerson(t, "alice"), newPerson(t, "bob")
+	peer(t, alice, bob)
+
+	file := filepath.Join(t.TempDir(), "inbox.token")
+	bob.cp(t, "token", "add", "inbox", "-o", file)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &person{name: "bob's inbox", url: bob.url, token: strings.TrimSpace(string(data))}
+
+	var sent threadJSON
+	alice.json(t, &sent, "send", "bob", "Amp smoke test")
+	bob.waitTurn(t, "")
+	if out := agent.cp(t, "show", sent.ID); !strings.Contains(out, "end it without a result") {
+		t.Fatalf("recipient's open guidance = %s", out)
+	}
+	agent.cp(t, "resolve", sent.ID, "-m", "pong")
+	converge(t, alice, bob, sent.ID, "resolved", 2)
+
+	if got := agent.thread(t, sent.ID); got.Role != "recipient" || !slices.Contains(got.Actions, "close") || !slices.Contains(got.Actions, "reopen") {
+		t.Fatalf("recipient's resolved actions = %+v", got)
+	}
+	if out := agent.cp(t, "show", sent.ID); !strings.Contains(out, "Awaiting alice's review") ||
+		!strings.Contains(out, "cpctl close ") || !strings.Contains(out, "only if the sender has agreed") {
+		t.Fatalf("recipient's resolved guidance = %s", out)
+	}
+	if out := alice.cp(t, "show", sent.ID); !strings.Contains(out, "cpctl close ") ||
+		!strings.Contains(out, "done here; ends the thread for both sides") || strings.Contains(out, "only if the sender has agreed") {
+		t.Fatalf("sender's resolved guidance = %s", out)
+	}
+
+	agent.cp(t, "close", sent.ID)
+	converge(t, alice, bob, sent.ID, "closed", 3)
+	for _, p := range []*person{alice, agent} {
+		if got := p.thread(t, sent.ID); strings.Join(got.Actions, ",") != "comment,reopen" || got.MyTurn {
+			t.Fatalf("%s's closed actions = %+v", p.name, got)
+		}
+		if _, err = p.try(t, "reopen", sent.ID); exitOf(err) != exitUsage {
+			t.Fatalf("%s reopened without a reason: %v", p.name, err)
+		}
+	}
+
+	reason := "  Need to check the response\n"
+	agent.cp(t, "reopen", sent.ID, "-m", reason)
+	converge(t, alice, bob, sent.ID, "acked", 4)
+	if got := agent.thread(t, sent.ID).Log[3].Body; got != reason {
+		t.Fatalf("reopen body = %q, want %q", got, reason)
+	}
+	if !agent.thread(t, sent.ID).MyTurn || alice.thread(t, sent.ID).MyTurn {
+		t.Fatal("recipient reopening did not return work to the recipient")
+	}
+	agent.cp(t, "resolve", sent.ID, "-m", "Checked")
+	converge(t, alice, bob, sent.ID, "resolved", 5)
+	agent.cp(t, "reopen", sent.ID, "-m", "One more check")
+	converge(t, alice, bob, sent.ID, "acked", 6)
+	alice.cp(t, "close", sent.ID)
+	converge(t, alice, bob, sent.ID, "closed", 7)
+
+	alice.json(t, &sent, "send", "bob", "Already handled")
+	bob.waitTurn(t, "")
+	alice.cp(t, "close", sent.ID)
+	converge(t, alice, bob, sent.ID, "closed", 2)
+}
+
+func TestRequiredActionBodyRejectsWhitespace(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"reply", "needs-input", "resolve", "reopen"} {
+		for _, source := range []string{"flag", "stdin"} {
+			t.Run(command+"/"+source, func(t *testing.T) {
+				t.Parallel()
+
+				body := " \t\r\n\u2003"
+				input := ""
+				if source == "stdin" {
+					input, body = body, "-"
+				}
+				var stdout, stderr bytes.Buffer
+				args := []string{"-url", "http://127.0.0.1:1", "-token", "unused", command, "12345678", "-m", body}
+				err := run(t.Context(), args, strings.NewReader(input), &stdout, &stderr)
+				if exitOf(err) != exitUsage || !strings.Contains(stderr.String(), command+" needs a body") ||
+					!strings.Contains(stderr.String(), "hint: cpctl help "+command) {
+					t.Fatalf("whitespace body: %v\n%s", err, stderr.String())
+				}
+			})
+		}
+	}
+}
+
 // converge waits until both hold the thread in state with n events, and
 // checks they hold the same events, each named from its own side.
 func converge(t *testing.T, p, q *person, ref, state string, n int) {
@@ -321,7 +418,7 @@ func TestRefusals(t *testing.T) {
 	alice.json(t, &sent, "send", "bob", "Do the thing")
 
 	out, err := alice.try(t, "resolve", sent.ID, "-m", "done")
-	if exitOf(err) != exitRefused || !strings.Contains(out, "you can now comment, withdraw") || !strings.Contains(out, "hint: cpctl show") {
+	if exitOf(err) != exitRefused || !strings.Contains(out, "you can now comment, close, withdraw") || !strings.Contains(out, "hint: cpctl show") {
 		t.Fatalf("sender resolve = %v\n%s", err, out)
 	}
 
@@ -432,7 +529,7 @@ func TestAgentOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if sum.Role != "sender" || strings.Join(sum.Actions, ",") != "comment,withdraw" || sum.Log != nil {
+	if sum.Role != "sender" || strings.Join(sum.Actions, ",") != "comment,close,withdraw" || sum.Log != nil {
 		t.Errorf("send -json = %+v", sum)
 	}
 

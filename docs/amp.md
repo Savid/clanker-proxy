@@ -22,6 +22,10 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
   the same conversation. This includes threads you sent: when the peer answers,
   the agent checks the answer against your request and closes or reopens it,
   or asks you.
+- Either participant can close an open, acknowledged, needs-input or resolved
+  thread when it is done, or reopen a resolved or closed thread with a reason.
+  The recipient can still resolve to submit a result for sender review; the
+  agent should not automatically close a thread just because it resolved it.
 - Webhook notifications carry only metadata. What a peer wrote reaches an
   agent only through `cpctl show`, which marks every body line with `│` and
   quotes titles and delivery errors, and agents are told to weigh it as a
@@ -32,6 +36,8 @@ peer ─▶ your cpd ─▶ signed webhook ─▶ Amp ─▶ inbox thread (cp-in
 - **A reachable cpd.** cpd runs outside the orb, always on, with a public
   HTTPS `-url`. Peers deliver to it while the orb sleeps; a webhook wakes the
   orb, and its agents call back to cpd.
+- **Matching releases.** Use the same release for the daemon, `cpctl` and
+  plugin, and read this guide from that release's Git tag.
 - **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can
   clone your repositories.
 - **An agent token, not your owner token.** The orb's `CP_TOKEN` is readable
@@ -65,12 +71,12 @@ them.
 Follow [Setup](#setup) once per project, with that project's names, a key of
 its own, and `-peers` on both the token and the webhook. Then:
 
-- **Scope every inbox.** An inbox without `-peers` still reaches every
-  peer's threads, the separated ones included, and its conversations would
-  work them too.
-- **Keep `CP_TOKEN` out of Settings → Secrets & Env Vars**, which applies to
-  every orb; with one there as well as in the project, which one an orb sees
-  is not documented.
+- **Scope every inbox when separating peers.** An inbox without `-peers`
+  still reaches every peer's threads, the separated ones included, and its
+  conversations would work them too.
+- **Keep `CP_TOKEN` in project settings.** Personal values override project
+  values, which override workspace values. A personal token would override
+  each inbox's scoped token. See [Amp's secret settings](https://ampcode.com/docs/orbs/handling-secrets).
 - **Keep one webhook without peers** for peering requests, such as a chat
   notification: a webhook with peers never receives them, since a requester
   picks the name it asks under.
@@ -90,6 +96,11 @@ conversations run in the inbox's orb, and its checkout is the default for code
 work. Each conversation works in its own git worktree under `~/cp-work`, so
 conversations never edit the same checkout. For another repository, an agent
 clones it into `~/cp-work/repos` first, which needs GitHub access to it.
+Alternatively, create a blank Amp-hosted project just for the inbox and keep
+its plugin and setup script there. Either project type can work across repositories.
+For a single inbox shared by all peers, omit `-peers` on its token and webhook
+to handle all current and future peers. For separate inboxes, scope each as
+described above.
 
 ## Setup
 
@@ -102,23 +113,24 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
    (umask 077; openssl rand -base64 32 > hook.key)
    ```
 
-2. **Secrets.** In the Amp project's settings, add `CP_URL` (cpd's public
-   URL), `CP_TOKEN` (the contents of `amp.token`) and `CP_WEBHOOK_SECRET`
-   (the contents of `hook.key`). Prefer the project over Settings → Secrets &
-   Env Vars, which would give the token to every orb you start. A running orb
-   picks up secrets after `amp orb restart-processes`. Then delete
-   `amp.token`.
+2. **Project settings.** Add `CP_URL` (cpd's public URL) as an environment
+   variable, and `CP_TOKEN` (the contents of `amp.token`) and
+   `CP_WEBHOOK_SECRET` (the contents of `hook.key`) as secrets. A running orb
+   picks up changes after `amp orb restart-processes`. Then delete `amp.token`.
 
 3. **Start the inbox thread** in an orb (executor **New Orb**) in that
    project. Whichever thread loads the plugin first owns the webhook for good,
    so do this in the thread meant to be the inbox. Have it:
 
-   - install `cpctl` (the README's install command) and make sure it is on
+   - install `cpctl` with the pinned setup script below and make sure it is on
      `PATH` for both its shell and plugins; otherwise set `CP_INBOX_CPCTL` to
      its full path;
    - add `examples/amp/cp-inbox.ts` as `.amp/plugins/cp-inbox.ts` at the
      workspace root (the repository root in a project) and load it, or run
      `plugins: reload` from the command palette.
+
+   Once this thread has registered the webhook, [commit and push the project
+   setup](#persist-the-project-setup) so future orbs get the plugin and tools.
 
 4. **Point cpd at it.** In that thread, run **cp-inbox: Show webhook URL**
    from the command palette. The URL appears in a secret dialog, which no
@@ -138,10 +150,6 @@ clones it into `~/cp-work/repos` first, which needs GitHub access to it.
    URL return 404. Remove any workspace or personal guidance that tells Amp to
    archive threads when work finishes.
 
-Committing the plugin to the project's repository loads it in every thread of
-the project. That is safe: only the inbox owns the webhook, guardrails apply
-to conversations, and the other threads only gain the `cp_ask_owner` tool.
-
 If the wrong thread became the inbox, delete the `cp-inbox` trigger in
 Settings → Triggers, reload the plugin in the right thread, and repeat step 4
 with `cpctl webhook set amp -url-file amp.url`.
@@ -151,6 +159,69 @@ plugin. The plugin keeps which conversation handles which thread in
 it cannot read that file, it starts nothing and refuses every command in
 `clanker-proxy` conversations, since the guard depends on it; repair or remove
 the file and reload the plugin.
+
+## Persist the project setup
+
+The plugin and manually installed `cpctl` remain available when this inbox's
+orb sleeps and wakes. Committing the setup prepares future orbs too; it is
+not required just to keep the current inbox running.
+
+Commit and push `.amp/plugins/cp-inbox.ts` and an executable `.agents/setup`
+to the inbox project's repository, including a blank Amp-hosted project.
+Install `cpctl` from the setup script; keep downloaded binaries, credentials,
+webhook URLs and `cp-inbox/state.json` out of Git. Project secrets stay in
+Amp's settings.
+
+Create `.agents/setup` with the following content, or merge the installation
+into the project's existing script. Replace `vX.Y.Z` with the exact release
+running on your daemon, and copy `examples/amp/cp-inbox.ts` from that same Git
+tag. Commit the chosen version in the script so setup installs that release:
+
+```sh
+#!/bin/sh
+set -eu
+
+cp_version=vX.Y.Z
+cp_bin_dir="$HOME/.local/bin"
+if [ "$("$cp_bin_dir/cpctl" -version 2>/dev/null || true)" != "$cp_version" ]; then
+    cp_installer=$(mktemp)
+    trap 'rm -f "$cp_installer"' EXIT
+    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$cp_version/install.sh" \
+        -o "$cp_installer"
+    CP_VERSION="$cp_version" CP_INSTALL_DIR="$cp_bin_dir" sh "$cp_installer"
+fi
+"$cp_bin_dir/cpctl" -version
+```
+
+The installer verifies the release archive's checksum and installs both
+`cpctl` and `cpd` outside the checkout. Only `cpctl` is used in the orb; the
+daemon stays on your server. Exporting `PATH` in a setup subprocess does not
+change the plugin host's environment, so check the host's `PATH` as well as
+the terminal's, or set `CP_INBOX_CPCTL` to the installed binary's absolute path.
+
+After loading the plugin in the intended inbox thread, run from the project
+root:
+
+```bash
+chmod +x .agents/setup
+./.agents/setup
+git add .agents/setup .amp/plugins/cp-inbox.ts
+git commit -m "Set up Clanker inbox plugin and tools"
+git push
+```
+
+[Amp snapshots the setup result](https://ampcode.com/docs/orbs/customizing)
+for future orbs. An existing orb needs the script run manually, as above;
+delete the project's cached snapshot in its Orb settings if new orbs still
+use an older setup. No resume hook is needed just to reinstall `cpctl` on
+every wake. When updating, change the version pin and plugin together, run
+setup, reload the plugin, and commit and push both changes.
+
+The committed plugin loads in every thread of the project. For the same Amp
+user, project, plugin and webhook key, later threads reuse the registration;
+the original inbox still owns it. Committing does not transfer ownership or
+make a replacement inbox. Keep that thread unarchived. See
+[Amp's webhook ownership rules](https://ampcode.com/docs/orbs/event-driven).
 
 ## Checking it works
 
@@ -202,13 +273,14 @@ straight away. Beyond that:
 - a conversation wakes at most 30 times a day, one peer's conversations 60
   times, and all conversations together 200 times;
 - a peer starts at most 10 new conversations a day;
-- when a peer ends a thread (close, decline, withdraw), a working conversation
-  is told to stop; ended conversations are forgotten after 30 days.
+- when a peer ends a thread (close, decline, withdraw), the plugin rereads the
+  thread with `cpctl show` and drops the notice if it was reopened since; a
+  working conversation is told to recheck and stop if it is still ended.
+  Ended conversations are forgotten after 30 days.
 
 cpd bounds what a peer can do on its side: each side has room for 1000 events
 and 4 MiB of bodies in a thread, after which only close, decline or withdraw
-without a body remain, a peer may have at most 200 threads open at once, and
-a move that changes nothing sends no notification.
+without a body remain, and a move that changes nothing sends no notification.
 
 A held notification labels the conversation `cp-held` and notifies you at
 most once a day per peer. Each time an event arrives, at most every 10 minutes,
@@ -230,3 +302,6 @@ because Amp may hold an event while the orb wakes.
 
 Processes started in an orb, such as a test cpd, stop when the orb pauses.
 The plugin does not: Amp loads it again when the next event wakes the orb.
+
+Run the plugin's regression tests with `make test-amp` from the repository
+root. Node.js is pinned in `.tool-versions`; CI runs the same target.
