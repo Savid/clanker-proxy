@@ -66,7 +66,9 @@ token_file=$work/home/.config/clanker-proxy/cp-test.token
 sh "$script" --help | grep -q 'usage: cloudflare.sh' || fail "--help"
 run --bogus && fail "an unknown option was accepted"
 grep -q 'unknown option --bogus' "$work/out" || fail "unknown option message"
-FAKE_LOGGED_OUT=1 run --name tester && fail "ran without a Cloudflare login"
+# Subshells keep these settings to one run: bash, macOS's sh, keeps an
+# assignment made before a function call after the call returns.
+(export FAKE_LOGGED_OUT=1; run --name tester) && fail "ran without a Cloudflare login"
 grep -q 'not logged in to Cloudflare' "$work/out" || fail "login message"
 run --worker cp-test && fail "ran without --name and no terminal"
 grep -q 'pass --name' "$work/out" || fail "missing --name message"
@@ -87,7 +89,7 @@ process.exit(ok ? 0 : 1);
 ' "$work/secrets.json" || fail "settings file does not match"
 
 before=$(cat "$token_file")
-FAKE_EXISTING=1 run --worker cp-test || fail "update failed"
+(export FAKE_EXISTING=1; run --worker cp-test) || fail "update failed"
 grep -q 'Updating cp-test; its settings stay as they are' "$work/out" || fail "update message"
 [ "$(cat "$token_file")" = "$before" ] || fail "the update changed the owner token"
 
