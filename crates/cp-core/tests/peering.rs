@@ -3,9 +3,9 @@
 
 mod common;
 
-use common::{Clock, Daemon, kind, name, peer, settle, url};
-use cp_api::{Approval, ErrorKind, PeerInput, PeerSecret, PeerStatus, PeeringRequest};
-use cp_core::{Config, Core, Millis, REQUESTS_PER_MINUTE};
+use common::{Clock, Daemon, kind, name, peer, settle, signed, url};
+use cp_api::{Approval, ErrorKind, PeerInput, PeerStatus, PeeringRequest, PublicKey};
+use cp_core::{Config, Core, EVENTS_PATH, Millis, REQUESTS_PER_MINUTE};
 use cp_sqlite::Sqlite;
 use cp_thread::Action;
 
@@ -13,7 +13,7 @@ fn request(n: u32) -> PeeringRequest {
     PeeringRequest {
         name: name(&format!("p{n}")),
         url: url(&format!("https://p{n}.test")),
-        secret: PeerSecret::new(format!("cpp_{n:043}")).unwrap(),
+        key: PublicKey::try_from(format!("{n:043}")).unwrap(),
         note: None,
     }
 }
@@ -55,9 +55,7 @@ fn add_peer_refusals() {
         ErrorKind::Unprocessable,
         "own name"
     );
-    alice
-        .call(|c| c.add_peer(ask("bob", "https://bob.test")))
-        .unwrap();
+    common::ask(&mut alice, &mut bob);
     assert_eq!(
         kind(&alice.call(|c| c.add_peer(ask("bob", "https://bob2.test")))),
         ErrorKind::Conflict,
@@ -71,11 +69,11 @@ fn add_peer_refusals() {
 
     // Carol already asked bob: bob should approve, not ask back.
     let mut carol = Daemon::new("carol", &clock, 3);
-    let out = carol
+    let call = carol
         .call(|c| c.add_peer(ask("bob", "https://bob.test")))
         .unwrap();
-    bob.call(|c| c.request_received(out.request.as_ref().unwrap()))
-        .unwrap();
+    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
+    bob.call(|c| c.request_received(&request)).unwrap();
     let e = bob
         .call(|c| c.add_peer(ask("carol", "https://carol.test")))
         .unwrap_err();
@@ -103,10 +101,13 @@ fn add_peer_refusals() {
 }
 
 #[test]
-fn an_aborted_send_saves_nothing() {
+fn asking_saves_nothing_until_the_other_daemon_answers() {
     let clock = Clock::new();
-    let mut alice = Daemon::new("alice", &clock, 1);
-    let out = alice
+    let (mut alice, mut bob) = (
+        Daemon::new("alice", &clock, 1),
+        Daemon::new("bob", &clock, 2),
+    );
+    let call = alice
         .call(|c| {
             c.add_peer(PeerInput {
                 name: name("bob"),
@@ -115,12 +116,86 @@ fn an_aborted_send_saves_nothing() {
             })
         })
         .unwrap();
-    alice
-        .call(|c| c.abort_add_peer(&name("bob"), &out.secret))
-        .unwrap();
+    assert!(call.headers.is_empty(), "a peering request is not signed");
     assert_eq!(
         kind(&alice.call(|c| c.peer(&name("bob")))),
         ErrorKind::NotFound
+    );
+    // The receipt carries bob's key; alice records bob with it.
+    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
+    assert_eq!(&request.key, alice.core.public_key());
+    let receipt = bob.call(|c| c.request_received(&request)).unwrap();
+    assert_eq!(&receipt.key, bob.core.public_key());
+    let p = alice
+        .call(|c| c.finish_add_peer(&name("bob"), &call.url, &receipt))
+        .unwrap();
+    assert_eq!((p.status, p.code), (PeerStatus::Requested, receipt.code));
+    // A daemon cannot peer with itself.
+    let mut own = request.clone();
+    own.key = bob.core.public_key().clone();
+    assert_eq!(
+        kind(&bob.call(|c| c.request_received(&own))),
+        ErrorKind::Unprocessable
+    );
+}
+
+/// A daemon that has asked bob to peer, through the real request.
+fn asked(n: u64, clock: &Clock, bob: &mut Daemon) -> Daemon {
+    let mut d = Daemon::new(&format!("p{n}"), clock, n + 10);
+    let call = d
+        .call(|c| {
+            c.add_peer(PeerInput {
+                name: name("bob"),
+                url: url("https://bob.test"),
+                note: None,
+            })
+        })
+        .unwrap();
+    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
+    let receipt = bob.call(|c| c.request_received(&request)).unwrap();
+    d.call(|c| c.finish_add_peer(&name("bob"), &call.url, &receipt))
+        .unwrap();
+    d
+}
+
+#[test]
+fn signatures_are_checked() {
+    let clock = Clock::new();
+    let (mut alice, mut bob) = (
+        Daemon::new("alice", &clock, 1),
+        Daemon::new("bob", &clock, 2),
+    );
+    peer(&mut alice, &mut bob);
+    alice.send("bob", "hi");
+    let a = alice.call(|c| c.due(10)).unwrap().remove(0);
+    let good = signed(&a.headers, EVENTS_PATH, &a.body);
+    assert_eq!(
+        bob.call(|c| c.authenticate_peer(&good)).unwrap(),
+        name("alice")
+    );
+
+    let mut tampered = good.clone();
+    tampered.digest = cp_core::signing::body_digest(b"{}");
+    let mut elsewhere = good.clone();
+    elsewhere.path = "/api/v1/federation/accepted".into();
+    for bad in [tampered, elsewhere] {
+        assert_eq!(
+            kind(&bob.call(|c| c.authenticate_peer(&bad))),
+            ErrorKind::Unauthorized
+        );
+    }
+    // Signed for bob, so no one else accepts it.
+    let mut carol = Daemon::new("carol", &clock, 3);
+    peer(&mut alice, &mut carol);
+    assert_eq!(
+        kind(&carol.call(|c| c.authenticate_peer(&good))),
+        ErrorKind::Unauthorized
+    );
+    // And only for five minutes.
+    clock.advance(6 * Millis::MINUTE);
+    assert_eq!(
+        kind(&bob.call(|c| c.authenticate_peer(&good))),
+        ErrorKind::Unauthorized
     );
 }
 
@@ -128,15 +203,17 @@ fn an_aborted_send_saves_nothing() {
 fn one_approval_confirms_at_a_time() {
     let clock = Clock::new();
     let mut bob = Daemon::new("bob", &clock, 2);
-    bob.call(|c| c.request_received(&request(1))).unwrap();
-    bob.call(|c| c.request_received(&request(2))).unwrap();
-    let ids: Vec<_> = bob
+    let mut p1 = asked(1, &clock, &mut bob);
+    asked(2, &clock, &mut bob);
+    let mut ids: Vec<_> = bob
         .call(|c| c.requests())
         .unwrap()
         .requests
         .into_iter()
-        .map(|r| r.id)
+        .map(|r| (r.name.to_string(), r.id))
         .collect();
+    ids.sort();
+    let ids: Vec<_> = ids.into_iter().map(|(_, id)| id).collect();
 
     let first = bob
         .call(|c| c.begin_approval(&ids[0], Approval::default()))
@@ -150,10 +227,13 @@ fn one_approval_confirms_at_a_time() {
         ErrorKind::Conflict,
         "cannot deny mid-approval"
     );
-    // Its secret answers 503 until the approval ends: the requester may act
-    // on its acceptance before this side has saved the peer.
+    // Calls signed by the requester answer 503 until the approval ends: it
+    // may act on its acceptance before this side has saved the peer.
+    p1.send("bob", "hi");
+    let a = p1.call(|c| c.due(10)).unwrap().remove(0);
+    let call = signed(&a.headers, EVENTS_PATH, &a.body);
     assert_eq!(
-        kind(&bob.call(|c| c.authenticate_peer(first.call.secret.expose()))),
+        kind(&bob.call(|c| c.authenticate_peer(&call))),
         ErrorKind::Unavailable
     );
 

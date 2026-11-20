@@ -14,15 +14,21 @@ pub use doc::openapi;
 pub use error::{Error, ErrorKind, Problem};
 pub use model::*;
 pub use text::{
-    Code, Cursor, DaemonUrl, Invalid, MAX_NOTE, MAX_PEERS, MAX_URL, MAX_WEBHOOK_URL, Note,
-    PeerSecret, Peers, RequestRef, ThreadRef, Token, Version, WebhookHeaderName,
-    WebhookHeaderValue, WebhookSecret, WebhookUrl,
+    Code, Cursor, DaemonUrl, Invalid, MAX_NOTE, MAX_PEERS, MAX_URL, MAX_WEBHOOK_URL, Note, Peers,
+    PublicKey, RequestRef, ThreadRef, Token, Version, WebhookHeaderName, WebhookHeaderValue,
+    WebhookSecret, WebhookUrl,
 };
 pub use webhooks::{
     Provider, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin,
     WebhookEventType, WebhookEvents, WebhookHeader, WebhookList, WebhookOrigin, WebhookPayload,
     WebhookType, WebhookUpdate,
 };
+
+/// Headers on every call between daemons: the caller's public key, the Unix
+/// time it signed at, and its Ed25519 signature (see `cp_core::signing`).
+pub const KEY_HEADER: &str = "cp-key";
+pub const DATE_HEADER: &str = "cp-date";
+pub const SIGNATURE_HEADER: &str = "cp-signature";
 
 /// The header every call between daemons carries: the caller's release, so
 /// owners can see which peers run what.

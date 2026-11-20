@@ -54,7 +54,7 @@ const STREAM_BACKLOG: usize = 64;
 struct Inner {
     storage: Storage,
     core: RefCell<C>,
-    owner_token: String,
+    owner_hash: String,
     streams: RefCell<Vec<mpsc::Sender<Id>>>,
 }
 
@@ -64,11 +64,11 @@ struct Inner {
 pub(crate) struct DoHost(Rc<Inner>);
 
 impl DoHost {
-    pub(crate) fn new(storage: Storage, core: C, owner_token: String) -> Self {
+    pub(crate) fn new(storage: Storage, core: C, owner_hash: String) -> Self {
         Self(Rc::new(Inner {
             storage,
             core: RefCell::new(core),
-            owner_token,
+            owner_hash,
             streams: RefCell::default(),
         }))
     }
@@ -239,8 +239,8 @@ impl Host for DoHost {
         }
     }
 
-    fn owner_token(&self) -> &str {
-        &self.0.owner_token
+    fn owner_hash(&self) -> &str {
+        &self.0.owner_hash
     }
 
     fn version(&self) -> &'static str {

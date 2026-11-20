@@ -6,7 +6,7 @@ use cp_thread::{
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::text::{Code, Cursor, DaemonUrl, Note, PeerSecret, Peers, RequestRef, Token, Version};
+use crate::text::{Code, Cursor, DaemonUrl, Note, Peers, PublicKey, RequestRef, Token, Version};
 
 // ---- system ----
 
@@ -48,7 +48,8 @@ pub struct PeeringRequest {
     /// The name the requester asks to be known by.
     pub name: Name,
     pub url: DaemonUrl,
-    pub secret: PeerSecret,
+    /// The requester's public key.
+    pub key: PublicKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<Note>,
 }
@@ -64,7 +65,10 @@ pub enum ReceiptStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct RequestReceipt {
     pub status: ReceiptStatus,
+    /// What both owners compare, from both daemons' keys.
     pub code: Code,
+    /// This daemon's public key, which the requester verifies calls with.
+    pub key: PublicKey,
 }
 
 /// A peering request waiting for the owner.
@@ -107,7 +111,7 @@ pub struct PeerInput {
 }
 
 /// `requested`: waiting for their owner to approve. `active`: both sides
-/// accept the secret.
+/// accept each other's key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PeerStatus {

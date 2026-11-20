@@ -12,7 +12,7 @@ mod stream;
 use std::sync::OnceLock;
 
 use bytes::Bytes;
-use cp_api::{DaemonUrl, Error, ErrorKind, MAX_REQUEST_BODY, Op, prefix};
+use cp_api::{DaemonUrl, Error, ErrorKind, MAX_REQUEST_BODY, Op};
 use cp_http::{Gate, Host as _, Reply, Service};
 use cp_thread::Name;
 use futures_util::StreamExt as _;
@@ -164,7 +164,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .headers()
         .get("content-length")?
         .and_then(|v| v.parse::<u64>().ok());
-    let refused = match gate().check(&method, &path, authorization.as_deref(), length) {
+    let signed = req.headers().get(cp_api::SIGNATURE_HEADER)?.is_some();
+    let refused = match gate().check(&method, &path, authorization.as_deref(), signed, length) {
         Err(r) => Some(to_response(*r)?),
         Ok(Op::RequestPeering) => match env.rate_limiter(PEERING_LIMITER) {
             Ok(limiter) => {
@@ -226,18 +227,15 @@ fn settings(env: &Env) -> std::result::Result<(cp_core::Config, String), String>
     let url =
         text("CP_URL").ok_or("set the CP_URL variable to the URL peers reach this Worker at")?;
     let url = DaemonUrl::try_from(url).map_err(|e| format!("CP_URL: {e}"))?;
-    // Never echoed: only its shape is checked.
-    let token = text("CP_OWNER_TOKEN").ok_or("set the CP_OWNER_TOKEN secret")?;
-    let shaped = token.len() == prefix::OWNER.len() + 43
-        && token.starts_with(prefix::OWNER)
+    // The owner keeps the token; the Worker holds only its SHA-256.
+    let token = text("CP_OWNER_TOKEN_HASH").ok_or("set the CP_OWNER_TOKEN_HASH secret")?;
+    let hex = token.len() == 64
         && token
             .bytes()
-            .skip(prefix::OWNER.len())
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_');
-    if !shaped {
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c));
+    if !hex {
         return Err(
-            "CP_OWNER_TOKEN must be cpo_ followed by 43 base64url characters (32 random bytes)"
-                .into(),
+            "CP_OWNER_TOKEN_HASH must be the owner token's SHA-256 in lower-case hex".into(),
         );
     }
     Ok((

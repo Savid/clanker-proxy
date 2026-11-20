@@ -296,7 +296,7 @@ checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
 name = "cp-api"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "cp-thread",
  "secrecy",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "cp-conformance"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "cp-api",
  "cp-core",
@@ -324,12 +324,13 @@ dependencies = [
 
 [[package]]
 name = "cp-core"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "base64",
  "cp-api",
  "cp-sqlite",
  "cp-thread",
+ "ed25519-dalek",
  "hmac",
  "jiff",
  "proptest",
@@ -342,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "cp-http"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "cp-api",
@@ -360,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "cp-sqlite"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "cp-api",
  "cp-core",
@@ -369,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "cp-thread"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "jiff",
  "proptest",
@@ -381,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "cpctl"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "cp-api",
  "cp-thread",
@@ -395,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "cpd"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "clap",
@@ -421,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-worker"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "cp-api",
@@ -466,6 +467,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "curve25519-dalek"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "curve25519-dalek-derive",
+ "digest",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -486,6 +514,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "ed25519"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
+dependencies = [
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "sha2",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -521,6 +571,12 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "find-msvc-tools"
@@ -1650,6 +1706,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
+
+[[package]]
 name = "simd_cesu8"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2412,7 +2474,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "cp-api",
  "utoipa",

@@ -74,8 +74,7 @@ proptest! {
                     let (from, to) = sides(&mut alice, &mut bob, to_bob);
                     for _ in 0..n {
                         let Some(a) = from.call(|c| c.due(1)).unwrap().pop() else { break };
-                        let key = a.secret.expose().to_string();
-                        let r = to.call(|c| c.receive(&key, a.event.clone()));
+                        let r = common::receive(to, &a);
                         from.call(|c| c.record(&a, common::outcome(&r))).unwrap();
                     }
                 }
@@ -88,8 +87,7 @@ proptest! {
                 Step::LoseAnswer { to_bob } => {
                     let (from, to) = sides(&mut alice, &mut bob, to_bob);
                     if let Some(a) = from.call(|c| c.due(1)).unwrap().pop() {
-                        let key = a.secret.expose().to_string();
-                        let _ = to.call(|c| c.receive(&key, a.event.clone()));
+                        let _ = common::receive(to, &a);
                         from.call(|c| c.record(&a, Outcome::Failed("timed out".into()))).unwrap();
                     }
                 }

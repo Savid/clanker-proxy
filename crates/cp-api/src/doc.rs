@@ -45,8 +45,8 @@ async fn get_me() {}
 
 #[utoipa::path(post, path = "/api/v1/peering-requests", operation_id = "requestPeering", tag = "peering",
     summary = "Ask to become a peer",
-    description = "Another daemon asks this one's owner to accept it as a peer, offering the secret both will use. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
-    request_body(content = PeeringRequest, description = "The requester and the secret it offers."),
+    description = "Another daemon asks this one's owner to accept it as a peer, giving its public key; the answer gives this daemon's key and the code both owners compare. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
+    request_body(content = PeeringRequest, description = "The requester and its public key."),
     responses((status = 202, description = "The request waits for the owner.", body = RequestReceipt),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn request_peering() {}
@@ -68,7 +68,7 @@ async fn deny_request() {}
 
 #[utoipa::path(post, path = "/api/v1/peering-requests/{id}/approve", operation_id = "approveRequest", tag = "peering",
     summary = "Approve a peering request",
-    description = "First calls the requester's daemon, at the URL it gave, with the secret it offered: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls made with that secret answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
+    description = "First sends the requester's daemon, at the URL it gave, an acceptance signed for its key: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls signed with the requester's key answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
     params(("id" = crate::text::RequestRef, Path, description = "The request's reference.")),
     request_body(content = Approval, description = "What to call the new peer."),
     responses((status = 201, description = "The new peer.", body = Peer),
@@ -92,7 +92,7 @@ async fn add_peer() {}
 
 #[utoipa::path(get, path = "/api/v1/peers/{name}", operation_id = "getPeer", tag = "peering",
     summary = "Read a peer",
-    description = "One peer, with the short code of the secret you share.",
+    description = "One peer, with the short code both owners compared.",
     params(("name" = Name, Path, description = "The peer's name.")),
     responses((status = 200, description = "The peer.", body = Peer),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -100,7 +100,7 @@ async fn get_peer() {}
 
 #[utoipa::path(delete, path = "/api/v1/peers/{name}", operation_id = "removePeer", tag = "peering",
     summary = "Remove a peer",
-    description = "Their secret stops working and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL.",
+    description = "Their key stops working here and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL.",
     params(("name" = Name, Path, description = "The peer's name.")),
     responses((status = 204, description = "The peer is gone."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -156,7 +156,7 @@ async fn deliver_event() {}
 
 #[utoipa::path(post, path = "/api/v1/federation/accepted", operation_id = "notifyPeeringAccepted", tag = "federation",
     summary = "Say a peering request was approved",
-    description = "The approving daemon calls this with the shared secret, so the requester starts delivering at once.",
+    description = "The approving daemon calls this, signed with its key, so the requester starts delivering at once.",
     responses((status = 204, description = "Noted."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn notify_peering_accepted() {}
@@ -258,7 +258,7 @@ async fn receive_webhook_notification() {}
     version = "3.2.0",
     info(
         title = "clanker-proxy API",
-        description = "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it lists, reads, streams and acts on threads (optionally only some peers'), reads the owner's name, and nothing else. **peer**: another daemon, with the secret it shares with this one. **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
+        description = "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it lists, reads, streams and acts on threads (optionally only some peers'), reads the owner's name, and nothing else. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
         license(name = "MIT", identifier = "MIT"),
     ),
     servers((url = "/", description = "The daemon")),
@@ -325,7 +325,7 @@ pub fn openapi() -> Document {
             Access::Public => Vec::new(),
             Access::Owner => vec![requirement("ownerToken")],
             Access::OwnerOrAgent => vec![requirement("ownerToken"), requirement("agentToken")],
-            Access::Peer => vec![requirement("peerSecret")],
+            Access::Peer => vec![requirement("peerSignature")],
         });
     }
 
@@ -358,8 +358,11 @@ pub fn openapi() -> Document {
         bearer("An agent token (cpa_…) the owner created."),
     );
     components.add_security_scheme(
-        "peerSecret",
-        bearer("The secret (cpp_…) a peer shares with this daemon."),
+        "peerSignature",
+        SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+            "Cp-Signature",
+            "Another daemon's Ed25519 signature, base64url, with Cp-Key (its public key) and Cp-Date (Unix seconds). It signs `clanker-proxy/1`, the method, the API path, Cp-Date, the recipient's public key and the body's SHA-256 in hex, one per line; a signature over five minutes old is refused.",
+        ))),
     );
     components.add_security_scheme(
         "webhookSignature",

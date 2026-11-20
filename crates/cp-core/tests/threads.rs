@@ -161,13 +161,10 @@ fn peer_events_are_checked() {
     let (clock, mut alice, mut bob) = pair();
     let id = alice.send("bob", "t").id.to_string();
     settle(&mut alice, &mut bob);
-    let secret = {
-        // The secret bob uses for alice: take it from a delivery attempt.
-        bob.act(&id, Action::Ack, "").unwrap();
-        bob.call(|c| c.due(10)).unwrap().pop().unwrap()
-    };
-    let wire = secret.event.clone();
-    let key = secret.secret.expose().to_string();
+    // A delivery from bob, already authenticated by its signature.
+    bob.act(&id, Action::Ack, "").unwrap();
+    let wire = bob.call(|c| c.due(10)).unwrap().pop().unwrap().event;
+    let key = bob.core.public_key().clone();
 
     // A delivery dated far ahead is refused for now.
     let mut future = wire.clone();
@@ -215,7 +212,10 @@ fn peer_events_are_checked() {
         "unknown thread"
     );
     assert_eq!(
-        kind(&alice.call(|c| c.receive("cpp_nope", cp_api_wire()))),
+        kind(&alice.call(|c| c.receive(
+            &cp_api::PublicKey::try_from("A".repeat(43)).unwrap(),
+            cp_api_wire()
+        ))),
         ErrorKind::Unauthorized
     );
 }

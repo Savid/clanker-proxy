@@ -102,7 +102,7 @@ all of it except publishing.
   calls, so multi-step flows re-validate when they commit.
 - Thread state changes go in `cp-thread` (`Action::rule`, `Fold`) with a
   table test; `cp-core/tests/simulation.rs` must keep converging.
-- Never log or print tokens or peer secrets; hold them as
+- Never log or print tokens or the daemon's private key; hold secrets as
   `secrecy::SecretString`.
 - Upgrades keep data and peers: a storage change is a new entry appended to
   `MIGRATIONS` in `cp-core/src/schema.rs` (never edit a shipped one, and

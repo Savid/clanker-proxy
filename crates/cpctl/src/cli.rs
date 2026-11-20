@@ -83,7 +83,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "<name> <url> [-m <note>]",
         2..2,
         "ask the daemon at <url> to connect; <name> is what you call them",
-        "Sends a peering request with a new shared secret. The peer stays \"requested\" until their owner approves; threads sent meanwhile are delivered after that. Both owners see the same code: they should compare it over a channel they trust. Each daemon has one peer name here; adding its URL again under another name is refused.",
+        "Sends a peering request with this daemon's public key; calls between daemons are signed, and no secret is shared. The peer stays \"requested\" until their owner approves; threads sent meanwhile are delivered after that. Both owners see the same code: they should compare it over a channel they trust. Each daemon has one peer name here; adding its URL again under another name is refused.",
         r#"cpctl peer add bob https://cp.bob.dev -m "hi, it's alice""#,
         [value(
             "message",
@@ -115,7 +115,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "<name>",
         1..1,
         "forget a peer; threads with them are kept",
-        "Their secret stops working and anything not yet delivered to them fails. Their name can later go only to a daemon at the same URL.",
+        "Their key stops working here and anything not yet delivered to them fails. Their name can later go only to a daemon at the same URL.",
         "cpctl peer rm bob",
         []
     ),

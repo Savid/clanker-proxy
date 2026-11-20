@@ -1,11 +1,13 @@
 //! Calls to other daemons: asking to peer, confirming an approval, and
-//! delivering events.
+//! delivering events. The core signs them; this sends them.
 
 use std::time::Duration;
 
 use bytes::Bytes;
-use cp_api::{Approval, Error, ErrorKind, Peer, PeerInput, Problem, RequestRef};
-use cp_core::{Attempt, Outbound, Outcome};
+use cp_api::{
+    Approval, DaemonUrl, Error, ErrorKind, Peer, PeerInput, Problem, RequestReceipt, RequestRef,
+};
+use cp_core::{Attempt, Call, EVENTS_PATH, Outcome};
 
 use crate::host::{FetchError, Host, Incoming, Outgoing};
 
@@ -46,27 +48,28 @@ fn describe(r: &Incoming) -> String {
     }
 }
 
+/// POSTs `body` to `path` on `url` with `headers`, which sign the call
+/// when it needs signing.
 async fn post<H: Host>(
     h: &H,
-    url: String,
-    bearer: Option<&str>,
-    body: Option<Vec<u8>>,
+    url: &DaemonUrl,
+    path: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
 ) -> Result<Incoming, FetchError> {
-    let mut headers = vec![
+    let mut all = vec![
         ("user-agent".to_string(), "cpd".to_string()),
         (cp_api::VERSION_HEADER.to_string(), h.version().to_string()),
     ];
-    if let Some(b) = bearer {
-        headers.push(("authorization".to_string(), format!("Bearer {b}")));
-    }
-    if body.is_some() {
-        headers.push(("content-type".to_string(), "application/json".to_string()));
+    all.extend_from_slice(headers);
+    if !body.is_empty() {
+        all.push(("content-type".to_string(), "application/json".to_string()));
     }
     h.fetch(Outgoing {
         method: http::Method::POST,
-        url,
-        headers,
-        body: body.map(Bytes::from),
+        url: url.join(path),
+        headers: all,
+        body: (!body.is_empty()).then(|| Bytes::from(body)),
         timeout: TIMEOUT,
     })
     .await
@@ -76,45 +79,30 @@ fn upstream(what: &str, detail: impl std::fmt::Display) -> Error {
     Error::new(ErrorKind::Upstream, format!("{what}: {detail}"))
 }
 
-/// Asks the daemon at the peer's URL to become peers. The core saves the
-/// requested peer first and forgets it if the request does not get through.
+/// Asks the daemon at the peer's URL to become peers. The peer is recorded
+/// only once that daemon has the request and has sent back its key.
 pub async fn add<H: Host>(h: &H, input: PeerInput) -> Result<Peer, Error> {
     let name = input.name.clone();
-    let out: Outbound = h.core(move |c| c.add_peer(input)).await?;
-    let body = serde_json::to_vec(&out.request)
-        .map_err(|e| Error::new(ErrorKind::Internal, e.to_string()))?;
-    let result = post(
-        h,
-        out.url.join("/api/v1/peering-requests"),
-        None,
-        Some(body),
-    )
-    .await;
-    let failure = match &result {
-        Ok(r) if (200..300).contains(&r.status) => None,
-        Ok(r) => Some(describe(r)),
-        Err(e) => Some(e.to_string()),
+    let call: Call = h.core(move |c| c.add_peer(input)).await?;
+    let asked = format!("ask {}", call.url);
+    let answer = match post(h, &call.url, call.path, &call.headers, call.body).await {
+        Ok(r) if (200..300).contains(&r.status) => r,
+        Ok(r) => return Err(upstream(&asked, describe(&r))),
+        Err(e) => return Err(upstream(&asked, e)),
     };
-    if let Some(why) = failure {
-        let (n, secret) = (name.clone(), out.secret.clone());
-        h.core(move |c| c.abort_add_peer(&n, &secret)).await?;
-        return Err(upstream(&format!("ask {}", out.url), why));
-    }
-    h.core(move |c| c.requested_peer(&name)).await
+    let receipt: RequestReceipt = serde_json::from_slice(&answer.body)
+        .map_err(|e| upstream(&asked, format!("unreadable answer: {e}")))?;
+    let url = call.url;
+    h.core(move |c| c.finish_add_peer(&name, &url, &receipt))
+        .await
 }
 
-/// Approves a peering request: the requester's daemon must first confirm,
-/// at the URL it gave, that it holds the secret it offered.
+/// Approves a peering request: the requester's daemon must first take the
+/// signed acceptance at the URL it gave.
 pub async fn approve<H: Host>(h: &H, id: RequestRef, approval: Approval) -> Result<Peer, Error> {
     let pending = h.core(move |c| c.begin_approval(&id, approval)).await?;
-    let url = pending.call.url.clone();
-    let result = post(
-        h,
-        url.join("/api/v1/federation/accepted"),
-        Some(pending.call.secret.expose()),
-        None,
-    )
-    .await;
+    let call = pending.call.clone();
+    let result = post(h, &call.url, call.path, &call.headers, call.body).await;
     let failure = match &result {
         Ok(r) if (200..300).contains(&r.status) => None,
         Ok(r) => Some(describe(r)),
@@ -125,7 +113,10 @@ pub async fn approve<H: Host>(h: &H, id: RequestRef, approval: Approval) -> Resu
         Some(why) => {
             h.core(move |c| c.abort_approval(&pending)).await?;
             Err(upstream(
-                &format!("the daemon at {url} did not confirm this request, so it is not approved"),
+                &format!(
+                    "the daemon at {} did not confirm this request, so it is not approved",
+                    call.url
+                ),
                 why,
             ))
         }
@@ -134,18 +125,7 @@ pub async fn approve<H: Host>(h: &H, id: RequestRef, approval: Approval) -> Resu
 
 /// Sends one event and says what became of it.
 pub async fn send<H: Host>(h: &H, a: &Attempt) -> Outcome {
-    let body = match serde_json::to_vec(&a.event) {
-        Ok(b) => b,
-        Err(e) => return Outcome::Refused(e.to_string()),
-    };
-    match post(
-        h,
-        a.url.join("/api/v1/federation/events"),
-        Some(a.secret.expose()),
-        Some(body),
-    )
-    .await
-    {
+    match post(h, &a.url, EVENTS_PATH, &a.headers, a.body.clone()).await {
         Ok(r) => Outcome::from_status(r.status, describe(&r)),
         Err(e) => Outcome::Failed(e.to_string()),
     }

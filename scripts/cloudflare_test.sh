@@ -30,7 +30,7 @@ cat >"$work/wrangler" <<'FAKE'
 printf '%s\n' "$*" >>"$FAKE_DIR/calls"
 case $1 in
     whoami) [ -n "${FAKE_LOGGED_OUT:-}" ] && echo "You are not authenticated" || echo "| Account ID | abc |" ;;
-    secret) [ -n "${FAKE_EXISTING:-}" ] && echo '[{"name":"CP_OWNER_TOKEN","type":"secret_text"}]' || echo '[]' ;;
+    secret) [ -n "${FAKE_EXISTING:-}" ] && echo '[{"name":"CP_OWNER_TOKEN_HASH","type":"secret_text"}]' || echo '[]' ;;
     deploy)
         while [ "$#" -gt 0 ]; do
             [ "$1" = --secrets-file ] && cp "$2" "$FAKE_DIR/secrets.json"
@@ -84,7 +84,9 @@ grep -Eq '^cpo_[A-Za-z0-9_-]{43}$' "$token_file" || fail "malformed owner token"
 grep -q '^deploy --name cp-test --secrets-file ' "$work/calls" || fail "settings not sent with a deploy"
 TOKEN=$(cat "$token_file") node -e '
 const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-const ok = s.CP_NAME === "tester" && s.CP_URL === "http://127.0.0.1:18519" && s.CP_OWNER_TOKEN === process.env.TOKEN;
+const hash = require("crypto").createHash("sha256").update(process.env.TOKEN).digest("hex");
+const ok = s.CP_NAME === "tester" && s.CP_URL === "http://127.0.0.1:18519" && s.CP_OWNER_TOKEN_HASH === hash
+  && !JSON.stringify(s).includes(process.env.TOKEN);
 process.exit(ok ? 0 : 1);
 ' "$work/secrets.json" || fail "settings file does not match"
 

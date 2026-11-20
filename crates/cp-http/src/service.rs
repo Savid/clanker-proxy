@@ -7,6 +7,7 @@ use cp_api::{
     ListThreadsQuery, MAX_REQUEST_BODY, Me, NewThread, Op, PeerInput, PeeringRequest, Peers,
     RequestRef, ThreadAction, ThreadList, ThreadRef, WireEvent, prefix,
 };
+use cp_core::SignedCall;
 use cp_thread::Name;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -26,9 +27,9 @@ pub enum Caller {
         token: String,
         peers: Peers,
     },
-    /// Another daemon, by the secret it presented.
+    /// Another daemon, by the key its signature verified with.
     Peer {
-        secret: String,
+        key: cp_api::PublicKey,
     },
 }
 
@@ -203,26 +204,31 @@ impl<H: Host> Service<H> {
             Route::WrongMethod(methods) => return Ok(Reply::Full(wrong_method(&methods))),
             Route::NotFound => return Err(Error::new(ErrorKind::NotFound, "no such API route")),
         };
-        let version = req
-            .headers()
-            .get(cp_api::VERSION_HEADER)
-            .and_then(|v| v.to_str().ok());
-        let caller = self.authenticate(op, bearer(&req), version).await?;
+        let header = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok());
+        let signed = (op.access() == Access::Peer)
+            .then(|| SignedCall::new(header, req.method().as_str(), req.uri().path(), req.body()))
+            .flatten();
+        let caller = self
+            .authenticate(op, bearer(&req), header(cp_api::VERSION_HEADER), signed)
+            .await?;
         self.dispatch(op, caller, &params, &req).await
     }
 
-    /// Checks the caller may call `op`, before the body is read. A peer's
-    /// reported release is recorded with it.
+    /// Checks the caller may call `op`: owners and agents by bearer token,
+    /// other daemons by the signature `signed` read from the request. A
+    /// peer's reported release is recorded with it.
     pub async fn authenticate(
         &self,
         op: Op,
         token: Option<&str>,
         version: Option<&str>,
+        signed: Option<SignedCall>,
     ) -> Result<Caller, Error> {
         let token = token.unwrap_or_default().to_string();
-        let owner = !token.is_empty()
-            && token.starts_with(prefix::OWNER)
-            && constant_time_eq(&token, self.host.owner_token());
+        // The daemon holds only the token's hash; comparing hashes in
+        // constant time keeps timing from leaking how much of it matched.
+        let owner = token.starts_with(prefix::OWNER)
+            && constant_time_eq(&cp_core::token_hash(&token), self.host.owner_hash());
         match op.access() {
             Access::Public => Ok(Caller::Public),
             Access::Owner | Access::OwnerOrAgent if owner => Ok(Caller::Owner),
@@ -251,24 +257,26 @@ impl<H: Host> Service<H> {
                     peers: agent.peers,
                 })
             }
-            Access::Peer if token.starts_with(prefix::PEER) => {
-                let t = token.clone();
+            Access::Peer => {
+                let call = signed.ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unauthorized,
+                        "calls between daemons need Cp-Key, Cp-Date and Cp-Signature",
+                    )
+                })?;
+                let key = call.key.clone();
                 // A malformed report is ignored, not refused: it is only shown.
                 let v = version.and_then(|v| cp_api::Version::try_from(v.to_string()).ok());
                 self.host
                     .core(move |c| {
-                        let name = c.authenticate_peer(&t)?;
+                        let name = c.authenticate_peer(&call)?;
                         if let Some(v) = &v {
                             c.note_peer_version(&name, v)?;
                         }
                         Ok(name)
                     })
-                    .await
-                    .map_err(|e| match e.kind {
-                        ErrorKind::Unavailable | ErrorKind::Internal => e,
-                        _ => unauthorized(),
-                    })?;
-                Ok(Caller::Peer { secret: token })
+                    .await?;
+                Ok(Caller::Peer { key })
             }
             _ => Err(unauthorized()),
         }
@@ -367,17 +375,17 @@ impl<H: Host> Service<H> {
             }
             Op::StreamEvents => Reply::Stream(caller),
             Op::DeliverEvent => {
-                let Caller::Peer { secret } = caller else {
+                let Caller::Peer { key } = caller else {
                     return Err(unauthorized());
                 };
                 let e: WireEvent = decode(req)?;
-                json(200, &h.core(move |c| c.receive(&secret, e)).await?)
+                json(200, &h.core(move |c| c.receive(&key, e)).await?)
             }
             Op::NotifyPeeringAccepted => {
-                let Caller::Peer { secret } = caller else {
+                let Caller::Peer { key } = caller else {
                     return Err(unauthorized());
                 };
-                h.core(move |c| c.accepted(&secret)).await?;
+                h.core(move |c| c.accepted(&key)).await?;
                 empty()
             }
             Op::ListAgentTokens => json(200, &h.core(|c| c.agent_tokens()).await?),

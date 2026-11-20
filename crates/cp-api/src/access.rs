@@ -14,7 +14,7 @@ pub enum Access {
     /// The owner, or an agent token the owner made, which may be limited to
     /// some peers' threads.
     OwnerOrAgent,
-    /// Another daemon, with the secret it shares with this one.
+    /// Another daemon, by a request signed with its key.
     Peer,
 }
 
@@ -124,6 +124,5 @@ operations! {
 /// Token prefixes, so a token's kind shows and kinds are never confused.
 pub mod prefix {
     pub const OWNER: &str = "cpo_";
-    pub const PEER: &str = "cpp_";
     pub const AGENT: &str = "cpa_";
 }

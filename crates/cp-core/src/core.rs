@@ -1,10 +1,11 @@
 //! The daemon's state machine over SQL.
 
-use cp_api::{DaemonUrl, Error, ErrorKind};
+use cp_api::{DaemonUrl, Error, ErrorKind, PublicKey};
 use cp_thread::{Id, Name};
 
 use crate::runtime::{Millis, Runtime};
 use crate::schema::{BASELINE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS};
+use crate::signing::Identity;
 use crate::sql::{Sql, Value, text};
 
 /// Who this daemon is.
@@ -42,7 +43,27 @@ pub struct Core<S, R> {
     pub(crate) rt: R,
     pub(crate) me: Name,
     pub(crate) url: Option<DaemonUrl>,
+    pub(crate) identity: Identity,
+    pub(crate) key: PublicKey,
     pub(crate) effects: Effects,
+}
+
+/// The daemon's key, made on first start; peers know it by its public half
+/// from then on.
+fn identity(
+    sql: &impl Sql,
+    rt: &mut impl Runtime,
+    stored: Option<String>,
+) -> Result<Identity, Error> {
+    if let Some(stored) = stored {
+        return Identity::from_stored(&stored);
+    }
+    let identity = Identity::generate(rt);
+    sql.execute(
+        "INSERT INTO meta (key, value) VALUES ('signing_key', ?)",
+        &[identity.stored().into()],
+    )?;
+    Ok(identity)
 }
 
 impl<S: Sql, R: Runtime> Core<S, R> {
@@ -50,7 +71,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     /// migrates older data forward, refuses data from a newer release, and
     /// settles the owner's name and URL. Hosts run it in one transaction, so
     /// a migration applies whole or not at all.
-    pub fn open(sql: S, rt: R, config: Config) -> Result<Self, Error> {
+    pub fn open(sql: S, mut rt: R, config: Config) -> Result<Self, Error> {
         if let Some(create_meta) = STATEMENTS.first() {
             sql.execute(create_meta, &[])?;
         }
@@ -85,7 +106,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 return Err(Error::new(
                     ErrorKind::Internal,
                     format!(
-                        "stored data is schema version {v}, from a build before the first release; start from empty storage"
+                        "stored data is schema version {v}, from an earlier release this one cannot migrate; start from empty storage"
                     ),
                 ));
             }
@@ -141,11 +162,16 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             None => meta("url")?.and_then(|u| DaemonUrl::try_from(u).ok()),
         };
 
+        let identity = identity(&sql, &mut rt, meta("signing_key")?)?;
+        let key = identity.public()?;
+
         Ok(Self {
             sql,
             rt,
             me,
             url,
+            identity,
+            key,
             effects: Effects::default(),
         })
     }
@@ -153,6 +179,29 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     /// The owner's name.
     pub fn me(&self) -> &Name {
         &self.me
+    }
+
+    /// This daemon's public key, which peers verify its calls with.
+    pub fn public_key(&self) -> &PublicKey {
+        &self.key
+    }
+
+    /// The headers that sign a call from this daemon to the peer with key
+    /// `recipient`, made now.
+    pub(crate) fn sign(
+        &self,
+        method: &str,
+        path: &str,
+        recipient: &PublicKey,
+        body: &[u8],
+    ) -> Result<Vec<(String, String)>, Error> {
+        self.identity.sign(
+            method,
+            path,
+            self.now().0.div_euclid(Millis::SECOND),
+            recipient,
+            body,
+        )
     }
 
     /// Where peers reach this daemon, if it has a public URL.

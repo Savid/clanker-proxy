@@ -237,7 +237,11 @@ async fn access_is_checked_for_every_operation() {
     let agent = agent["token"].as_str().unwrap().to_string();
     let fake_owner = format!("{}{}", prefix::OWNER, "A".repeat(43));
     let fake_agent = format!("{}{}", prefix::AGENT, "A".repeat(43));
-    let fake_peer = format!("{}{}", prefix::PEER, "A".repeat(43));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
 
     for op in Op::ALL {
         let path = op
@@ -250,7 +254,7 @@ async fn access_is_checked_for_every_operation() {
             ("nobody", ""),
             ("garbage owner", fake_owner.as_str()),
             ("bad agent", fake_agent.as_str()),
-            ("unknown peer", fake_peer.as_str()),
+            ("forged peer", ""),
             ("agent", agent.as_str()),
             ("owner", a.token.as_str()),
         ] {
@@ -260,6 +264,12 @@ async fn access_is_checked_for_every_operation() {
             let mut req = client().request(method.clone(), format!("{}{path}", a.url));
             if !token.is_empty() {
                 req = req.bearer_auth(token);
+            }
+            if who == "forged peer" {
+                req = req
+                    .header(cp_api::KEY_HEADER, "A".repeat(43))
+                    .header(cp_api::DATE_HEADER, &now)
+                    .header(cp_api::SIGNATURE_HEADER, "A".repeat(86));
             }
             let status = req.send().await.unwrap().status().as_u16();
             let admitted = match op.access() {

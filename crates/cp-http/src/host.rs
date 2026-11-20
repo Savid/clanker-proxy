@@ -117,8 +117,9 @@ pub trait Host: Clone + MaybeSend + MaybeSync + 'static {
         req: Outgoing,
     ) -> impl Future<Output = Result<Incoming, FetchError>> + MaybeSend;
 
-    /// The owner's token.
-    fn owner_token(&self) -> &str;
+    /// The SHA-256 of the owner's token, in hex
+    /// ([`cp_core::token_hash`]): the daemon never holds the token itself.
+    fn owner_hash(&self) -> &str;
 
     /// This build's version, as `getMe` reports it.
     fn version(&self) -> &str;

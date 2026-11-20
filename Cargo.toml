@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT"
@@ -20,6 +20,7 @@ cp-thread = { path = "crates/cp-thread" }
 cpd = { path = "crates/cpd" }
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
+ed25519-dalek = "3"
 futures-channel = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 getrandom = "0.4"

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{Clock, Daemon, deliver, name, peer, settle};
+use common::{Clock, Daemon, deliver, peer, settle};
 use cp_core::{GIVE_UP_401, MAX_BACKOFF, Millis, Outcome, backoff};
 use cp_thread::{Action, State};
 
@@ -116,16 +116,11 @@ fn a_peer_that_forgot_this_daemon_is_given_up_after_a_week() {
 #[test]
 fn a_peer_that_never_approved_is_given_up() {
     let clock = Clock::new();
-    let mut alice = Daemon::new("alice", &clock, 1);
-    alice
-        .call(|c| {
-            c.add_peer(cp_api::PeerInput {
-                name: name("bob"),
-                url: common::url("https://bob.test"),
-                note: None,
-            })
-        })
-        .unwrap();
+    let (mut alice, mut bob) = (
+        Daemon::new("alice", &clock, 1),
+        Daemon::new("bob", &clock, 2),
+    );
+    common::ask(&mut alice, &mut bob);
     let id = alice.send("bob", "t").id.to_string();
     for _ in 0..(8 * 24) {
         clock.advance(Millis::HOUR);

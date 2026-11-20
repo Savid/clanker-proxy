@@ -249,7 +249,7 @@ fn pending_notifications_coalesce_and_peering_is_capped() {
         let req = cp_api::PeeringRequest {
             name: name(&format!("p{n}")),
             url: cp_api::DaemonUrl::try_from(format!("https://p{n}.test")).unwrap(),
-            secret: cp_api::PeerSecret::new(format!("cpp_{n:043}")).unwrap(),
+            key: cp_api::PublicKey::try_from(format!("{n:043}")).unwrap(),
             note: None,
         };
         alice.call(|c| c.request_received(&req)).unwrap();
