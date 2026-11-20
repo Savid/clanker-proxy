@@ -8,6 +8,7 @@ pub mod peer;
 mod route;
 mod service;
 pub mod sse;
+pub mod webhooks;
 
 pub use host::{FetchError, Host, Incoming, MAX_RESPONSE, MaybeSend, Outgoing};
 pub use service::{Caller, Reply, Service};

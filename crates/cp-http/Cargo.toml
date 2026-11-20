@@ -13,6 +13,7 @@ bytes.workspace = true
 cp-api.workspace = true
 cp-core.workspace = true
 cp-thread.workspace = true
+futures-util.workspace = true
 http.workspace = true
 matchit.workspace = true
 serde.workspace = true
@@ -22,7 +23,6 @@ subtle.workspace = true
 
 [dev-dependencies]
 cp-sqlite.workspace = true
-futures-util.workspace = true
 
 [lints]
 workspace = true

@@ -6,6 +6,7 @@ mod cli;
 mod client;
 mod fail;
 mod output;
+mod webhooks;
 
 use std::fmt::Write as _;
 use std::io::Read;
@@ -308,6 +309,7 @@ impl App {
                 );
                 Ok(())
             }
+            c if c.starts_with("webhook ") => self.webhook(c, p, stdin).await,
             _ => Err(Failure::usage(format!("no command {command:?}"))),
         }
     }

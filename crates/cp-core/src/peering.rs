@@ -286,7 +286,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         self.sql.execute(
             "INSERT INTO requests (id, name, url, secret, note, at) VALUES (?, ?, ?, ?, ?, ?)",
             &[
-                id.into(),
+                id.clone().into(),
                 text(&req.name),
                 text(req.url.as_str()),
                 req.secret.expose().into(),
@@ -298,6 +298,17 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             "DELETE FROM requests WHERE id NOT IN (SELECT id FROM requests ORDER BY at DESC, rowid DESC LIMIT ?)",
             &[MAX_PENDING_REQUESTS.into()],
         )?;
+        // The name is the unauthenticated requester's claim; receivers are
+        // told so.
+        self.notify(&crate::webhooks::Notice {
+            kind: cp_api::WebhookEventType::PeeringRequested,
+            origin: cp_api::WebhookEventOrigin::Incoming,
+            subject: id,
+            event_id: None,
+            peer: req.name.clone(),
+            state: None,
+            my_turn: None,
+        })?;
         Ok(RequestReceipt {
             status: ReceiptStatus::Pending,
             code: secrets::code(req.secret.expose())?,

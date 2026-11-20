@@ -53,7 +53,7 @@ including `owner.token`, which cpctl reads on the same machine; from
 elsewhere set `CP_URL` (https) and `CP_TOKEN`. For an agent running somewhere
 you don't fully control, give it an agent token instead: `cpctl token add
 <name> -o <file>` makes one that can list, read and act on threads and nothing
-else (`-peers bob` keeps it to threads with bob), and `cpctl token rm <name>`
+else (`--peers bob` keeps it to threads with bob), and `cpctl token rm <name>`
 revokes it. Container: `make image`, then
 `docker run -v cp-data:/data -p 127.0.0.1:18471:18471 clanker-proxy:local -name savid -url https://cp.savid.dev`.
 
@@ -99,20 +99,20 @@ Send events directly to **Discord, Slack, Teams Workflows, Google Chat,
 Mattermost, Rocket.Chat, ntfy, or Gotify**. Use **generic JSON** for automation,
 or **Apprise API** to reach additional notification services. Each destination
 has its own event subscriptions, incoming/outgoing filter, optional peer filter
-(`-peers bob`), and persistent retries.
+(`--peers bob`), and persistent retries.
 
 For Discord, save the channel's webhook URL in a private `discord.url` file:
 
 ```bash
 chmod 600 discord.url
-cpctl webhook add discord -type discord -url-file discord.url \
-  -events '*' -origin both
+cpctl webhook add discord --type discord --url-file discord.url \
+  --events '*' --origin both
 cpctl webhook deliveries discord
 ```
 
 No signing key is needed for Discord or Slack: their webhook URLs contain the
-credential. Generic webhooks are unsigned by default; add `-secret-file` to
-enable signing. Custom authentication headers can come from `-headers-file`.
+credential. Generic webhooks are unsigned by default; add `--secret-file` to
+enable signing. Custom authentication headers can come from `--headers-file`.
 URLs, signing keys, and header values are never printed or returned by the API.
 
 `cpctl webhook types` lists formats and authentication requirements.
@@ -128,10 +128,10 @@ to that receiver:
 ```bash
 umask 077
 openssl rand -base64 32 > webhook.key
-cpctl webhook add agent https://runner.example.com/hooks/clanker -type generic \
-  -secret-file webhook.key \
-  -events thread.open,thread.reply,thread.needs-input,thread.resolve,thread.reopen \
-  -origin incoming
+cpctl webhook add agent https://runner.example.com/hooks/clanker --type generic \
+  --secret-file webhook.key \
+  --events thread.open,thread.reply,thread.needs-input,thread.resolve,thread.reopen \
+  --origin incoming
 cpctl webhook deliveries agent
 ```
 
@@ -141,9 +141,9 @@ agent token (`cpctl token add`), uses `cpctl show <subject>` to read the current
 thread before deciding what to do.
 A notification does not itself launch an agent.
 
-Use `-events '*'` for all current and future event types; `cpctl webhook events`
+Use `--events '*'` for all current and future event types; `cpctl webhook events`
 lists the fixed subscriptions. Add another named webhook for a different
-receiver, or pause one with `cpctl webhook set agent -enabled=false`.
+receiver, or pause one with `cpctl webhook set agent --enabled=false`.
 
 </details>
 

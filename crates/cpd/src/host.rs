@@ -162,9 +162,17 @@ impl Host for NativeHost {
             .http
             .request(req.method, &req.url)
             .timeout(req.timeout);
+        // Set, not appended: a header given here replaces the client's.
+        let mut headers = reqwest::header::HeaderMap::new();
         for (k, v) in &req.headers {
-            b = b.header(k, v);
+            if let (Ok(k), Ok(v)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                headers.insert(k, v);
+            }
         }
+        b = b.headers(headers);
         if let Some(body) = req.body {
             b = b.body(body);
         }
@@ -213,7 +221,18 @@ pub(crate) async fn run_delivery(host: NativeHost, mut stop: tokio::sync::watch:
         if let Err(e) = cp_http::peer::deliver(&host, u32::MAX).await {
             tracing::error!(error = %e, "deliver");
         }
-        let next = host.core(|c| c.next_due()).await.ok().flatten();
+        if let Err(e) = cp_http::webhooks::deliver(&host, u32::MAX).await {
+            tracing::error!(error = %e, "webhooks");
+        }
+        let next = host
+            .core(|c| {
+                let peers = c.next_due()?;
+                let hooks = c.next_webhook_due()?;
+                Ok(peers.into_iter().chain(hooks).min())
+            })
+            .await
+            .ok()
+            .flatten();
         let now = OsRuntime.now();
         let wait = next
             .map_or(IDLE, |t| {

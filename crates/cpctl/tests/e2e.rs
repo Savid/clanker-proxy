@@ -380,3 +380,141 @@ async fn agent_tokens_work_threads_only() {
     alice.daemon.shutdown().await;
     bob.daemon.shutdown().await;
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn webhooks_are_configured_without_echoing_secrets() {
+    let (alice, bob) = peered().await;
+    let key = alice.dir.0.join("hook.key");
+    std::fs::write(&key, "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=\n").unwrap();
+    let headers = alice.dir.0.join("headers.json");
+    std::fs::write(&headers, r#"{"x-api-key":"hunter2"}"#).unwrap();
+    // A receiver nobody listens on: deliveries fail and retry.
+    let out = cp_in(
+        &alice.env,
+        &[
+            "webhook",
+            "add",
+            "runner",
+            "--url-file",
+            "-",
+            "--secret-file",
+            key.to_str().unwrap(),
+            "--headers-file",
+            headers.to_str().unwrap(),
+            "--events",
+            "thread.open,thread.overruled",
+            "--origin",
+            "both",
+            "--peers",
+            "bob",
+        ],
+        "http://127.0.0.1:9/hook?token=sekrit\n",
+    )
+    .await;
+    assert_eq!(out.exit, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("runner → http://127.0.0.1:9 (generic"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("headers: X-Api-Key (values hidden)"),
+        "{}",
+        out.stdout
+    );
+    for secret in ["sekrit", "hunter2", "YWFh"] {
+        assert!(
+            !out.stdout.contains(secret),
+            "{secret} leaked: {}",
+            out.stdout
+        );
+    }
+
+    let two_stdin = cp(
+        &alice,
+        &[
+            "webhook",
+            "add",
+            "x",
+            "--url-file",
+            "-",
+            "--secret-file",
+            "-",
+        ],
+    )
+    .await;
+    assert_eq!(two_stdin.exit, cpctl::EXIT_USAGE);
+    let signed_chat = cp(
+        &alice,
+        &[
+            "webhook",
+            "add",
+            "chat",
+            "https://hooks.slack.com/x",
+            "--type",
+            "slack",
+            "--secret-file",
+            key.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert_eq!(
+        signed_chat.exit,
+        cpctl::EXIT_USAGE,
+        "{}",
+        signed_chat.stderr
+    );
+    assert_eq!(
+        cp(&alice, &["webhook", "set", "runner"]).await.exit,
+        cpctl::EXIT_USAGE
+    );
+
+    let ls = ok(&alice, &["webhook", "ls"]).await;
+    assert!(
+        ls.contains("runner") && ls.contains("thread.open,thread.overruled") && ls.contains("bob"),
+        "{ls}"
+    );
+
+    ok(&alice, &["send", "bob", "hello"]).await;
+    let deliveries = json(&alice, &["webhook", "deliveries", "runner"]).await;
+    assert_eq!(deliveries["deliveries"][0]["event"], "thread.open");
+
+    let off = json(
+        &alice,
+        &[
+            "webhook",
+            "set",
+            "runner",
+            "--enabled=false",
+            "--signing=false",
+        ],
+    )
+    .await;
+    assert_eq!(
+        (off["enabled"].as_bool(), off["signing"].as_bool()),
+        (Some(false), Some(false))
+    );
+    assert!(
+        ok(&alice, &["webhook", "show", "runner"])
+            .await
+            .contains("paused:")
+    );
+
+    let types = json(&alice, &["webhook", "types"]).await;
+    assert_eq!(types["types"].as_array().unwrap().len(), 10);
+    assert!(
+        ok(&alice, &["webhook", "events"])
+            .await
+            .contains("thread.overruled")
+    );
+    assert_eq!(cp(&alice, &["webhook"]).await.exit, cpctl::EXIT_USAGE);
+
+    ok(&alice, &["webhook", "rm", "runner"]).await;
+    assert_eq!(
+        cp(&alice, &["webhook", "show", "runner"]).await.exit,
+        cpctl::EXIT_NOT_FOUND
+    );
+    alice.daemon.shutdown().await;
+    bob.daemon.shutdown().await;
+}

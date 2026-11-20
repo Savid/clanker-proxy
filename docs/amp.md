@@ -65,13 +65,13 @@ them.
 
 | Amp project | Token | Webhook |
 | --- | --- | --- |
-| inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` | `cpctl webhook add amp-bob -url-file amp-bob.url -secret-file bob.key -origin incoming -peers bob` |
-| inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` | `cpctl webhook add amp-rest -url-file amp-rest.url -secret-file rest.key -origin incoming -peers carol,dave` |
+| inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` | `cpctl webhook add amp-bob --url-file amp-bob.url --secret-file bob.key --origin incoming --peers bob` |
+| inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` | `cpctl webhook add amp-rest --url-file amp-rest.url --secret-file rest.key --origin incoming --peers carol,dave` |
 
 Follow [Setup](#setup) once per project, with that project's names, a key of
-its own, and `-peers` on both the token and the webhook. Then:
+its own, and `--peers` on both the token and the webhook. Then:
 
-- **Scope every inbox when separating peers.** An inbox without `-peers`
+- **Scope every inbox when separating peers.** An inbox without `--peers`
   still reaches every peer's threads, the separated ones included, and its
   conversations would work them too.
 - **Keep `CP_TOKEN` in project settings.** Personal values override project
@@ -83,7 +83,7 @@ its own, and `-peers` on both the token and the webhook. Then:
 - **Adding a peer later** means a new token (a token's peers are fixed):
   `cpctl token add` with the new list, the project's `CP_TOKEN` replaced,
   `amp orb restart-processes`, `cpctl token rm` for the old one, and
-  `cpctl webhook set <name> -peers <new list>`. Until then, the new peer's
+  `cpctl webhook set <name> --peers <new list>`. Until then, the new peer's
   threads reach no agent. Narrowing a webhook's peers also drops its queued
   notifications about the others.
 
@@ -98,14 +98,14 @@ conversations never edit the same checkout. For another repository, an agent
 clones it into `~/cp-work/repos` first, which needs GitHub access to it.
 Alternatively, create a blank Amp-hosted project just for the inbox and keep
 its plugin and setup script there. Either project type can work across repositories.
-For a single inbox shared by all peers, omit `-peers` on its token and webhook
+For a single inbox shared by all peers, omit `--peers` on its token and webhook
 to handle all current and future peers. For separate inboxes, scope each as
 described above.
 
 ## Setup
 
 1. **On your machine**, where cpctl uses your owner token, create the agent
-   token (with `-peers` for an [inbox per peer](#one-inbox-per-peer)) and a
+   token (with `--peers` for an [inbox per peer](#one-inbox-per-peer)) and a
    webhook signing key:
 
    ```bash
@@ -140,11 +140,11 @@ described above.
 
    ```bash
    (umask 077; cat > amp.url)   # paste the URL, then Ctrl-D
-   cpctl webhook add amp -url-file amp.url -secret-file hook.key -origin incoming   # and -peers, to match the token
+   cpctl webhook add amp --url-file amp.url --secret-file hook.key --origin incoming   # and --peers, to match the token
    rm amp.url hook.key
    ```
 
-   `-origin incoming` keeps your agents' own actions from waking them.
+   `--origin incoming` keeps your agents' own actions from waking them.
 
 5. **Keep the inbox unarchived.** Archiving it pauses delivery and makes the
    URL return 404. Remove any workspace or personal guidance that tells Amp to
@@ -152,7 +152,7 @@ described above.
 
 If the wrong thread became the inbox, delete the `cp-inbox` trigger in
 Settings → Triggers, reload the plugin in the right thread, and repeat step 4
-with `cpctl webhook set amp -url-file amp.url`.
+with `cpctl webhook set amp --url-file amp.url`.
 After adding a missing secret, restart the orb's processes and reload the
 plugin. The plugin keeps which conversation handles which thread in
 `cp-inbox/state.json` under `$XDG_STATE_HOME` (`~/.local/state` by default). If

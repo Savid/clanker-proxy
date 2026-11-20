@@ -14,6 +14,8 @@ use cp_thread::{
 use crate::core::{Core, scope_json};
 use crate::runtime::{Millis, Runtime};
 use crate::sql::{Row, Sql, Value, text};
+use crate::webhooks::Notice;
+use cp_api::{WebhookEventOrigin, WebhookEventType};
 
 /// How far ahead of this daemon's clock a peer's event may be dated.
 const MAX_FUTURE_SKEW: i64 = 10 * Millis::MINUTE;
@@ -256,6 +258,25 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         })
     }
 
+    /// Notifies webhooks of `e` on the thread as it now stands.
+    fn notify_event(
+        &mut self,
+        row: &ThreadRow,
+        e: &Event,
+        origin: WebhookEventOrigin,
+    ) -> Result<(), Error> {
+        let n = Notice {
+            kind: WebhookEventType::for_action(e.action),
+            origin,
+            subject: row.fold.id.to_string(),
+            event_id: Some(e.id.clone()),
+            peer: row.peer.clone(),
+            state: Some(row.fold.state),
+            my_turn: Some(row.fold.turn() == Some(&self.me)),
+        };
+        self.notify(&n)
+    }
+
     /// The summary of the thread `id`, for streams.
     pub fn summary(&self, id: &Id) -> Result<Option<ThreadSummary>, Error> {
         self.load_thread(id)?
@@ -329,6 +350,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             overruled: 0,
         };
         self.save_thread(&row)?;
+        self.notify_event(&row, &e, WebhookEventOrigin::Outgoing)?;
         self.summary_of(&row)
     }
 
@@ -426,6 +448,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         row.last_from = self.me.clone();
         row.undelivered = row.undelivered.saturating_add(1);
         self.save_thread(&row)?;
+        self.notify_event(&row, &e, WebhookEventOrigin::Outgoing)?;
         self.summary_of(&row)
     }
 
@@ -502,7 +525,8 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             failed: 0,
             overruled: 0,
         };
-        self.save_thread(&row)
+        self.save_thread(&row)?;
+        self.notify_event(&row, e, WebhookEventOrigin::Incoming)
     }
 
     fn receive_move(&mut self, e: &Event) -> Result<(), Error> {
@@ -523,6 +547,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             .check_clock(e)
             .map_err(|err| unprocessable(err.to_string()))?;
 
+        let mut overruled = Vec::new();
         let quiet = if row.fold.follows(e) {
             let refusal = row.fold.step(e);
             self.insert_event(e, refusal.as_ref())?;
@@ -531,7 +556,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             // A concurrent move lands before events already held: replay,
             // since it can change what they did.
             self.insert_event(e, None)?;
-            self.replay(&mut row)?;
+            overruled = self.replay(&mut row)?;
             self.sql
                 .query_one(
                     "SELECT ignored IS NOT NULL FROM events WHERE id = ?",
@@ -545,7 +570,25 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         if !quiet {
             row.last_from = e.from.clone();
         }
-        self.save_thread(&row)
+        self.save_thread(&row)?;
+        // A move that changed nothing answers nothing, so no webhook hears
+        // of it.
+        if !quiet {
+            self.notify_event(&row, e, WebhookEventOrigin::Incoming)?;
+        }
+        for id in overruled {
+            let n = Notice {
+                kind: WebhookEventType::ThreadOverruled,
+                origin: WebhookEventOrigin::Incoming,
+                subject: row.fold.id.to_string(),
+                event_id: Some(id),
+                peer: row.peer.clone(),
+                state: Some(row.fold.state),
+                my_turn: Some(row.fold.turn() == Some(&self.me)),
+            };
+            self.notify(&n)?;
+        }
+        Ok(())
     }
 
     /// Replays a thread from its stored events, without their bodies, and
