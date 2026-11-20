@@ -1,7 +1,8 @@
 #!/bin/sh
-# Smoke-tests cpd-worker under `wrangler dev` (local workerd): the Worker
-# reaches the Durable Object, which serves health and the event stream, and
-# the cron trigger reaches the object.
+# Tests cpd-worker under `wrangler dev` (local workerd): the Worker turns
+# away what it can, the Durable Object serves the API and the event stream,
+# the cron trigger reaches it, and then the conformance suite runs a native
+# daemon against it.
 set -eu
 
 port=${WORKER_PORT:-18787}
@@ -35,11 +36,15 @@ fail() {
 
 [ -x "$wrangler" ] || fail "run npm ci first"
 
+# A throwaway owner token: cpo_ and 32 random bytes in base64url.
+token="cpo_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+
 # setsid makes wrangler a process group leader, so cleanup can end it and
 # everything it starts. (Job control would too, but dash, CI's sh, has none
 # in scripts.)
 setsid "$wrangler" dev --port "$port" --ip 127.0.0.1 --test-scheduled \
-    --persist-to "$tmp/state" >"$tmp/wrangler.log" 2>&1 &
+    --persist-to "$tmp/state" --var CP_NAME:worker --var "CP_URL:$base" \
+    --var "CP_OWNER_TOKEN:$token" >"$tmp/wrangler.log" 2>&1 &
 pid=$!
 
 i=0
@@ -56,8 +61,22 @@ case $health in
 *) fail "unexpected health: $health" ;;
 esac
 
+me=$(curl -fsS --max-time 10 -H "Authorization: Bearer $token" "$base/api/v1/me") ||
+    fail "me request failed"
+case $me in
+*'"name":"worker"'*) ;;
+*) fail "unexpected me: $me" ;;
+esac
+
+# Turned away by the Worker without a token, before the object wakes.
+status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base/api/v1/threads")
+[ "$status" = 401 ] || fail "threads without a token: $status"
+
+status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base/openapi.json")
+[ "$status" = 200 ] || fail "openapi.json: $status"
+
 # The stream stays open, so curl stops it after a few seconds.
-stream=$(curl -s --max-time 3 "$base/api/v1/stream" || true)
+stream=$(curl -s --max-time 3 -H "Authorization: Bearer $token" "$base/api/v1/stream" || true)
 case $stream in
 'retry: 2000'*) ;;
 *) fail "stream did not start with a retry line: $stream" ;;
@@ -72,5 +91,9 @@ esac
 
 status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base/internal/heartbeat")
 [ "$status" = 404 ] || fail "internal path reachable from outside: $status"
+
+CP_CONFORMANCE_URL=$base CP_CONFORMANCE_TOKEN=$token \
+    cargo nextest run --locked --package cp-conformance ||
+    fail "conformance suite failed against the worker"
 
 echo "worker smoke: ok"

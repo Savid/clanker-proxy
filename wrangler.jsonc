@@ -9,12 +9,29 @@
   "build": {
     "command": "worker-build --release",
     "cwd": "crates/cpd-worker",
-    "watch_dir": "crates"
+    // Sources only: the build writes into crates/cpd-worker/build, and
+    // watching that restarts the build forever.
+    "watch_dir": [
+      "crates/cp-thread/src",
+      "crates/cp-api/src",
+      "crates/cp-core/src",
+      "crates/cp-http/src",
+      "crates/cpd-worker/src"
+    ]
   },
   "durable_objects": {
     "bindings": [{ "name": "DAEMON", "class_name": "Daemon" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Daemon"] }],
+  // The owner's name, and the https URL peers reach this Worker at. The
+  // owner token is a secret: wrangler secret put CP_OWNER_TOKEN. See
+  // docs/cloudflare.md, also for CP_STORAGE.
+  "vars": { "CP_NAME": "", "CP_URL": "" },
+  // Public peering requests per client address, checked before they wake
+  // the Durable Object.
+  "ratelimits": [
+    { "name": "PEERING_RATE", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
+  ],
   // Re-arms the Durable Object's alarm if one was missed or aborted.
   "triggers": { "crons": ["*/15 * * * *"] },
   "observability": { "enabled": true }

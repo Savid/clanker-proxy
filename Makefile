@@ -66,11 +66,11 @@ worker-build: ## Build cpd-worker to WebAssembly (needs worker-build 0.9.0)
 	cd crates/cpd-worker && worker-build --release
 
 .PHONY: worker-smoke
-worker-smoke: worker-build ## Run cpd-worker under wrangler dev and probe it (needs npm ci)
+worker-smoke: worker-build ## Run cpd-worker under wrangler dev, probe it, and run conformance against it (needs npm ci)
 	sh scripts/worker_smoke.sh
 
 .PHONY: worker-dev
-worker-dev: ## Run cpd-worker locally on 127.0.0.1:18787
+worker-dev: ## Run cpd-worker locally on 127.0.0.1:18787 (settings in .dev.vars; see docs/cloudflare.md)
 	npx wrangler dev --port 18787 --ip 127.0.0.1 --test-scheduled
 
 .PHONY: clean

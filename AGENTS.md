@@ -14,7 +14,7 @@ purpose.
 
 ```bash
 make lint test      # fmt, clippy (native + wasm32), cargo-deny, xtask deps, shellcheck; tests
-make worker-smoke   # cpd-worker under wrangler dev (needs npm ci and worker-build 0.9.0)
+make worker-smoke   # cpd-worker under wrangler dev, plus conformance against it (needs npm ci, worker-build 0.9.0)
 make check          # everything CI runs
 make fmt
 make test-amp       # node tests for examples/amp; run when changing it
@@ -34,6 +34,10 @@ CP_DIR=/tmp/b target/debug/cpd --name bob --url http://127.0.0.1:18472 --listen 
 curl -s -H "Authorization: Bearer $(cat /tmp/a/owner.token)" http://127.0.0.1:18471/api/v1/me
 ```
 
+`make worker-dev` serves `cpd-worker` on `http://127.0.0.1:18787`, configured
+from `.dev.vars` (see `docs/cloudflare.md`); it peers with native daemons on
+loopback like any other.
+
 ## Layout
 
 - `crates/cp-thread`: event format, workflow, replay, clocks. Pure.
@@ -42,7 +46,8 @@ curl -s -H "Authorization: Bearer $(cat /tmp/a/owner.token)" http://127.0.0.1:18
   `crates/cp-sqlite`: that `Sql` on rusqlite, for `cpd` and tests.
 - `crates/cp-http`: the API over the core for any host: routing from the operation
   table, access before the body is read, dispatch, peer calls, delivery.
-- `crates/cpd`: native host. `crates/cpd-worker`: Worker + Durable Object host.
+- `crates/cpd`: native host. `crates/cpd-worker`: Worker + Durable Object host,
+  built only for wasm32 (empty elsewhere); lint it with the wasm32 clippy.
 - `crates/cpctl`: the CLI. `crates/cp-conformance`: black-box tests over HTTP.
 - `xtask`: repository automation. `api/openapi.json`: generated, committed.
 

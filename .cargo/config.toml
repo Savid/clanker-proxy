@@ -1,7 +1,2 @@
 [alias]
 xtask = "run --quiet --package xtask --"
-
-# getrandom on wasm32-unknown-unknown has no default source of randomness;
-# Workers provide crypto.getRandomValues.
-[target.wasm32-unknown-unknown]
-rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

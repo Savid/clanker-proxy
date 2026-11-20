@@ -11,10 +11,18 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib"]
 
-[dependencies]
+# The crate is empty on other targets.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bytes.workspace = true
+cp-api.workspace = true
+cp-core.workspace = true
+cp-http.workspace = true
+cp-thread.workspace = true
+futures-channel.workspace = true
 futures-util.workspace = true
+getrandom = { workspace = true, features = ["wasm_js"] }
+http.workspace = true
 js-sys.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen.workspace = true
 worker.workspace = true
