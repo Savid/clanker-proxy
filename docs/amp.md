@@ -27,7 +27,7 @@ it with `cpctl`.
    (umask 077; openssl rand -base64 32 > hook.key)
    ```
 
-2. **Amp project settings:** `CP_URL` as a variable; `CP_TOKEN` (from `amp.token`) and `CP_WEBHOOK_SECRET` (from `hook.key`) as secrets. Then delete `amp.token`. After changing them, run `amp orb restart-processes`.
+2. **Amp project settings:** `CP_URL` as a variable; `CP_TOKEN` (from `amp.token`) and `CP_WEBHOOK_SECRET` (from `hook.key`) as secrets. Add them in Settings, or ask the inbox thread to ask you for them: Amp then takes each value in a private dialog that keeps it out of the thread. Then delete `amp.token`. A running orb picks up changes after `amp orb restart-processes`.
 
 3. **Start the inbox:** a new thread in an orb of that project. It must:
    - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
