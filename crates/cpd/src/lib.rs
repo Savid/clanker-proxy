@@ -50,6 +50,9 @@ impl Daemon {
         create_dir(&opts.dir)?;
         let token = owner_token(&opts.dir.join(TOKEN_FILE))?;
         let sql = Sqlite::open(&opts.dir.join(DB_FILE)).map_err(|e| e.to_string())?;
+        // One transaction, so a migration applies whole or not at all; on
+        // failure the dropped connection rolls it back.
+        sql.begin().map_err(|e| e.to_string())?;
         let core = Core::open(
             sql,
             OsRuntime,
@@ -59,6 +62,7 @@ impl Daemon {
             },
         )
         .map_err(|e| e.detail)?;
+        core.sql().commit().map_err(|e| e.to_string())?;
         let (name, url) = (core.me().clone(), core.url().cloned());
         let host = NativeHost::start(core, token, opts.version)?;
 

@@ -298,6 +298,53 @@ bounded!(
     }
 );
 
+bounded!(
+    /// A daemon's release, as `--version` prints it: `v` and a semantic
+    /// version.
+    Version,
+    |s| if (2..=32).contains(&s.len())
+        && s.starts_with('v')
+        && s.bytes()
+            .skip(1)
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'+'))
+    {
+        Ok(s)
+    } else {
+        Err(Invalid(format!(
+            "version {s:?}: want v and a semantic version"
+        )))
+    },
+    Bounds {
+        min: Some(2),
+        max: 32,
+        pattern: Some("^v[0-9A-Za-z.+-]{1,31}$"),
+        write_only: false,
+        description: "A daemon's release.",
+        example: Some("v0.2.2"),
+    }
+);
+
+impl Version {
+    /// Major, minor and patch, ignoring any pre-release or build suffix;
+    /// `None` for a version that is not semantic.
+    pub fn triple(&self) -> Option<(u64, u64, u64)> {
+        let core = self.as_str().get(1..)?.split(['-', '+']).next()?;
+        let mut parts = core.split('.').map(str::parse::<u64>);
+        let v = (
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+            parts.next()?.ok()?,
+        );
+        parts.next().is_none().then_some(v)
+    }
+
+    /// Whether this is a later release than `other`; false when either is
+    /// not a semantic version.
+    pub fn newer_than(&self, other: &Version) -> bool {
+        matches!((self.triple(), other.triple()), (Some(a), Some(b)) if a > b)
+    }
+}
+
 fn header_name(s: String) -> Result<String, Invalid> {
     let token = |c: u8| c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c);
     if (1..=64).contains(&s.len()) && s.bytes().all(token) {

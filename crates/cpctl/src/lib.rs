@@ -6,6 +6,7 @@ mod cli;
 mod client;
 mod fail;
 mod output;
+mod update;
 mod webhooks;
 
 use std::fmt::Write as _;
@@ -42,6 +43,10 @@ pub struct Env {
     pub token: Option<String>,
     pub dir: Option<String>,
     pub home: Option<String>,
+    /// Where to ask for the newest release; `None` skips the check.
+    pub releases: Option<String>,
+    /// Where to remember the answer for a day.
+    pub cache: Option<String>,
 }
 
 impl Env {
@@ -52,6 +57,12 @@ impl Env {
             token: var("CP_TOKEN"),
             dir: var("CP_DIR"),
             home: var("HOME"),
+            releases: var("CP_NO_UPDATE_CHECK")
+                .is_none()
+                .then(|| update::LATEST_API.to_string()),
+            cache: var("XDG_CACHE_HOME")
+                .or_else(|| var("HOME").map(|h| format!("{h}/.cache")))
+                .map(|d| format!("{d}/clanker-proxy/latest-release")),
         }
     }
 
@@ -112,6 +123,10 @@ pub async fn run(
             client,
             json,
             stdout: String::new(),
+            updates: env.releases.clone().map(|url| update::Updates {
+                url,
+                cache: env.cache.clone().map(std::path::PathBuf::from),
+            }),
         },
         Err(f) => return report(&f, json),
     };
@@ -163,6 +178,7 @@ struct App {
     client: Client,
     json: bool,
     stdout: String,
+    updates: Option<update::Updates>,
 }
 
 fn now() -> i64 {
@@ -314,10 +330,22 @@ impl App {
         }
     }
 
+    /// The newest release, unless checks are off or the output is JSON.
+    async fn latest(&self) -> Option<cp_api::Version> {
+        match (&self.updates, self.json) {
+            (Some(u), false) => u.latest().await,
+            _ => None,
+        }
+    }
+
     async fn me(&mut self) -> Result<(), Failure> {
         let (me, raw): (Me, _) = self.client.get("/api/v1/me").await?;
         let agent = self.client.is_agent();
+        let notice = update::notice(self.latest().await.as_ref(), &me.version);
         self.print(&raw, |w| {
+            if let Some(n) = &notice {
+                let _ = writeln!(w, "{n}");
+            }
             if agent {
                 let scope = me.peers.as_ref().filter(|p| !p.is_empty()).map_or_else(
                     || "every peer".to_string(),
@@ -366,6 +394,23 @@ impl App {
 
     async fn peer_ls(&mut self) -> Result<(), Failure> {
         let (l, raw): (PeerList, _) = self.client.get("/api/v1/peers").await?;
+        // Peers on a newer release are the nudge to update: they may rely on
+        // fixes this daemon lacks.
+        let mut ahead = Vec::new();
+        if !self.json && l.peers.iter().any(|p| p.version.is_some()) {
+            let mine = self.client.get::<Me>("/api/v1/me").await.ok();
+            if let Some(mine) = mine.and_then(|(m, _)| cp_api::Version::try_from(m.version).ok()) {
+                for p in &l.peers {
+                    if let Some(v) = p.version.as_ref().filter(|v| v.newer_than(&mine)) {
+                        ahead.push(format!(
+                            "{} runs {v}, newer than this cpd ({mine}): update, see {}",
+                            p.name,
+                            update::RELEASES
+                        ));
+                    }
+                }
+            }
+        }
         self.print(&raw, |w| {
             if l.peers.is_empty() {
                 w.push_str("no peers\n");
@@ -379,6 +424,9 @@ impl App {
                 return;
             }
             output::peers(w, &l.peers);
+            for line in &ahead {
+                let _ = writeln!(w, "{line}");
+            }
             next(
                 w,
                 &[

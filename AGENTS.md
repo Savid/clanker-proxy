@@ -104,8 +104,11 @@ all of it except publishing.
   table test; `cp-core/tests/simulation.rs` must keep converging.
 - Never log or print tokens or peer secrets; hold them as
   `secrecy::SecretString`.
-- Hard cutover: no backward compatibility, migrations, shims or deprecated
-  paths. A schema change bumps the schema version; old data is refused.
+- Upgrades keep data and peers: a storage change is a new entry appended to
+  `MIGRATIONS` in `cp-core/src/schema.rs` (never edit a shipped one, and
+  test it on data from the previous release). Daemons stay wire-compatible
+  with the previous minor release. Patch releases change neither storage
+  nor the wire format, so they are always safe to roll out or back.
 - Comments say what the code cannot: why, constraints, non-obvious
   consequences. No restating code, no history, no references to plans,
   reviews or tickets.

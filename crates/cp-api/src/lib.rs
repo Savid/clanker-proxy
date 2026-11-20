@@ -15,14 +15,18 @@ pub use error::{Error, ErrorKind, Problem};
 pub use model::*;
 pub use text::{
     Code, Cursor, DaemonUrl, Invalid, MAX_NOTE, MAX_PEERS, MAX_URL, MAX_WEBHOOK_URL, Note,
-    PeerSecret, Peers, RequestRef, ThreadRef, Token, WebhookHeaderName, WebhookHeaderValue,
-    WebhookSecret, WebhookUrl,
+    PeerSecret, Peers, RequestRef, ThreadRef, Token, Version, WebhookHeaderName,
+    WebhookHeaderValue, WebhookSecret, WebhookUrl,
 };
 pub use webhooks::{
     Provider, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin,
     WebhookEventType, WebhookEvents, WebhookHeader, WebhookList, WebhookOrigin, WebhookPayload,
     WebhookType, WebhookUpdate,
 };
+
+/// The header every call between daemons carries: the caller's release, so
+/// owners can see which peers run what.
+pub const VERSION_HEADER: &str = "cp-version";
 
 /// The SSE event name thread changes stream under.
 pub const STREAM_EVENT: &str = "thread";

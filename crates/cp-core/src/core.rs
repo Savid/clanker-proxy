@@ -4,7 +4,7 @@ use cp_api::{DaemonUrl, Error, ErrorKind};
 use cp_thread::{Id, Name};
 
 use crate::runtime::{Millis, Runtime};
-use crate::schema::{SCHEMA_VERSION, STATEMENTS};
+use crate::schema::{BASELINE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS};
 use crate::sql::{Sql, Value, text};
 
 /// Who this daemon is.
@@ -46,34 +46,62 @@ pub struct Core<S, R> {
 }
 
 impl<S: Sql, R: Runtime> Core<S, R> {
-    /// Opens the daemon's storage: creates the schema, refuses data from
-    /// another schema version, and settles the owner's name and URL.
+    /// Opens the daemon's storage: creates the schema on empty storage,
+    /// migrates older data forward, refuses data from a newer release, and
+    /// settles the owner's name and URL. Hosts run it in one transaction, so
+    /// a migration applies whole or not at all.
     pub fn open(sql: S, rt: R, config: Config) -> Result<Self, Error> {
-        for statement in STATEMENTS {
-            sql.execute(statement, &[])?;
+        if let Some(create_meta) = STATEMENTS.first() {
+            sql.execute(create_meta, &[])?;
         }
         let meta = |key: &str| -> Result<Option<String>, Error> {
             sql.query_one("SELECT value FROM meta WHERE key = ?", &[key.into()])?
                 .map(|r| r.text(0).map(str::to_string))
                 .transpose()
         };
-        match meta("schema_version")? {
-            Some(v) if v != SCHEMA_VERSION => {
+        let stored = meta("schema_version")?
+            .map(|v| {
+                v.parse::<u32>().map_err(|_| {
+                    Error::new(ErrorKind::Internal, "stored schema version is not a number")
+                })
+            })
+            .transpose()?;
+        let pending: &[&[&str]] = match stored {
+            None => {
+                for statement in STATEMENTS {
+                    sql.execute(statement, &[])?;
+                }
+                MIGRATIONS
+            }
+            Some(v) if v > SCHEMA_VERSION => {
                 return Err(Error::new(
                     ErrorKind::Internal,
                     format!(
-                        "stored data is schema version {v}, not {SCHEMA_VERSION}; start from empty storage"
+                        "stored data is schema version {v}, from a newer release than this one (schema {SCHEMA_VERSION}); run that release or later"
                     ),
                 ));
             }
-            Some(_) => {}
-            None => {
-                sql.execute(
-                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                    &[SCHEMA_VERSION.into()],
-                )?;
+            Some(v) if v < BASELINE => {
+                return Err(Error::new(
+                    ErrorKind::Internal,
+                    format!(
+                        "stored data is schema version {v}, from a build before the first release; start from empty storage"
+                    ),
+                ));
+            }
+            Some(v) => MIGRATIONS
+                .get(usize::try_from(v - BASELINE).unwrap_or(usize::MAX)..)
+                .unwrap_or_default(),
+        };
+        for migration in pending {
+            for statement in *migration {
+                sql.execute(statement, &[])?;
             }
         }
+        sql.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            &[SCHEMA_VERSION.to_string().into()],
+        )?;
 
         let stored = meta("name")?
             .map(Name::try_from)

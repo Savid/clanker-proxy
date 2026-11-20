@@ -203,12 +203,22 @@ impl<H: Host> Service<H> {
             Route::WrongMethod(methods) => return Ok(Reply::Full(wrong_method(&methods))),
             Route::NotFound => return Err(Error::new(ErrorKind::NotFound, "no such API route")),
         };
-        let caller = self.authenticate(op, bearer(&req)).await?;
+        let version = req
+            .headers()
+            .get(cp_api::VERSION_HEADER)
+            .and_then(|v| v.to_str().ok());
+        let caller = self.authenticate(op, bearer(&req), version).await?;
         self.dispatch(op, caller, &params, &req).await
     }
 
-    /// Checks the caller may call `op`, before the body is read.
-    pub async fn authenticate(&self, op: Op, token: Option<&str>) -> Result<Caller, Error> {
+    /// Checks the caller may call `op`, before the body is read. A peer's
+    /// reported release is recorded with it.
+    pub async fn authenticate(
+        &self,
+        op: Op,
+        token: Option<&str>,
+        version: Option<&str>,
+    ) -> Result<Caller, Error> {
         let token = token.unwrap_or_default().to_string();
         let owner = !token.is_empty()
             && token.starts_with(prefix::OWNER)
@@ -243,8 +253,16 @@ impl<H: Host> Service<H> {
             }
             Access::Peer if token.starts_with(prefix::PEER) => {
                 let t = token.clone();
+                // A malformed report is ignored, not refused: it is only shown.
+                let v = version.and_then(|v| cp_api::Version::try_from(v.to_string()).ok());
                 self.host
-                    .core(move |c| c.authenticate_peer(&t))
+                    .core(move |c| {
+                        let name = c.authenticate_peer(&t)?;
+                        if let Some(v) = &v {
+                            c.note_peer_version(&name, v)?;
+                        }
+                        Ok(name)
+                    })
                     .await
                     .map_err(|e| match e.kind {
                         ErrorKind::Unavailable | ErrorKind::Internal => e,

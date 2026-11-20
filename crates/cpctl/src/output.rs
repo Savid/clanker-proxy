@@ -380,6 +380,7 @@ pub(crate) fn peers(out: &mut String, peers: &[Peer]) {
         "NAME".into(),
         "STATUS".into(),
         "CODE".into(),
+        "VERSION".into(),
         "URL".into(),
     ]];
     let mut requested = false;
@@ -393,6 +394,9 @@ pub(crate) fn peers(out: &mut String, peers: &[Peer]) {
             p.name.to_string(),
             status.into(),
             p.code.to_string(),
+            p.version
+                .as_ref()
+                .map_or_else(|| "-".to_string(), ToString::to_string),
             p.url.to_string(),
         ]);
     }

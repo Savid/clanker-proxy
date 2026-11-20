@@ -24,7 +24,7 @@ pub use peering::{
     CONFIRM_TTL, MAX_PENDING_REQUESTS, Outbound, PendingApproval, REQUEST_TTL, REQUESTS_PER_MINUTE,
 };
 pub use runtime::{Millis, Runtime};
-pub use schema::{SCHEMA_VERSION, STATEMENTS};
+pub use schema::{BASELINE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS};
 pub use sql::{Row, Sql, SqlError, Value};
 pub use tokens::Agent;
 pub use webhooks::{

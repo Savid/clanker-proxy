@@ -1,11 +1,24 @@
 //! The schema both hosts use, verbatim. Times are Unix milliseconds unless
 //! a column says seconds; an event's `at` is seconds, as on the wire.
 
-/// Bumped on every schema change. Stored data at another version is refused:
-/// there are no migrations.
-pub const SCHEMA_VERSION: &str = "2";
+/// The version `STATEMENTS` create: the first released schema.
+pub const BASELINE: u32 = 2;
 
-/// Statements creating the schema, each safe to run again.
+/// Changes since the baseline, in order: entry `i` moves stored data from
+/// version `BASELINE + i` to the next. Append only: deployed data has
+/// already run every shipped entry, so editing one would split installs.
+pub const MIGRATIONS: &[&[&str]] = &[
+    // 3: the release each peer's daemon reports calling this one.
+    &["ALTER TABLE peers ADD COLUMN version TEXT"],
+];
+
+/// The version this build stores data at.
+#[allow(clippy::cast_possible_truncation)] // a handful of migrations
+pub const SCHEMA_VERSION: u32 = BASELINE + MIGRATIONS.len() as u32;
+
+/// Statements creating the baseline schema on empty storage. Frozen: later
+/// changes go in `MIGRATIONS`. The first creates `meta`, which records the
+/// version.
 pub const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,

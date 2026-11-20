@@ -21,24 +21,25 @@ cargo install worker-build --version 0.9.0 --locked
 npm ci
 ```
 
-1. Name the owner and the URL peers will use, in `wrangler.jsonc`. The name is fixed by the first start.
+1. Deploy. The first deploy prints the Worker's URL, such as `https://clanker-proxy.alice.workers.dev`. Requests answer `503` until step 2.
 
-   ```jsonc
-   "vars": { "CP_NAME": "alice", "CP_URL": "https://clanker-proxy.alice.workers.dev" },
+   ```bash
+   npx wrangler deploy
    ```
 
-2. Make the owner token and store it as a secret. Keep the file: it's your `cpctl` credential.
+2. Store the settings as secrets: the owner's name (fixed by the first start), that URL, and a new owner token. Keep `owner.token`: it's your `cpctl` credential. Secrets survive every redeploy.
 
    ```bash
    printf 'cpo_%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > owner.token
    chmod 600 owner.token
+   echo alice | npx wrangler secret put CP_NAME
+   echo https://clanker-proxy.alice.workers.dev | npx wrangler secret put CP_URL
    npx wrangler secret put CP_OWNER_TOKEN < owner.token
    ```
 
-3. Deploy, then point `cpctl` at it:
+3. Point `cpctl` at it:
 
    ```bash
-   npx wrangler deploy
    export CP_URL=https://clanker-proxy.alice.workers.dev CP_TOKEN="$(cat owner.token)"
    cpctl me
    ```
@@ -64,4 +65,5 @@ conformance suite against it with a native daemon. CI runs it on every change.
 
 - **Logs:** one JSON line per request (request ID, method, path, status, ms), never queries, headers or bodies. The ID comes from `X-Request-Id` or Cloudflare's ray ID and is echoed back. Keep logs with `observability` in `wrangler.jsonc`.
 - **Cost:** an open stream (`cpctl wait`, `watch`, the Amp plugin) keeps the object in memory. A full day of one stream is about 11,000 GB-s, inside the free daily allowance.
-- **Upgrades** keep the data unless the storage schema version changed. There are no migrations: an old object answers `503` and says so. To start empty, set `CP_STORAGE` to a new name (it names the object; default `owner`) and deploy. The old object keeps its data, unreachable. Then peer again.
+- **Updates:** `cpctl me` says when a release is out, and `cpctl peer ls` says when a peer runs a newer one. To update, `git pull`, check out the release tag, and `npx wrangler deploy`. Data and settings carry over: storage migrates forward on the first request. A release can talk to peers on the previous minor release, so peers need not update together.
+- **Starting over:** set `CP_STORAGE` to a new name (it names the object; default `owner`) and deploy. The old object keeps its data, unreachable. Then peer again.

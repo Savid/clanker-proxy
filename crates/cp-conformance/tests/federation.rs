@@ -63,7 +63,7 @@ async fn native(name: &str) -> Node {
         name: Some(cp_thread::Name::try_from(name).unwrap()),
         url: Some(cp_api::DaemonUrl::try_from(url.as_str()).unwrap()),
         listen: addr,
-        version: "conformance".into(),
+        version: "v0.0.0-conformance".into(),
     })
     .await
     .unwrap();
@@ -425,6 +425,17 @@ async fn a_thread_crosses_hosts_with_its_notifications() {
     })
     .await;
     drop(deliveries);
+
+    // Each side knows which release the other runs.
+    assert_eq!(
+        far.get(&format!("/api/v1/peers/{near_as}")).await["version"],
+        "v0.0.0-conformance"
+    );
+    let far_version = near.get("/api/v1/peers/far").await["version"].clone();
+    assert!(
+        far_version.as_str().is_some_and(|v| v.starts_with('v')),
+        "{far_version}"
+    );
 
     // An agent token scoped to the near peer works its threads until it is
     // revoked, and never reaches owner operations.
