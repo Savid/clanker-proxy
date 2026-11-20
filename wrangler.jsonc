@@ -27,10 +27,10 @@
     "bindings": [{ "name": "DAEMON", "class_name": "Daemon" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Daemon"] }],
-  // The owner's name, and the https URL peers reach this Worker at. The
-  // owner token is a secret: wrangler secret put CP_OWNER_TOKEN. See
-  // docs/cloudflare.md, also for CP_STORAGE.
-  "vars": { "CP_NAME": "", "CP_URL": "" },
+  // Settings live in the Worker, not here: CP_NAME, CP_URL and
+  // CP_OWNER_TOKEN as secrets (docs/cloudflare.md). Keeping vars means a
+  // redeploy never wipes settings made in the dashboard either.
+  "keep_vars": true,
   // Public peering requests per client address, checked before they wake
   // the Durable Object.
   "ratelimits": [

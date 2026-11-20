@@ -52,7 +52,10 @@ async fn post<H: Host>(
     bearer: Option<&str>,
     body: Option<Vec<u8>>,
 ) -> Result<Incoming, FetchError> {
-    let mut headers = vec![("user-agent".to_string(), "cpd".to_string())];
+    let mut headers = vec![
+        ("user-agent".to_string(), "cpd".to_string()),
+        (cp_api::VERSION_HEADER.to_string(), h.version().to_string()),
+    ];
     if let Some(b) = bearer {
         headers.push(("authorization".to_string(), format!("Bearer {b}")));
     }

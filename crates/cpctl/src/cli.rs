@@ -823,6 +823,8 @@ Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 
 Environment: CP_URL (default http://127.0.0.1:18471); CP_TOKEN, the owner
 token or an agent token (default: the owner.token in CP_DIR, else ~/.cp).
+cpctl me says when a newer release is out (one GitHub check a day);
+CP_NO_UPDATE_CHECK=1 turns that off.
 Use cpd's direct URL: redirects are refused, and plain http only reaches
 cpd on this machine.
 

@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.2.1"
+    "version": "0.2.2"
   },
   "servers": [
     {
@@ -1881,6 +1881,17 @@
           },
           "url": {
             "$ref": "#/components/schemas/DaemonUrl"
+          },
+          "version": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Version",
+                "description": "The release the peer's daemon last reported calling this one."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -2424,6 +2435,17 @@
         "maxLength": 12,
         "minLength": 1,
         "pattern": "^[0-9]{1,12}$"
+      },
+      "Version": {
+        "type": "string",
+        "description": "A daemon's release.",
+        "examples": [
+          "v0.2.2"
+        ],
+        "writeOnly": false,
+        "maxLength": 32,
+        "minLength": 2,
+        "pattern": "^v[0-9A-Za-z.+-]{1,31}$"
       },
       "Webhook": {
         "type": "object",

@@ -6,7 +6,7 @@ use cp_thread::{
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::text::{Code, Cursor, DaemonUrl, Note, PeerSecret, Peers, RequestRef, Token};
+use crate::text::{Code, Cursor, DaemonUrl, Note, PeerSecret, Peers, RequestRef, Token, Version};
 
 // ---- system ----
 
@@ -124,6 +124,9 @@ pub struct Peer {
     pub status: PeerStatus,
     pub code: Code,
     pub added_at: At,
+    /// The release the peer's daemon last reported calling this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<Version>,
 }
 
 /// Peers, by name.

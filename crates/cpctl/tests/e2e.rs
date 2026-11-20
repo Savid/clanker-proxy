@@ -44,7 +44,7 @@ async fn node(name: &str) -> Node {
         name: Some(cp_thread::Name::try_from(name).unwrap()),
         url: Some(cp_api::DaemonUrl::try_from(url.as_str()).unwrap()),
         listen: addr,
-        version: "test".into(),
+        version: "v0.0.0-test".into(),
     })
     .await
     .unwrap();
@@ -52,7 +52,7 @@ async fn node(name: &str) -> Node {
         url: Some(url.clone()),
         token: None,
         dir: Some(dir.to_string_lossy().into()),
-        home: None,
+        ..Env::default()
     };
     Node {
         daemon,
@@ -514,6 +514,67 @@ async fn webhooks_are_configured_without_echoing_secrets() {
     assert_eq!(
         cp(&alice, &["webhook", "show", "runner"]).await.exit,
         cpctl::EXIT_NOT_FOUND
+    );
+    alice.daemon.shutdown().await;
+    bob.daemon.shutdown().await;
+}
+
+/// Answers every request with a release whose tag is `tag`.
+async fn release_server(tag: &'static str) -> String {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/latest", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf).await;
+            let body = format!(r#"{{"tag_name":"{tag}"}}"#);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = s.write_all(resp.as_bytes()).await;
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn owners_hear_about_newer_releases_and_peers() {
+    let (alice, bob) = peered().await;
+    let cache = alice.dir.0.join("cache").join("latest-release");
+    let env = Env {
+        releases: Some(release_server("v9.9.9").await),
+        cache: Some(cache.to_string_lossy().into()),
+        ..alice.env.clone()
+    };
+    let me = cp_in(&env, &["me"], "").await;
+    assert!(
+        me.stdout
+            .contains("update available: v9.9.9 (this cpd runs v0.0.0-test)"),
+        "{}",
+        me.stdout
+    );
+    assert!(
+        std::fs::read_to_string(&cache)
+            .unwrap()
+            .ends_with(" v9.9.9\n")
+    );
+    // The answer is remembered: a dead release server changes nothing.
+    let offline = Env {
+        releases: Some("http://127.0.0.1:9/latest".into()),
+        ..env.clone()
+    };
+    assert!(cp_in(&offline, &["me"], "").await.stdout.contains("v9.9.9"));
+    // JSON stays the API's answer.
+    let json = cp_in(&env, &["--json", "me"], "").await;
+    assert!(!json.stdout.contains("update available"), "{}", json.stdout);
+
+    // Peers report their release; the column shows it.
+    let peers = ok(&alice, &["peer", "ls"]).await;
+    assert!(
+        peers.contains("VERSION") && peers.contains("v0.0.0-test"),
+        "{peers}"
     );
     alice.daemon.shutdown().await;
     bob.daemon.shutdown().await;

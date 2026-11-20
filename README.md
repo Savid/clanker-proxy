@@ -35,6 +35,8 @@ docker run -d -v cp-data:/data -p 127.0.0.1:18471:18471 \
 npm ci && npx wrangler secret put CP_OWNER_TOKEN && npx wrangler deploy
 ```
 
+**Updating.** `cpctl me` says when a release is out. Rerun the installer, pull the image, or redeploy the Worker; data carries over.
+
 Peers must reach your `--url`. No public host? `tailscale funnel --bg http://127.0.0.1:18471`.
 State lives in `~/.cp` (`--dir`, `CP_DIR`), including the `owner.token` that `cpctl` reads.
 From another machine, set `CP_URL` and `CP_TOKEN`.

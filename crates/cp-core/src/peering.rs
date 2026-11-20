@@ -8,7 +8,7 @@
 use cp_api::{
     Approval, Code, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerSecret,
     PeerStatus, PeeringRequest, ReceiptStatus, Request, RequestList, RequestReceipt, RequestRef,
-    prefix,
+    Version, prefix,
 };
 use cp_thread::Name;
 
@@ -57,9 +57,10 @@ struct PeerRow {
     secret: String,
     status: PeerStatus,
     added_at: Millis,
+    version: Option<Version>,
 }
 
-const PEER_COLUMNS: &str = "name, url, secret, status, added_at";
+const PEER_COLUMNS: &str = "name, url, secret, status, added_at, version";
 
 fn peer_row(r: &Row) -> Result<PeerRow, Error> {
     Ok(PeerRow {
@@ -71,6 +72,10 @@ fn peer_row(r: &Row) -> Result<PeerRow, Error> {
             _ => PeerStatus::Requested,
         },
         added_at: Millis(r.int(4)?),
+        // An unparseable report is shown as none rather than failing reads.
+        version: r
+            .opt_text(5)?
+            .and_then(|v| Version::try_from(v.to_string()).ok()),
     })
 }
 
@@ -82,6 +87,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             status: p.status,
             code: secrets::code(&p.secret)?,
             added_at: p.added_at.at(),
+            version: p.version.clone(),
         })
     }
 
@@ -518,6 +524,15 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     /// The peer whose secret this is. While an approval confirms that
     /// secret, or the one it replaces, calls answer 503 to retry: the other
     /// daemon may act on its acceptance before this one has saved it.
+    /// Records the release `name`'s daemon reported, when it changed.
+    pub fn note_peer_version(&self, name: &Name, version: &Version) -> Result<(), Error> {
+        self.sql.execute(
+            "UPDATE peers SET version = ?1 WHERE name = ?2 AND version IS NOT ?1",
+            &[text(version.as_str()), text(name)],
+        )?;
+        Ok(())
+    }
+
     pub fn authenticate_peer(&self, secret: &str) -> Result<Name, Error> {
         let unknown = || err(ErrorKind::Unauthorized, "unknown peer secret");
         if !secret.starts_with(prefix::PEER) {
