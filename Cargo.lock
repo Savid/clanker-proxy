@@ -296,7 +296,7 @@ checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
 name = "cp-api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cp-thread",
  "secrecy",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "cp-conformance"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cp-api",
  "cp-core",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "cp-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "cp-api",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "cp-http"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "cp-api",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "cp-sqlite"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cp-api",
  "cp-core",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "cp-thread"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "jiff",
  "proptest",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "cpctl"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cp-api",
  "cp-thread",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "cpd"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "clap",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-worker"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytes",
  "cp-api",
@@ -2474,7 +2474,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cp-api",
  "utoipa",

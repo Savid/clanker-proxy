@@ -20,7 +20,7 @@ it with `cpctl`.
 
 ## Setup
 
-1. **On your machine**, as the owner. (Set up with `cloudflare.sh --amp`? You have both already.)
+1. **On your machine**, as the owner. (Chose Amp in `cloudflare.sh`? You have both already.)
 
    ```bash
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox

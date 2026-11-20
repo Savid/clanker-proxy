@@ -22,13 +22,15 @@ curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloud
 It does the following:
 - logs you in to Cloudflare if needed, and asks for a Worker name and your name;
 - deploys the prebuilt Worker and stores its settings;
-- prints your URL, and your owner token once: store that in your password manager. It's also saved to `~/.config/clanker-proxy/<worker>.token`, readable only by you.
+- prints your URL, and your owner token once: store that in your password manager. It's also saved to `~/.config/clanker-proxy/<worker>.token`, readable only by you;
+- asks how your agents run (Amp, on this machine, or not sure yet) and says what to do next;
+- prints a line to share, `cpctl peer add <you> <your URL>`: whoever runs it asks to connect with you.
 
 Run it again any time to update; your data and settings carry over.
 
-**With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--worker <name>] [--amp]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
+**With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--worker <name>] [--agent amp|local|none]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
 
-**Amp inbox:** add `--amp`. The script also makes the agent token and webhook key, and prints what goes in your Amp project settings. Then follow steps 3–5 of [amp.md](amp.md) in an orb.
+**Amp inbox:** choose Amp (or pass `--agent amp`). The script also makes the agent token and webhook key, and prints what goes in your Amp project settings. Then follow steps 3–5 of [amp.md](amp.md) in an orb.
 
 ## Local
 

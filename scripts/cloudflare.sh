@@ -5,7 +5,7 @@
 #   curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloudflare.sh | sh
 #
 # On a terminal it asks what it needs. Without one (an agent running it),
-# pass the answers: --name <owner> [--worker <name>] [--amp].
+# pass the answers: --name <owner> [--worker <name>] [--agent amp|local|none].
 # Secrets are shown only on a terminal, never on standard output, so they
 # stay out of logs and agent transcripts; files hold them either way.
 set -eu
@@ -25,7 +25,9 @@ Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
                      https://<name>.<your-subdomain>.workers.dev
   --url <url>        the URL peers use, if not the workers.dev one
   --token-file <f>   use the owner token in this file
-  --amp              also make the agent token and webhook key an Amp inbox needs
+  --agent <how>      how your agents run: amp (Amp orbs: also makes the agent
+                     token and webhook key an Amp inbox needs), local (on
+                     this machine), or none (decide later)
   --bundle <file>    deploy this Worker bundle instead of downloading one
 
 Environment: CP_VERSION picks a release (default: the latest);
@@ -71,12 +73,11 @@ valid_name() { # valid_name <value> <max length>
     [ "${#1}" -le "$2" ] && printf '%s' "$1" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
 }
 
-name='' worker='' url='' token_file='' amp='' bundle=''
+name='' worker='' url='' token_file='' agent='' bundle=''
 while [ "$#" -gt 0 ]; do
     case $1 in
         -h | --help) usage; exit 0 ;;
-        --amp) amp=yes; shift; continue ;;
-        --name | --worker | --url | --token-file | --bundle) ;;
+        --name | --worker | --url | --token-file | --bundle | --agent) ;;
         *) fail "unknown option $1 (see --help)" ;;
     esac
     [ "$#" -ge 2 ] || fail "$1 needs a value (see --help)"
@@ -86,9 +87,15 @@ while [ "$#" -gt 0 ]; do
         --url) url=$2 ;;
         --token-file) token_file=$2 ;;
         --bundle) bundle=$2 ;;
+        --agent) agent=$2 ;;
     esac
     shift 2
 done
+
+case $agent in
+    '' | amp | local | none) ;;
+    *) fail "--agent takes amp, local or none" ;;
+esac
 
 for tool in node npm curl tar; do
     command -v "$tool" >/dev/null 2>&1 || fail "needs $tool (Node.js 20+ and curl)"
@@ -186,11 +193,31 @@ deploy() {
     done
 }
 
+# What to send someone so they can connect: the command they run.
+share() {
+    say ""
+    say "Share this with anyone you want to connect with:"
+    say "  cpctl peer add $1 $2"
+    say "They run it and send you the code it prints. If it matches the one in"
+    say "cpctl requests, approve it: cpctl approve <id>."
+}
+
 if [ -n "$existing" ]; then
     say "Updating $worker; its settings stay as they are."
     deploy
     found=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
-    say "Updated: ${url:-$found} now runs $version."
+    url=${url:-$found}
+    say "Updated: $url now runs $version."
+    # With the owner token here, the share line can name the owner.
+    saved=${token_file:-$config/$worker.token}
+    if [ -s "$saved" ]; then
+        (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$saved")" >"$tmp/auth")
+        owner=$(curl -fsS -H @"$tmp/auth" "$url/api/v1/me" 2>/dev/null |
+            sed -n 's/.*"name":"\([^"]*\)".*/\1/p' || true)
+        if [ -n "$owner" ]; then
+            share "$owner" "$url"
+        fi
+    fi
     exit 0
 fi
 
@@ -253,12 +280,20 @@ show ""
 show "OWNER TOKEN, shown once: store it in your password manager."
 show "  $(cat "$token_file")"
 
-if [ -z "$amp" ] && [ -n "$tty" ]; then
-    if [ "$(ask "Prepare an Amp inbox (agent token and webhook key)? (y/n)" n)" = y ]; then
-        amp=yes
+if [ -z "$agent" ]; then
+    if [ -n "$tty" ]; then
+        printf '\nHow do your agents run?\n  1) Amp (orbs)\n  2) On this machine: Claude Code, Codex, any CLI agent\n  3) Not sure yet\n' >"$tty"
+        case $(ask "Choose" 3) in
+            1) agent=amp ;;
+            2) agent=local ;;
+            *) agent=none ;;
+        esac
+    else
+        agent=none
     fi
 fi
-if [ "$amp" = yes ]; then
+
+if [ "$agent" = amp ]; then
     agent_file=$config/$worker.amp-inbox.token
     key_file=$config/$worker.amp-webhook.key
     if curl -fsS -H @"$tmp/auth" -H 'content-type: application/json' -d '{"name":"amp-inbox"}' \
@@ -280,11 +315,23 @@ if [ "$amp" = yes ]; then
 fi
 
 say ""
-say "next:"
-say "  curl -fsSL $repo/releases/latest/download/install.sh | sh   install cpctl"
-say "  export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\"   use it (add to your shell profile)"
-say "  cpctl peer add <name> <their url>   connect to a friend"
-if [ "$amp" = yes ]; then
-    say "  $repo/blob/master/docs/amp.md   finish the Amp inbox (steps 3-5)"
-fi
-say "  run this script again   update to a newer release"
+say "Use it from this machine:"
+say "  curl -fsSL $repo/releases/latest/download/install.sh | sh"
+say "  export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\"   (add to your shell profile)"
+case $agent in
+    local)
+        say ""
+        say "Then tell your agent: run cpctl help. It's the manual written for agents."
+        ;;
+    amp)
+        say ""
+        say "Then in Amp, start a thread in an orb of that project and ask it to make"
+        say "itself your clanker-proxy inbox, following steps 3-5 of"
+        say "  $repo/blob/master/docs/amp.md"
+        say "When it shows the webhook URL, save it to a file and run:"
+        say "  cpctl webhook add amp --url-file <file> --secret-file $key_file --origin incoming"
+        ;;
+esac
+share "$name" "$url"
+say ""
+say "Run this script again any time to update."
