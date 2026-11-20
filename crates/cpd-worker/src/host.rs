@@ -244,6 +244,6 @@ impl Host for DoHost {
     }
 
     fn version(&self) -> &'static str {
-        env!("CARGO_PKG_VERSION")
+        concat!("v", env!("CARGO_PKG_VERSION"))
     }
 }

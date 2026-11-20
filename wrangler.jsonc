@@ -6,6 +6,10 @@
   // A peer's daemon may be another Worker on the same account; without this
   // flag that fetch fails with error 1042.
   "compatibility_flags": ["global_fetch_strictly_public"],
+  // Served at <name>.<account>.workers.dev. Preview URLs would expose each
+  // uploaded version at its own address, which peers never need.
+  "workers_dev": true,
+  "preview_urls": false,
   "build": {
     "command": "worker-build --release",
     "cwd": "crates/cpd-worker",
