@@ -26,7 +26,7 @@ it with `cpctl`.
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
    ```
 
-2. **Amp project settings:** `CP_URL` as a variable and `CP_TOKEN` (the token) as a secret. Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread. A running orb picks up changes after `amp orb restart-processes`.
+2. **Amp project settings:** `CP_URL` and `CP_TOKEN` (the token). Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread, and saves it as a secret. A secret is an environment variable in the orb too; Amp just hides its value in output. A running orb picks up changes after `amp orb restart-processes`.
 
 3. **Start the inbox:** a new thread in an orb of that project. It must:
    - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
