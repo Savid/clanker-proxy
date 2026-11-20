@@ -17,6 +17,7 @@ cp-core = { path = "crates/cp-core" }
 cp-http = { path = "crates/cp-http" }
 cp-sqlite = { path = "crates/cp-sqlite" }
 cp-thread = { path = "crates/cp-thread" }
+cpd = { path = "crates/cpd" }
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

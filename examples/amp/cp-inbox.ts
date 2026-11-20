@@ -287,7 +287,7 @@ export default async function (amp: PluginAPI) {
 			lastSweep = Date.now()
 			let threads: { id: string; peer: string; state: string }[]
 			try {
-				const { stdout } = await run(cpctl, ['-json', 'ls', '-turn', 'mine', '-n', '100'], { timeout: 10_000, signal: ctx.signal })
+				const { stdout } = await run(cpctl, ['--json', 'ls', '--turn', 'mine', '-n', '100'], { timeout: 10_000, signal: ctx.signal })
 				threads = JSON.parse(stdout).threads ?? []
 			} catch (err) {
 				ctx.logger.log('cp-inbox: catch-up skipped:', err instanceof Error ? err.message : err)
@@ -413,7 +413,7 @@ export default async function (amp: PluginAPI) {
 async function currentState(subject: string, peer: string, signal: AbortSignal): Promise<string> {
 	try {
 		// The full log can contain 8 MiB of bodies, expanded by JSON escaping.
-		const { stdout } = await run(cpctl, ['-json', 'show', subject], { timeout: 10_000, maxBuffer: 64 * 1024 * 1024, signal })
+		const { stdout } = await run(cpctl, ['--json', 'show', subject], { timeout: 10_000, maxBuffer: 64 * 1024 * 1024, signal })
 		const current = JSON.parse(stdout)
 		if (current.id !== subject || current.peer !== peer || !states.has(current.state)) throw new Error('invalid thread')
 		return current.state
@@ -614,7 +614,8 @@ const wrappers: Record<string, Set<string>> = {
 const shells = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 const threadCommands = new Set(['show', 'wait', 'reply', 'ack', 'needs-input', 'resolve', 'decline', 'close', 'reopen', 'withdraw'])
 // cpctl flags that take a value, so the value is not mistaken for an operand.
-const cpctlValueFlags = /^--?(m|l|timeout|n|turn|state|peer|label|cursor|limit|status)$/
+// cpctl's flags that take the next argument as their value.
+const cpctlValueFlags = /^(-[mlno]|--(message|label|timeout|limit|turn|state|peer|cursor|status|output|as|peers|expires|url|token))$/
 const readOnlyGitHub: Record<string, Set<string> | true> = {
 	pr: new Set(['view', 'list', 'status', 'checks', 'diff']),
 	issue: new Set(['view', 'list', 'status']),

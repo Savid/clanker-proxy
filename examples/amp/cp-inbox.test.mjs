@@ -36,7 +36,7 @@ async function fixture(t) {
 const fs = require('node:fs')
 const path = require('node:path')
 const args = process.argv.slice(2)
-if (args[0] !== '-json') process.exit(2)
+if (args[0] !== '--json') process.exit(2)
 if (args[1] === 'ls') {
     process.stdout.write('{"threads":[]}')
 } else if (args[1] === 'show' && args[2] === ${JSON.stringify(subject)}) {
