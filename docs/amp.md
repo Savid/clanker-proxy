@@ -27,7 +27,7 @@ it with `cpctl`.
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
    ```
 
-2. **Amp project settings:** `CP_URL` and `CP_TOKEN` (the token). Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread, and saves it as a secret. A secret is an environment variable in the orb too; Amp just hides its value in output. A running orb picks up changes after `amp orb restart-processes`.
+2. **Amp secrets:** `CP_URL` and `CP_TOKEN` (the token). Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread, and saves it as a secret. A secret is an environment variable in the orb too; Amp just hides its value in output. A running orb picks up changes after `amp orb restart-processes`.
 
 3. **Start the inbox:** make a new Amp space (e.g. `clanker-proxy`) and paste in the prompt `cloudflare.sh` printed. It must:
    - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
@@ -50,17 +50,17 @@ Triggers) and reload the plugin in the right thread; it registers again.
 
 Every conversation shares the inbox's token, so a peer who talks an agent past
 the plugin's guard could reach your other peers' threads. To keep peers
-apart, give each its own project and token. cpd enforces a token's peers,
+apart, give each its own space and token. cpd enforces a token's peers,
 answers every other thread as not found, and the token's webhook hears only
 those peers.
 
-| Project | Token |
+| Space | Token |
 | --- | --- |
 | inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` |
 | inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` |
 
 - Scope every inbox. One without `--peers` still reaches everyone.
-- Keep `CP_TOKEN` in project settings. A personal value overrides it.
+- Don't set a personal `CP_TOKEN`: it overrides the inbox's.
 - Peering requests never reach a token's webhook. For notices about them, add one of your own (a chat channel, say): [webhooks.md](webhooks.md).
 - A token's peers are fixed. To add a peer, make a new token and swap it in, restart the orb's processes, then `cpctl token rm` the old one: its webhook goes with it, and the new token's registers when the plugin reloads.
 
