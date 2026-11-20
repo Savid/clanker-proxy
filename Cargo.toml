@@ -14,12 +14,23 @@ publish = false
 base64 = "0.23"
 cp-api = { path = "crates/cp-api" }
 cp-core = { path = "crates/cp-core" }
+cp-http = { path = "crates/cp-http" }
 cp-sqlite = { path = "crates/cp-sqlite" }
 cp-thread = { path = "crates/cp-thread" }
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+getrandom = "0.4"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "server-graceful"] }
 jiff = { version = "1", default-features = false, features = ["alloc", "serde"] }
 js-sys = "0.3"
+matchit = "0.9"
 proptest = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.43", default-features = false, features = ["bundled", "cache"] }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
@@ -28,6 +39,9 @@ serde_urlencoded = "0.7"
 sha2 = "0.11"
 subtle = "2"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 url = "2"
 utoipa = "6"
 wasm-bindgen = "0.2"
