@@ -66,26 +66,31 @@ those peers.
 ## Persist the setup
 
 Commit `.amp/plugins/cp-inbox.ts` and an executable `.agents/setup` so
-future orbs get both; Amp snapshots the result. Pin the release your daemon
-runs:
+future orbs get both; Amp snapshots the result. The script installs the
+`cpctl` matching the release your daemon runs, so it follows the daemon when
+you update it:
 
 ```sh
 #!/bin/sh
 set -eu
-cp_version=vX.Y.Z
 bin="$HOME/.local/bin"
-if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $cp_version" ]; then
+# The daemon's release, read with the agent token from the project settings.
+version=$(curl -fsS -H "Authorization: Bearer $CP_TOKEN" "$CP_URL/api/v1/me" |
+    sed -n 's/.*"version":"\(v[0-9][^"]*\)".*/\1/p')
+[ -n "$version" ] || { echo "cannot read the daemon's release from CP_URL" >&2; exit 1; }
+if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $version" ]; then
     installer=$(mktemp)
     trap 'rm -f "$installer"' EXIT
-    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$cp_version/install.sh" -o "$installer"
-    CP_VERSION="$cp_version" CP_INSTALL_DIR="$bin" sh "$installer"
+    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$version/install.sh" -o "$installer"
+    CP_VERSION="$version" CP_INSTALL_DIR="$bin" sh "$installer"
 fi
 "$bin/cpctl" --version
 ```
 
-To upgrade, bump the pin and the plugin together, run the script, reload the
-plugin, and commit. If new orbs still get the old setup, delete the project's
-cached snapshot in its Orb settings. Never commit tokens, keys, webhook URLs or
+After you update the daemon, new orbs install the matching `cpctl`; in a
+running orb, run `.agents/setup` again. Take the plugin file from the same
+release, reload it, and commit. If new orbs still get the old setup, delete
+the project's cached snapshot in its Orb settings. Never commit tokens or
 `cp-inbox/state.json`.
 
 ## What agents may do alone
