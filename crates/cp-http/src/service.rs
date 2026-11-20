@@ -55,7 +55,7 @@ pub struct Service<H> {
     router: Router,
 }
 
-fn problem(e: &Error) -> http::Response<Bytes> {
+pub(crate) fn problem(e: &Error) -> http::Response<Bytes> {
     let body = serde_json::to_vec(&e.problem()).unwrap_or_default();
     let mut b = http::Response::builder()
         .status(e.kind.status())
@@ -96,18 +96,33 @@ fn empty() -> Reply {
 
 /// The error every authentication failure gets: which part was wrong is not
 /// the caller's business.
-fn unauthorized() -> Error {
+pub(crate) fn unauthorized() -> Error {
     Error::new(ErrorKind::Unauthorized, "missing or invalid bearer token")
 }
 
 fn bearer(req: &http::Request<Bytes>) -> Option<&str> {
-    let v = req
-        .headers()
-        .get(http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?;
-    let (scheme, token) = v.split_once(' ')?;
+    bearer_token(
+        req.headers()
+            .get(http::header::AUTHORIZATION)?
+            .to_str()
+            .ok()?,
+    )
+}
+
+/// The token in an `Authorization: Bearer` header value.
+pub(crate) fn bearer_token(header: &str) -> Option<&str> {
+    let (scheme, token) = header.split_once(' ')?;
     scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+}
+
+/// 405 with the methods the path does take.
+pub(crate) fn wrong_method(methods: &[cp_api::Method]) -> http::Response<Bytes> {
+    let allow: Vec<&str> = methods.iter().map(|m| m.as_str()).collect();
+    let mut r = problem(&Error::new(ErrorKind::MethodNotAllowed, ""));
+    if let Ok(v) = http::HeaderValue::from_str(&allow.join(", ")) {
+        r.headers_mut().insert(http::header::ALLOW, v);
+    }
+    r
 }
 
 fn decode<T: DeserializeOwned>(req: &http::Request<Bytes>) -> Result<T, Error> {
@@ -185,14 +200,7 @@ impl<H: Host> Service<H> {
     async fn serve(&self, req: http::Request<Bytes>) -> Result<Reply, Error> {
         let (op, params) = match self.router.route(req.method(), req.uri().path()) {
             Route::Found(op, params) => (op, params),
-            Route::WrongMethod(methods) => {
-                let allow: Vec<&str> = methods.iter().map(|m| m.as_str()).collect();
-                let mut r = problem(&Error::new(ErrorKind::MethodNotAllowed, ""));
-                if let Ok(v) = http::HeaderValue::from_str(&allow.join(", ")) {
-                    r.headers_mut().insert(http::header::ALLOW, v);
-                }
-                return Ok(Reply::Full(r));
-            }
+            Route::WrongMethod(methods) => return Ok(Reply::Full(wrong_method(&methods))),
             Route::NotFound => return Err(Error::new(ErrorKind::NotFound, "no such API route")),
         };
         let caller = self.authenticate(op, bearer(&req)).await?;

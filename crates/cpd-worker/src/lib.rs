@@ -1,41 +1,200 @@
-//! clanker-proxy's daemon on Cloudflare: a Worker that routes every API
-//! request to the single Durable Object holding the owner's state.
+//! clanker-proxy's daemon on Cloudflare: a Worker that turns away what it
+//! can without state, and one Durable Object holding the owner's daemon.
+//!
+//! It exists only for WebAssembly; on other targets the crate is empty, so
+//! the workspace builds and lints natively too.
+#![cfg(target_arch = "wasm32")]
 
+mod host;
 mod sql;
+mod stream;
 
-use std::time::Duration;
+use std::sync::OnceLock;
 
-use futures_util::{StreamExt, stream};
+use bytes::Bytes;
+use cp_api::{DaemonUrl, Error, ErrorKind, MAX_REQUEST_BODY, Op, prefix};
+use cp_http::{Gate, Host as _, Reply, Service};
+use cp_thread::Name;
+use futures_util::StreamExt as _;
 use worker::{
-    Context, Date, Delay, DurableObject, Env, Headers, Request, Response, Result, ScheduleContext,
+    Context, DurableObject, Env, Headers, Request, Response, Result, ScheduleContext,
     ScheduledEvent, State, durable_object, event,
 };
 
-/// Bumped on every schema change; a stored version that differs is refused,
-/// since there are no migrations.
-const SCHEMA_VERSION: i64 = 1;
+use crate::host::{DoHost, now_ms};
 
-/// The internal path the cron heartbeat uses. The Worker never forwards
-/// outside requests to it.
+/// The internal path the cron heartbeat uses. The Worker forwards only
+/// operation-table routes, so outside requests never reach it.
 const HEARTBEAT: &str = "/internal/heartbeat";
 
-/// How often an open stream is pinged, below common proxy idle timeouts.
-const PING_EVERY: Duration = Duration::from_secs(15);
+/// How far ahead the alarm is kept with nothing due, so a lost alarm is
+/// noticed; the cron heartbeat re-arms it too.
+pub(crate) const ALARM_HORIZON_MS: i64 = 60 * 60 * 1000;
 
-/// The alarm the heartbeat keeps armed, so a missed or aborted alarm is
-/// replaced within one cron period.
-const ALARM_HORIZON: Duration = Duration::from_hours(1);
+/// Outbound requests one alarm may make, under the Workers free plan's 50
+/// subrequests per invocation; more is left to the next alarm, set at once.
+const SUBREQUESTS: u32 = 40;
 
+/// After an alarm fails, how long until it tries again.
+const ALARM_RETRY_MS: i64 = 60 * 1000;
+
+/// The OpenAPI document this build serves.
+const SPEC: &str = include_str!("../../../api/openapi.json");
+
+/// Public peering requests, limited per client address before they wake the
+/// object; the daemon also limits them itself.
+const PEERING_LIMITER: &str = "PEERING_RATE";
+
+fn gate() -> &'static Gate {
+    static GATE: OnceLock<Gate> = OnceLock::new();
+    GATE.get_or_init(Gate::new)
+}
+
+/// The Durable Object holding the daemon. `CP_STORAGE` names it, so an
+/// owner can start from empty storage by changing it; the old object is
+/// left as it was.
 fn daemon(env: &Env) -> Result<worker::Stub> {
+    let name = env
+        .var("CP_STORAGE")
+        .map(|v| v.to_string())
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "owner".into());
     env.durable_object("DAEMON")?
-        .id_from_name("owner")?
+        .id_from_name(&name)?
         .get_stub()
+}
+
+/// Sixteen random bytes as hex.
+fn random_id() -> String {
+    let mut b = [0u8; 16];
+    if getrandom::fill(&mut b).is_err() {
+        return "unknown".into();
+    }
+    b.iter().fold(String::with_capacity(32), |mut s, x| {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{x:02x}");
+        s
+    })
+}
+
+/// The caller's request ID if it sent a usable one, else Cloudflare's ray
+/// ID, else a new one.
+fn request_id(req: &Request) -> String {
+    let header = |n: &str| req.headers().get(n).ok().flatten();
+    header("x-request-id")
+        .filter(|v| !v.is_empty() && v.len() <= 128 && v.bytes().all(|c| c.is_ascii_graphic()))
+        .or_else(|| header("cf-ray"))
+        .unwrap_or_else(random_id)
+}
+
+/// One access-log line. Never the query, headers or body: they can carry
+/// tokens or content.
+fn log(id: &str, method: &str, path: &str, status: u16, started: i64) {
+    let line = serde_json::json!({
+        "requestId": id,
+        "method": method,
+        "path": path,
+        "status": status,
+        "tookMs": now_ms() - started,
+    });
+    if status >= 500 {
+        worker::console_warn!("{line}");
+    } else {
+        worker::console_log!("{line}");
+    }
+}
+
+fn to_response(r: http::Response<Bytes>) -> Result<Response> {
+    let headers = Headers::new();
+    for (k, v) in r.headers() {
+        if let Ok(v) = v.to_str() {
+            headers.append(k.as_str(), v)?;
+        }
+    }
+    let status = r.status().as_u16();
+    let body = r.into_body();
+    let builder = worker::ResponseBuilder::new()
+        .with_status(status)
+        .with_headers(headers);
+    // A 204 or an empty answer must have no body at all.
+    Ok(if body.is_empty() {
+        builder.empty()
+    } else {
+        builder.fixed(body.to_vec())
+    })
+}
+
+fn problem(e: &Error) -> Result<Response> {
+    let mut b = http::Response::builder()
+        .status(e.kind.status())
+        .header("content-type", "application/problem+json");
+    if let Some(s) = e.retry_after {
+        b = b.header("retry-after", s.to_string());
+    }
+    to_response(
+        b.body(Bytes::from(
+            serde_json::to_vec(&e.problem()).unwrap_or_default(),
+        ))
+        .unwrap_or_default(),
+    )
+}
+
+fn with_id(mut resp: Response, id: &str) -> Response {
+    let _ = resp.headers_mut().set("x-request-id", id);
+    resp
+}
+
+fn http_method(m: &worker::Method) -> http::Method {
+    http::Method::from_bytes(m.as_ref().as_bytes()).unwrap_or(http::Method::GET)
 }
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    if !req.path().starts_with("/api/v1/") {
-        return Response::error("not found", 404);
+    let started = now_ms();
+    let method = http_method(&req.method());
+    let path = req.path();
+    if method == http::Method::GET && path == "/openapi.json" {
+        let headers = Headers::new();
+        headers.set("content-type", "application/json")?;
+        return Ok(Response::ok(SPEC)?.with_headers(headers));
+    }
+    let authorization = req.headers().get("authorization")?;
+    let length = req
+        .headers()
+        .get("content-length")?
+        .and_then(|v| v.parse::<u64>().ok());
+    let refused = match gate().check(&method, &path, authorization.as_deref(), length) {
+        Err(r) => Some(to_response(*r)?),
+        Ok(Op::RequestPeering) => match env.rate_limiter(PEERING_LIMITER) {
+            Ok(limiter) => {
+                let client = req
+                    .headers()
+                    .get("cf-connecting-ip")?
+                    .unwrap_or_else(|| "unknown".into());
+                // A limiter that fails lets the request through: the daemon
+                // keeps its own limit.
+                let allowed = !matches!(limiter.limit(client).await, Ok(o) if !o.success);
+                if allowed {
+                    None
+                } else {
+                    let mut e = Error::new(
+                        ErrorKind::Unavailable,
+                        "too many peering requests; try again in a minute",
+                    );
+                    e.retry_after = Some(60);
+                    Some(problem(&e)?)
+                }
+            }
+            // Without the binding, the daemon's own limit still applies.
+            Err(_) => None,
+        },
+        Ok(_) => None,
+    };
+    if let Some(resp) = refused {
+        let id = request_id(&req);
+        log(&id, method.as_str(), &path, resp.status_code(), started);
+        return Ok(with_id(resp, &id));
     }
     daemon(&env)?.fetch_with_request(req).await
 }
@@ -52,107 +211,172 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     }
 }
 
-/// Now as RFC 3339 UTC to the second, the API's time format.
-fn now_rfc3339() -> String {
-    let iso = String::from(js_sys::Date::new_0().to_iso_string());
-    iso.get(..19).map_or(iso.clone(), |s| format!("{s}Z"))
-}
-
-#[derive(serde::Deserialize)]
-struct MetaValue {
-    value: String,
+/// The daemon's settings, from the Worker's variables and secrets.
+fn settings(env: &Env) -> std::result::Result<(cp_core::Config, String), String> {
+    let text = |name: &str| -> Option<String> {
+        env.secret(name)
+            .map(|s| s.to_string())
+            .or_else(|_| env.var(name).map(|v| v.to_string()))
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let name = text("CP_NAME").ok_or("set the CP_NAME variable to the owner's name")?;
+    let name = Name::normalize(&name).map_err(|e| format!("CP_NAME: {e}"))?;
+    let url =
+        text("CP_URL").ok_or("set the CP_URL variable to the URL peers reach this Worker at")?;
+    let url = DaemonUrl::try_from(url).map_err(|e| format!("CP_URL: {e}"))?;
+    // Never echoed: only its shape is checked.
+    let token = text("CP_OWNER_TOKEN").ok_or("set the CP_OWNER_TOKEN secret")?;
+    let shaped = token.len() == prefix::OWNER.len() + 43
+        && token.starts_with(prefix::OWNER)
+        && token
+            .bytes()
+            .skip(prefix::OWNER.len())
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_');
+    if !shaped {
+        return Err(
+            "CP_OWNER_TOKEN must be cpo_ followed by 43 base64url characters (32 random bytes)"
+                .into(),
+        );
+    }
+    Ok((
+        cp_core::Config {
+            name: Some(name),
+            url: Some(url),
+        },
+        token,
+    ))
 }
 
 #[durable_object]
 pub struct Daemon {
-    state: State,
-    /// Whether the schema could be created and matches this build.
-    schema: std::result::Result<(), String>,
+    /// The daemon, or why it cannot run.
+    service: std::result::Result<Service<DoHost>, String>,
 }
 
 impl Daemon {
-    fn migrate(state: &State) -> std::result::Result<(), String> {
-        let storage = state.storage();
-        let db = storage.sql();
-        sql::transaction(&storage, move || {
-            db.exec(
-                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-            db.exec(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT DO NOTHING",
-                vec![SCHEMA_VERSION.to_string().into()],
-            )
-            .map_err(|e| e.to_string())?;
-            let stored: MetaValue = db
-                .exec("SELECT value FROM meta WHERE key = 'schema_version'", None)
-                .and_then(|c| c.one())
-                .map_err(|e| e.to_string())?;
-            if stored.value == SCHEMA_VERSION.to_string() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "stored schema version {} is not {SCHEMA_VERSION}; rotate the Durable Object class",
-                    stored.value
-                ))
+    async fn serve(&self, mut req: Request) -> Result<Response> {
+        let started = now_ms();
+        let id = request_id(&req);
+        let method = http_method(&req.method());
+        let path = req.path();
+        let service = match &self.service {
+            Ok(s) => s,
+            Err(why) => {
+                let resp = problem(&Error::new(
+                    ErrorKind::Unavailable,
+                    format!("the daemon cannot start: {why}"),
+                ))?;
+                log(&id, method.as_str(), &path, 503, started);
+                return Ok(with_id(resp, &id));
             }
-        })
-    }
-
-    async fn ensure_alarm(&self) -> Result<()> {
-        let storage = self.state.storage();
-        if storage.get_alarm().await?.is_none() {
-            storage.set_alarm(ALARM_HORIZON).await?;
+        };
+        if path == HEARTBEAT {
+            let next = service.host().core(next_due).await.ok().flatten();
+            service.host().schedule(next).await;
+            return Response::empty();
         }
-        Ok(())
-    }
 
-    fn stream() -> Result<Response> {
-        let pings = stream::unfold((), |()| async {
-            Delay::from(PING_EVERY).await;
-            Some((": ping\n\n".to_string(), ()))
-        });
-        let body = stream::once(async { "retry: 2000\n\n".to_string() })
-            .chain(pings)
-            .map(|frame| Ok::<Vec<u8>, worker::Error>(frame.into_bytes()));
-        let headers = Headers::new();
-        headers.set("content-type", "text/event-stream")?;
-        headers.set("cache-control", "no-cache, no-transform")?;
-        Ok(Response::from_stream(body)?.with_headers(headers))
+        let mut b = http::Request::builder()
+            .method(method.clone())
+            .uri(req.url().map_or_else(
+                |_| path.clone(),
+                |u| match u.query() {
+                    Some(q) => format!("{}?{q}", u.path()),
+                    None => u.path().to_string(),
+                },
+            ));
+        for (k, v) in req.headers().entries() {
+            b = b.header(k, v);
+        }
+        // Read at most one byte past the limit, whatever the client declared.
+        let mut body = Vec::new();
+        if let Ok(mut s) = req.stream() {
+            while let Some(chunk) = s.next().await {
+                body.extend_from_slice(&chunk?);
+                if body.len() > MAX_REQUEST_BODY {
+                    let resp = problem(&Error::new(
+                        ErrorKind::PayloadTooLarge,
+                        format!("body is over {MAX_REQUEST_BODY} bytes"),
+                    ))?;
+                    log(&id, method.as_str(), &path, 413, started);
+                    return Ok(with_id(resp, &id));
+                }
+            }
+        }
+        let Ok(http_req) = b.body(Bytes::from(body)) else {
+            return problem(&Error::new(ErrorKind::Invalid, "malformed request"));
+        };
+        let resp = match service.handle(http_req).await {
+            Reply::Full(r) => to_response(r)?,
+            Reply::Stream(caller) => stream::respond(service.host(), caller)?,
+        };
+        log(&id, method.as_str(), &path, resp.status_code(), started);
+        Ok(with_id(resp, &id))
     }
 }
 
-impl DurableObject for Daemon {
-    fn new(state: State, _env: Env) -> Self {
-        let schema = Self::migrate(&state);
-        if let Err(e) = &schema {
-            worker::console_error!("schema: {e}");
+/// When delivery next has work: peers or webhooks, whichever is sooner.
+fn next_due(c: &mut host::C) -> std::result::Result<Option<i64>, Error> {
+    let peers = c.next_due()?;
+    let hooks = c.next_webhook_due()?;
+    Ok(peers.into_iter().chain(hooks).min().map(|m| m.0))
+}
+
+/// Delivers what is due within the subrequest budget and sets the next
+/// alarm. Never fails: an alarm that throws is retried only a few times.
+async fn deliver(host: &DoHost) {
+    let mut sent = 0;
+    let mut failed = false;
+    match cp_http::peer::deliver(host, SUBREQUESTS).await {
+        Ok(n) => sent += n,
+        Err(e) => {
+            worker::console_error!("deliver: {}", e.problem().title);
+            failed = true;
         }
-        Self { state, schema }
+    }
+    match cp_http::webhooks::deliver(host, SUBREQUESTS.saturating_sub(sent)).await {
+        Ok(n) => sent += n,
+        Err(e) => {
+            worker::console_error!("webhooks: {}", e.problem().title);
+            failed = true;
+        }
+    }
+    let next = if sent >= SUBREQUESTS {
+        Some(now_ms())
+    } else if failed {
+        Some(now_ms() + ALARM_RETRY_MS)
+    } else {
+        match host.core(next_due).await {
+            Ok(next) => next,
+            Err(_) => Some(now_ms() + ALARM_RETRY_MS),
+        }
+    };
+    host.schedule(next).await;
+}
+
+impl DurableObject for Daemon {
+    fn new(state: State, env: Env) -> Self {
+        let storage = state.storage();
+        let service = settings(&env).and_then(|(config, token)| {
+            let core = host::open(&storage, config)?;
+            Ok(Service::new(DoHost::new(state.storage(), core, token)))
+        });
+        if let Err(why) = &service {
+            worker::console_error!("daemon cannot start: {why}");
+        }
+        Self { service }
     }
 
     async fn fetch(&self, req: Request) -> Result<Response> {
-        if self.schema.is_err() {
-            return Response::error("daemon storage is unusable; see the Worker logs", 503);
-        }
-        match req.path().as_str() {
-            HEARTBEAT => {
-                self.ensure_alarm().await?;
-                Response::empty()
-            }
-            "/api/v1/health" => Response::from_json(&serde_json::json!({
-                "status": "ok",
-                "at": now_rfc3339(),
-            })),
-            "/api/v1/stream" => Self::stream(),
-            _ => Response::error("not found", 404),
-        }
+        self.serve(req).await
     }
 
     async fn alarm(&self) -> Result<Response> {
-        worker::console_log!("alarm at {}", Date::now().as_millis());
-        self.ensure_alarm().await?;
+        if let Ok(service) = &self.service {
+            deliver(service.host()).await;
+        }
         Response::empty()
     }
 }

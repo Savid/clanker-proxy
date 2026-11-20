@@ -1,0 +1,22 @@
+[package]
+name = "cp-conformance"
+description = "Black-box tests of clanker-proxy daemons over HTTP, on any host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+cp-api.workspace = true
+cp-core.workspace = true
+cp-thread.workspace = true
+cpd.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

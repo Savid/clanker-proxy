@@ -18,6 +18,16 @@ pub trait MaybeSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T> MaybeSend for T {}
 
+/// `Sync` on native hosts, nothing on WebAssembly.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait MaybeSync: Sync {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Sync> MaybeSync for T {}
+#[cfg(target_arch = "wasm32")]
+pub trait MaybeSync {}
+#[cfg(target_arch = "wasm32")]
+impl<T> MaybeSync for T {}
+
 /// An HTTP request to another daemon or a webhook endpoint.
 #[derive(Clone)]
 pub struct Outgoing {
@@ -90,7 +100,7 @@ impl std::fmt::Display for FetchError {
 }
 
 /// The host: native `cpd`, or the Worker's Durable Object.
-pub trait Host: Clone + MaybeSend + Sync + 'static {
+pub trait Host: Clone + MaybeSend + MaybeSync + 'static {
     type Sql: Sql + 'static;
     type Rt: Runtime + 'static;
 

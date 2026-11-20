@@ -20,6 +20,7 @@ cp-thread = { path = "crates/cp-thread" }
 cpd = { path = "crates/cpd" }
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
+futures-channel = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 getrandom = "0.4"
 hmac = "0.13"
