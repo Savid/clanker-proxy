@@ -21,7 +21,7 @@ usage: cloudflare.sh [options]
 Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
 
   --name <owner>     your name: lower-case letters, digits, single hyphens
-  --worker <name>    the Worker's name (default clanker-proxy); its URL is
+  --worker <name>    the Worker's name (default clanker); its URL is
                      https://<name>.<your-subdomain>.workers.dev
   --url <url>        the URL peers use, if not the workers.dev one
   --token-file <f>   use the owner token in this file
@@ -159,9 +159,61 @@ if ! wr whoami 2>/dev/null | grep -q 'Account ID'; then
     wr login <"$tty" >"$tty" 2>&1 || fail "Cloudflare login failed"
 fi
 
+# ---- which account ----
+
+# Wrangler cannot pick among several accounts while this script reads its
+# output, so the choice is made here.
+if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+    # shellcheck disable=SC2016 # JavaScript, not shell: nothing to expand.
+    wr whoami --json 2>/dev/null | node -e '
+let s = ""
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+    try {
+        for (const a of JSON.parse(s).accounts ?? []) console.log(`${a.id} ${a.name}`)
+    } catch {}
+})' >"$tmp/accounts"
+    count=$(wc -l <"$tmp/accounts" | tr -d ' ')
+    if [ "$count" = 1 ]; then
+        CLOUDFLARE_ACCOUNT_ID=$(cut -d' ' -f1 "$tmp/accounts")
+    elif [ "$count" -gt 1 ]; then
+        [ -n "$tty" ] || fail "several Cloudflare accounts: set CLOUDFLARE_ACCOUNT_ID to the one to use"
+        printf '\nWhich Cloudflare account?\n' >"$tty"
+        awk '{ id = $1; $1 = ""; printf "  %d)%s\n", NR, $0 }' "$tmp/accounts" >"$tty"
+        pick=$(ask "Choose" 1)
+        CLOUDFLARE_ACCOUNT_ID=$(sed -n "${pick}p" "$tmp/accounts" | cut -d' ' -f1)
+        [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || fail "no account $pick"
+    fi
+    export CLOUDFLARE_ACCOUNT_ID
+fi
+
+# The account's workers.dev subdomain, to show the URL a name gives. The
+# token goes from wrangler to the request through a pipe, never an argument
+# or the screen. Empty when it cannot tell; then only the prompt is vaguer.
+subdomain=
+if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+    # shellcheck disable=SC2016 # JavaScript, not shell: nothing to expand.
+    subdomain=$(wr auth token --json 2>/dev/null | node -e '
+let s = ""
+process.stdin.on("data", (d) => (s += d)).on("end", async () => {
+    try {
+        const { token } = JSON.parse(s)
+        const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.argv[1]}/workers/subdomain`, {
+            headers: { authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(10000),
+        })
+        const j = await r.json()
+        if (j.success && /^[a-z0-9-]+$/.test(j.result?.subdomain ?? "")) console.log(j.result.subdomain)
+    } catch {}
+})' "$CLOUDFLARE_ACCOUNT_ID" || true)
+fi
+
 # ---- what to deploy ----
 
-worker=${worker:-$(ask "Worker name (its URL is https://<name>.<your-subdomain>.workers.dev)" clanker-proxy)}
+if [ -n "$subdomain" ]; then
+    worker=${worker:-$(ask "Worker name (its URL will be https://<name>.$subdomain.workers.dev)" clanker)}
+else
+    worker=${worker:-$(ask "Worker name (its URL is https://<name>.<your-subdomain>.workers.dev)" clanker)}
+fi
 valid_name "$worker" 63 || fail "Worker name $worker: lower-case letters, digits and single hyphens"
 
 existing=
@@ -283,13 +335,37 @@ show "  $(cat "$token_file")"
 if [ -z "$agent" ]; then
     if [ -n "$tty" ]; then
         printf '\nHow do your agents run?\n  1) Amp (orbs)\n  2) On this machine: Claude Code, Codex, any CLI agent\n  3) Not sure yet\n' >"$tty"
-        case $(ask "Choose" 3) in
+        case $(ask "Choose" 1) in
             1) agent=amp ;;
             2) agent=local ;;
             *) agent=none ;;
         esac
     else
         agent=none
+    fi
+fi
+
+# ---- cpctl on this machine ----
+
+# The owner approves peers and manages tokens with cpctl here, so it is kept
+# at the Worker's release. Not fatal: the Worker is up either way.
+bin=${CP_INSTALL_DIR:-$HOME/.local/bin}
+cli=
+if [ "$version" != local ]; then
+    if [ "$("$bin/cpctl" --version 2>/dev/null || true)" = "cpctl $version" ]; then
+        cli=$bin/cpctl
+    elif curl -fsSL -o "$tmp/install.sh" "$base/install.sh" &&
+        CP_VERSION=$version CP_INSTALL_DIR=$bin sh "$tmp/install.sh" >"$tmp/install.log" 2>&1; then
+        cli=$bin/cpctl
+        say "Installed cpctl $version in $bin."
+    else
+        say "Could not install cpctl here; the install line below does it."
+    fi
+    if [ -n "$cli" ]; then
+        case :${PATH:-}: in
+            *:"$bin":*) ;;
+            *) say "Add $bin to your PATH." ;;
+        esac
     fi
 fi
 
@@ -304,7 +380,7 @@ secret_line() { # secret_line <label> <file>
 }
 
 use_here() {
-    say "     curl -fsSL $repo/releases/latest/download/install.sh | sh   (once, for cpctl)"
+    [ -n "$cli" ] || say "     curl -fsSL $repo/releases/latest/download/install.sh | sh"
     say "     export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\""
 }
 
@@ -316,24 +392,24 @@ if [ "$agent" = amp ]; then
     elif [ ! -s "$agent_file" ]; then
         fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
     fi
-    pin=$version
-    [ "$pin" != local ] || pin="the latest release"
     say ""
-    say "Set up your Amp inbox. In Amp, start a new thread in an orb of the"
-    say "project the inbox should live in, and send it:"
+    say "Set up your Amp inbox. In Amp, make a new space (e.g. clanker-proxy)"
+    say "and paste this in:"
     say ""
     say "     Make this thread my clanker-proxy inbox. First ask me, in Amp's"
-    say "     private dialog, for two values to save in this project's settings:"
-    say "     CP_URL as an environment variable and CP_TOKEN as a secret. Make"
-    say "     sure this orb picks them up, then follow steps 3-4 and \"Persist the"
-    say "     setup\" in $repo/blob/master/docs/amp.md,"
-    say "     pinning the setup script to $pin."
+    say "     private dialog, for CP_URL and CP_TOKEN, and save both as secrets"
+    say "     in this project's settings. Make sure this orb picks them up, then"
+    say "     follow steps 3-4 and \"Persist the"
+    say "     setup\" in $repo/blob/master/docs/amp.md."
     say ""
     say "When it asks, enter:"
     say "     $(printf '%-9s %s' CP_URL "$url")"
     secret_line CP_TOKEN "$agent_file"
     say ""
     say "The inbox registers itself with your daemon; nothing else to do."
+    say ""
+    say "To approve peers, use cpctl from this machine:"
+    use_here
 else
     say ""
     say "Use it from this machine:"

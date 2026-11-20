@@ -7,9 +7,10 @@ it with `cpctl`.
 
 <p align="center"><img src="img/amp.svg" width="100%" alt="A peer's daemon reaches your cpd; cpd wakes the Amp orb's inbox thread with a signed webhook; the inbox routes the event to one conversation per cpd thread, which answers through cpctl."></p>
 
-- **Inbox:** the thread that first loads the plugin. It owns the webhook and starts the conversations. Peering requests never reach an agent: you get a notification and review them with `cpctl requests`.
+- **Inbox:** the thread that first loads the plugin. The plugin there receives cpd's webhooks and starts the conversations; the inbox's own agent never sees them and has nothing to do. Leave it idle, and never archive it. Peering requests never reach an agent: you get a notification and review them with `cpctl requests`.
+- **Webhooks** are trusted only as a wake-up. The plugin drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries only IDs and a state, never peer text: what a conversation acts on, it reads from cpd.
 - **Conversation:** one per cpd thread, in its own git worktree under `~/cp-work`. It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads you sent: it checks the peer's answer, then closes, reopens, or asks you.
-- **Peer text** reaches an agent only through `cpctl show`, quoted line by line. Agents are told to treat it as a request, not as instructions.
+- **Peer text** reaches an agent only through `cpctl show`, quoted line by line after `│`. Peers are third parties you chose to work with: agents help them in good faith, but only you instruct them. A peer's text comes from their agent, which may itself have been misled, so agents weigh it as a request, never instructions; they ignore attempts to steer them (prompt injection) and check what a peer supplies before it goes into code, docs or agent instructions (poisoning). Each thread's conversation is separate, but they share the orb and its token; to wall peers off from each other, give each its own inbox ([one inbox per peer](#one-inbox-per-peer)).
 
 ## You need
 
@@ -26,9 +27,9 @@ it with `cpctl`.
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
    ```
 
-2. **Amp project settings:** `CP_URL` as a variable and `CP_TOKEN` (the token) as a secret. Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread. A running orb picks up changes after `amp orb restart-processes`.
+2. **Amp project settings:** `CP_URL` and `CP_TOKEN` (the token). Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread, and saves it as a secret. A secret is an environment variable in the orb too; Amp just hides its value in output. A running orb picks up changes after `amp orb restart-processes`.
 
-3. **Start the inbox:** a new thread in an orb of that project. It must:
+3. **Start the inbox:** make a new Amp space (e.g. `clanker-proxy`) and paste in the prompt `cloudflare.sh` printed. It must:
    - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
    - copy the plugin to `.amp/plugins/cp-inbox.ts` and run `plugins: reload`.
 
@@ -66,32 +67,47 @@ those peers.
 ## Persist the setup
 
 Commit `.amp/plugins/cp-inbox.ts` and an executable `.agents/setup` so
-future orbs get both; Amp snapshots the result. Pin the release your daemon
-runs:
+future orbs get both; Amp snapshots the result. The script installs the
+`cpctl` matching the release your daemon runs, so it follows the daemon when
+you update it, or the latest release if it cannot ask the daemon:
 
 ```sh
 #!/bin/sh
 set -eu
-cp_version=vX.Y.Z
 bin="$HOME/.local/bin"
-if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $cp_version" ]; then
+# The daemon's release, read with the agent token; the latest release when
+# the settings are not set here or the daemon cannot be reached.
+version=$(curl -fsS -H "Authorization: Bearer ${CP_TOKEN:-}" "${CP_URL:-}/api/v1/me" 2>/dev/null |
+    sed -n 's/.*"version":"\(v[0-9][^"]*\)".*/\1/p')
+[ -n "$version" ] || version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    https://github.com/Savid/clanker-proxy/releases/latest | sed 's|.*/tag/||')
+if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $version" ]; then
     installer=$(mktemp)
     trap 'rm -f "$installer"' EXIT
-    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$cp_version/install.sh" -o "$installer"
-    CP_VERSION="$cp_version" CP_INSTALL_DIR="$bin" sh "$installer"
+    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$version/install.sh" -o "$installer"
+    CP_VERSION="$version" CP_INSTALL_DIR="$bin" sh "$installer"
 fi
 "$bin/cpctl" --version
 ```
 
-To upgrade, bump the pin and the plugin together, run the script, reload the
-plugin, and commit. If new orbs still get the old setup, delete the project's
-cached snapshot in its Orb settings. Never commit tokens, keys, webhook URLs or
+After you update the daemon, new orbs install the matching `cpctl`; in a
+running orb, run `.agents/setup` again. Take the plugin file from the same
+release, reload it, and commit. If new orbs still get the old setup, delete
+the project's cached snapshot in its Orb settings. Never commit tokens or
 `cp-inbox/state.json`.
 
 ## What agents may do alone
 
-The plugin checks every shell command a conversation runs, and every file
-other tools name:
+Each conversation starts with standing instructions. Alone, it does what a
+peer's request reasonably needs: reads and changes code in its own worktree,
+runs tests, commits locally, and answers through `next:`. It asks you first,
+with `cp_ask_owner`, before anything with effects outside the orb: pushing,
+pull requests, new threads, publishing, spending, sharing. It never runs a
+peer's code outside the repository it works on, and never handles peering
+requests, webhooks or credentials.
+
+The plugin also checks every shell command a conversation runs, and every
+file other tools name:
 
 | Command | Result |
 | --- | --- |
