@@ -342,3 +342,110 @@ async fn the_stream_carries_changes_and_ends_when_its_token_is_revoked() {
     alice.daemon.shutdown().await;
     bob.daemon.shutdown().await;
 }
+
+/// Accepts HTTP requests and keeps their headers and bodies.
+async fn receiver() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<(Vec<(String, String)>, Vec<u8>)>,
+) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let (head, body_start) = loop {
+                let n = s.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    break (String::new(), 0);
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break (String::from_utf8_lossy(&buf[..i]).to_string(), i + 4);
+                }
+            };
+            let headers: Vec<(String, String)> = head
+                .lines()
+                .skip(1)
+                .filter_map(|l| {
+                    l.split_once(':')
+                        .map(|(k, v)| (k.trim().to_lowercase(), v.trim().to_string()))
+                })
+                .collect();
+            let len: usize = headers
+                .iter()
+                .find(|(k, _)| k == "content-length")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0);
+            while buf.len() < body_start + len {
+                let n = s.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let _ = tx.send((
+                headers,
+                buf[body_start..(body_start + len).min(buf.len())].to_vec(),
+            ));
+            let _ = s
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .await;
+        }
+    });
+    (url, rx)
+}
+
+#[tokio::test]
+async fn webhooks_reach_a_receiver_signed() {
+    let (alice, bob) = peered().await;
+    let (url, mut got) = receiver().await;
+    let key = "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=";
+    bob.post(
+        "/api/v1/webhooks",
+        json!({"name": "runner", "type": "generic", "url": url, "events": ["thread.open"], "origin": "incoming", "enabled": true, "secret": key}),
+    )
+    .await;
+    alice
+        .post(
+            "/api/v1/threads",
+            json!({"to": "bob", "title": "private title", "body": "private body"}),
+        )
+        .await;
+    let (headers, body) = tokio::time::timeout(Duration::from_secs(10), got.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let h = |n: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k == n)
+            .map_or_else(String::new, |(_, v)| v.clone())
+    };
+    let want = cp_core::signature(key, &h("webhook-id"), &h("webhook-timestamp"), &body).unwrap();
+    assert_eq!(h("webhook-signature"), want);
+    assert_eq!(h("idempotency-key"), h("webhook-id"));
+    assert_eq!(headers.iter().filter(|(k, _)| k == "user-agent").count(), 1);
+    let text = String::from_utf8(body).unwrap();
+    assert!(
+        text.contains("\"type\":\"thread.open\"") && !text.contains("private"),
+        "{text}"
+    );
+    eventually("delivery recorded", || {
+        let bob = &bob;
+        async move {
+            bob.get("/api/v1/webhooks/runner/deliveries").await["deliveries"][0]["status"]
+                == "delivered"
+        }
+    })
+    .await;
+    alice.daemon.shutdown().await;
+    bob.daemon.shutdown().await;
+}

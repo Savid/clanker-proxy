@@ -3,7 +3,7 @@
 
 /// Bumped on every schema change. Stored data at another version is refused:
 /// there are no migrations.
-pub const SCHEMA_VERSION: &str = "1";
+pub const SCHEMA_VERSION: &str = "2";
 
 /// Statements creating the schema, each safe to run again.
 pub const STATEMENTS: &[&str] = &[
@@ -106,6 +106,40 @@ pub const STATEMENTS: &[&str] = &[
         recipient_clock INTEGER NOT NULL
     ) STRICT",
     "CREATE INDEX IF NOT EXISTS threads_updated ON threads (updated_at DESC, id)",
+    "CREATE TABLE IF NOT EXISTS webhooks (
+        name TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        url TEXT NOT NULL,
+        events TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        peers TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        secret TEXT NOT NULL,
+        headers TEXT NOT NULL,
+        retry_after INTEGER NOT NULL DEFAULT 0,
+        failures INTEGER NOT NULL DEFAULT 0
+    ) STRICT",
+    // sending marks an attempt in flight, so a newer notification for the
+    // same thread does not replace it.
+    "CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        webhook TEXT NOT NULL,
+        event TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        peer TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        next_attempt_at INTEGER NOT NULL,
+        retry_until INTEGER NOT NULL,
+        finished_at INTEGER,
+        last_error TEXT NOT NULL DEFAULT '',
+        sending INTEGER NOT NULL DEFAULT 0
+    ) STRICT",
+    "CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries (webhook, status, next_attempt_at, seq)",
     "CREATE TABLE IF NOT EXISTS agent_tokens (
         name TEXT PRIMARY KEY,
         hash TEXT NOT NULL UNIQUE,

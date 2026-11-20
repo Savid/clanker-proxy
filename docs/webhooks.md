@@ -8,7 +8,7 @@ responses show only the URL's scheme and host, header names, and signing status.
 
 ## Choose a destination
 
-| `-type` | Destination | Authentication | Message format |
+| `--type` | Destination | Authentication | Message format |
 | --- | --- | --- | --- |
 | `generic` (default) | Your HTTP receiver | Optional signing key or custom headers | Event JSON |
 | `discord` | Discord channel webhook | Secret webhook URL | Embed, with mentions disabled |
@@ -34,14 +34,14 @@ you run the command. Avoid pasting secret URLs into shell history.
 
 ```bash
 chmod 600 discord.url
-cpctl webhook add discord -type discord -url-file discord.url \
-  -events '*' -origin both
+cpctl webhook add discord --type discord --url-file discord.url \
+  --events '*' --origin both
 cpctl webhook show discord
 cpctl webhook deliveries discord
 ```
 
-For Slack use `-type slack` with its URL; likewise for `teams`, `google-chat`,
-`mattermost`, and `rocketchat`. `-url-file -` reads a URL from stdin. A positional
+For Slack use `--type slack` with its URL; likewise for `teams`, `google-chat`,
+`mattermost`, and `rocketchat`. `--url-file -` reads a URL from stdin. A positional
 URL is also accepted, which is convenient for receivers without URL secrets.
 
 Chat messages include the event type, peer, origin, state, whose turn it is,
@@ -74,7 +74,7 @@ Provider details:
 
 ### Authentication headers, ntfy, and Gotify
 
-`-headers-file` reads a private JSON object. For a protected ntfy topic:
+`--headers-file` reads a private JSON object. For a protected ntfy topic:
 
 ```json
 {"Authorization":"Bearer YOUR-NTFY-ACCESS-TOKEN"}
@@ -83,11 +83,11 @@ Provider details:
 ```bash
 chmod 600 ntfy-headers.json
 cpctl webhook add phone https://ntfy.example.com/clanker \
-  -type ntfy -headers-file ntfy-headers.json -events '*' -origin both
+  --type ntfy --headers-file ntfy-headers.json --events '*' --origin both
 ```
 
 [ntfy](https://docs.ntfy.sh/publish/) receives a plain-text POST at the **topic
-URL**. Omit `-headers-file` for a topic that does not require authentication.
+URL**. Omit `--headers-file` for a topic that does not require authentication.
 
 For [Gotify](https://gotify.net/docs/pushmsg), put the application token in
 `gotify-headers.json` as `{"X-Gotify-Key":"YOUR-APPLICATION-TOKEN"}`, then:
@@ -95,7 +95,7 @@ For [Gotify](https://gotify.net/docs/pushmsg), put the application token in
 ```bash
 chmod 600 gotify-headers.json
 cpctl webhook add phone https://gotify.example.com/message \
-  -type gotify -headers-file gotify-headers.json -events '*' -origin both
+  --type gotify --headers-file gotify-headers.json --events '*' --origin both
 ```
 
 Headers also support custom receivers and reverse proxies. There can be at most
@@ -113,8 +113,8 @@ webhook types. Run it separately and configure its destinations there, then
 point `cpd` at a saved configuration's `/notify/CONFIG` endpoint:
 
 ```bash
-cpctl webhook add notifications -type apprise -url-file apprise.url \
-  -headers-file apprise-headers.json -events '*' -origin both
+cpctl webhook add notifications --type apprise --url-file apprise.url \
+  --headers-file apprise-headers.json --events '*' --origin both
 ```
 
 Use `Authorization` in the headers file if your Apprise API requires it; omit
@@ -127,10 +127,10 @@ named webhooks give each destination its own retry state.
 
 ## Event subscriptions
 
-Each endpoint takes every peer's events, or with `-peers bob,carol` only those
+Each endpoint takes every peer's events, or with `--peers bob,carol` only those
 peers' thread events: give a peer its own channel, or its own agent. A webhook
 with peers never receives `peering.requested`, since a requester picks the name
-it asks under; `webhook set -peers '*'` goes back to every peer. Each name must
+it asks under; `webhook set --peers '*'` goes back to every peer. Each name must
 be a peer or a former one, and narrowing the list drops queued notifications
 about the peers left out.
 
@@ -147,13 +147,14 @@ Each endpoint subscribes to `*` (all current and future types) or a fixed list:
 | `thread.close` | Either participant closed the thread |
 | `thread.reopen` | Either participant reopened it with a reason |
 | `thread.withdraw` | The sender withdrew it |
+| `thread.overruled` | A move of yours took no effect because the peer's concurrent move came first; `eventId` is your overruled event |
 | `peering.requested` | A new incoming peering request was stored |
 
 Origin is `incoming`, `outgoing`, or `both`, relative to the daemon's owner.
 The default is incoming. Peering requests are always incoming. A thread event
 means the action was stored; concurrent events can leave an action unapplied
-by the workflow. Fetch the current thread and its available actions before
-acting. Transport retries and delivery-status changes generate no notifications.
+by the workflow. When that happens to one of yours, `thread.overruled` says
+so. Fetch the current thread and its available actions before acting. Transport retries and delivery-status changes generate no notifications.
 
 Public peering requests are bounded separately: each endpoint retains only its
 newest 100 peering-request notifications, including pending deliveries. Older
@@ -179,7 +180,7 @@ Unsigned event JSON needs no key:
 
 ```bash
 cpctl webhook add runner https://runner.example.com/hooks/clanker \
-  -type generic -events '*' -origin incoming
+  --type generic --events '*' --origin incoming
 ```
 
 To authenticate with signatures, generate a signing key and securely configure
@@ -188,11 +189,11 @@ the same key on your receiver:
 ```bash
 umask 077
 openssl rand -base64 32 > webhook.key
-cpctl webhook set runner -secret-file webhook.key
+cpctl webhook set runner --secret-file webhook.key
 ```
 
-Passing `-secret-file` when adding a generic webhook also enables signing.
-`cpctl webhook set runner -signing=false` removes the key and disables signing.
+Passing `--secret-file` when adding a generic webhook also enables signing.
+`cpctl webhook set runner --signing=false` removes the key and disables signing.
 Unsigned delivery provides no proof of sender; use the receiver's authentication
 headers or enable signing if it needs to authenticate `cpd`.
 
@@ -269,15 +270,15 @@ or `503` (seconds or HTTP-date) extends the pause, up to one hour. Discord's
 `retry_after` JSON field on `429` is rounded up to whole seconds and uses the
 same cap. When both are present the later time wins.
 `cpctl webhook show <name>` reports `paused until`; any `webhook set`, such as
-`-enabled=true`, or a `webhook retry` ends the pause at once. `lastError` names
+`--enabled=true`, or a `webhook retry` ends the pause at once. `lastError` names
 the failure without the URL or response body: `HTTP <status>`,
 `DNS lookup failed`, `TLS certificate rejected`, `TLS handshake failed`,
 `timed out`, `connection refused`, or `connection failed`.
 
 Delivery is best effort with persistent retries: it can duplicate, and it can
 fail permanently. `cpctl webhook deliveries <name>` shows a page of up to 100
-records. Use `-status failed` to find errors and pass the returned `nextCursor`
-with `-cursor` to read older pages. Completed and failed records are retained for
+records. Use `--status failed` to find errors and pass the returned `nextCursor`
+with `--cursor` to read older pages. Completed and failed records are retained for
 seven days. After fixing a receiver, use `cpctl webhook retry <name> <delivery-id>`
 to retry a failed record with its original ID and body and a fresh seven-day
 retry window.
@@ -285,15 +286,15 @@ retry window.
 New endpoints receive only future matching events. Changing event or origin
 filters affects future events; existing queued deliveries remain. Changing URL,
 custom headers, or signing key affects pending deliveries too. Omitted settings
-are retained. Use `-url-file` to replace the URL and `-headers-file` to replace
-all headers; an empty JSON object clears headers. Omitting `-secret-file` keeps
+are retained. Use `--url-file` to replace the URL and `--headers-file` to replace
+all headers; an empty JSON object clears headers. Omitting `--secret-file` keeps
 the existing key. Signed generic requests carry one signature made with the
 current key, so to rotate it
 have the receiver accept both the old and new keys, then run
-`webhook set <name> -secret-file new.key`, then retire the old key.
+`webhook set <name> --secret-file new.key`, then retire the old key.
 
-Pausing with `-enabled=false` stops new notifications and holds pending ones;
-their retry window continues to expire. Re-enable with `-enabled=true`.
+Pausing with `--enabled=false` stops new notifications and holds pending ones;
+their retry window continues to expire. Re-enable with `--enabled=true`.
 Removing a webhook deletes its configuration and delivery history. A request
 already in flight may finish after changing, pausing, or removing its endpoint.
 

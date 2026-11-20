@@ -241,6 +241,14 @@ export default async function (amp: PluginAPI) {
 				return
 			}
 			const c = state.conversations[n.subject]
+			if (n.type === 'thread.overruled') {
+				// One of this daemon's moves lost a race with the peer's and took
+				// no effect. Only the conversation that made it needs to know.
+				if (c) {
+					await inbox.deliver(ctx, n.subject, n.peer, `Your last move on this thread did not take effect: ${n.peer}'s move came first and the thread is now ${n.state}. Run \`cpctl show ${n.subject}\` and continue from its current state and next: commands.`)
+				}
+				return
+			}
 			if (ended.has(n.type) && endedStates.has(n.state ?? '')) {
 				if (!c) return
 				// Amp retries can deliver a close after the thread was reopened.
@@ -402,7 +410,7 @@ export default async function (amp: PluginAPI) {
 		await ctx.ui.input({
 			title: 'cp-inbox webhook URL',
 			helpText:
-				'Copy it into a private file where you run cpctl as the owner, then run cpctl webhook add with -url-file. Anyone with it can post events: never paste it into a thread.',
+				'Copy it into a private file where you run cpctl as the owner, then run cpctl webhook add with --url-file. Anyone with it can post events: never paste it into a thread.',
 			initialValue: url,
 			secret: true,
 			requireHuman: true,

@@ -74,10 +74,10 @@ if (args[1] === 'ls') {
 		messages, logs,
 		readState: async () => JSON.parse(await readFile(stateFile, 'utf8')),
 		respond: async (response) => writeFile(responseFile, JSON.stringify({ id: subject, peer, ...response })),
-		event(type, state, myTurn = false) {
+		event(type, state, myTurn = false, about = subject) {
 			const id = randomUUID()
 			const timestamp = String(Math.floor(Date.now() / 1000))
-			const body = Buffer.from(JSON.stringify({ id, type, state, myTurn, subject, peer, origin: 'incoming' }))
+			const body = Buffer.from(JSON.stringify({ id, type, state, myTurn, subject: about, peer, origin: 'incoming' }))
 			const signature = createHmac('sha256', key).update(`${id}.${timestamp}.`).update(body).digest('base64')
 			return { id, body, receivedAt: new Date().toISOString(), headers: {
 				'webhook-id': id, 'webhook-timestamp': timestamp, 'webhook-signature': `v1,${signature}`,
@@ -144,4 +144,14 @@ test('unavailable or invalid current state is retried without leaking process ou
 	}
 	assert.equal(f.messages.length, 0)
 	assert.ok(!JSON.stringify(f.logs).includes(sentinel))
+})
+
+test('an overruled move reaches only the conversation that made it', async (t) => {
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.overruled', 'resolved'))
+	assert.equal(f.messages.length, 1)
+	assert.match(f.messages[0], /did not take effect: alice's move came first and the thread is now resolved/)
+	assert.match(f.messages[0], new RegExp(`cpctl show ${subject}`))
+	await f.deliver(f.event('thread.overruled', 'resolved', false, '00000000-0000-4000-8000-000000000002'))
+	assert.equal(f.messages.length, 1, 'no conversation is started for it')
 })

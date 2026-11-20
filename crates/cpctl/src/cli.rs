@@ -366,10 +366,192 @@ pub(crate) static COMMANDS: &[Command] = &[
         "cpctl token rm runner",
         []
     ),
+    cmd!(
+        "webhook add",
+        "<name> [<url>]",
+        1..2,
+        "send events to a chat service or HTTP receiver",
+        "Use cpctl webhook types to choose a destination format. Defaults: generic JSON, unsigned, all events, every peer, incoming only, enabled. --peers bob,carol sends only those peers' thread events (each must be a peer or a former one), and never peering requests, whose names the requester picks. Give the URL as an argument or with --url-file (- reads stdin); provider URLs hold credentials, so prefer a private file. Generic signing is opt-in with --secret-file; make a key with: umask 077; openssl rand -base64 32 > webhook.key. --headers-file reads a JSON object of header names and values, for authentication. URLs, keys and header values are never printed. Requires https, or http on a literal loopback address. Only future events are queued. Messages carry metadata, never thread titles or bodies. Retries can duplicate chat messages.",
+        "cpctl webhook add discord --type discord --url-file discord.url --events '*' --origin both",
+        [
+            value(
+                "type",
+                None,
+                "type",
+                "destination format (default generic); see cpctl webhook types"
+            ),
+            value(
+                "url-file",
+                None,
+                "file",
+                "private file holding the URL; - reads stdin"
+            ),
+            value(
+                "events",
+                None,
+                "types",
+                "comma-separated event types, or '*' alone (default)"
+            ),
+            value(
+                "origin",
+                None,
+                "origin",
+                "incoming (default), outgoing or both"
+            ),
+            value(
+                "peers",
+                None,
+                "names",
+                "comma-separated peers, or '*' for every peer (default)"
+            ),
+            value(
+                "secret-file",
+                None,
+                "file",
+                "generic only: sign with the base64 key in this file"
+            ),
+            value(
+                "headers-file",
+                None,
+                "file",
+                "private JSON object of header names and values"
+            ),
+        ]
+    ),
+    cmd!(
+        "webhook ls",
+        "",
+        0..0,
+        "list configured webhooks",
+        "",
+        "cpctl webhook ls",
+        []
+    ),
+    cmd!(
+        "webhook show",
+        "<name>",
+        1..1,
+        "show a webhook's type, filters and credential status",
+        "",
+        "cpctl webhook show agent",
+        []
+    ),
+    cmd!(
+        "webhook set",
+        "<name>",
+        1..1,
+        "change a webhook's settings or pause it",
+        "Settings not given stay unchanged. The type cannot change: add a new webhook for another format. --url-file replaces the URL, --headers-file replaces every custom header ({} clears them), --secret-file enables or rotates generic signing, --signing=false removes the key, and --peers replaces the peer list ('*' for every peer), dropping queued notifications about peers left out. Pausing stops new notifications and holds queued ones; their seven-day window still runs. Any change ends the endpoint's failure backoff. A request already in flight may finish after a change; while rotating a key, have the receiver accept both until then.",
+        "cpctl webhook set agent --enabled=false",
+        [
+            value(
+                "url-file",
+                None,
+                "file",
+                "private file holding the new URL; - reads stdin"
+            ),
+            value(
+                "events",
+                None,
+                "types",
+                "comma-separated event types, or '*' alone"
+            ),
+            value("origin", None, "origin", "incoming, outgoing or both"),
+            value(
+                "peers",
+                None,
+                "names",
+                "comma-separated peers, or '*' for every peer"
+            ),
+            value(
+                "secret-file",
+                None,
+                "file",
+                "enable or rotate generic signing with this key"
+            ),
+            value(
+                "headers-file",
+                None,
+                "file",
+                "replace headers from a private JSON object; {} clears them"
+            ),
+            value("enabled", None, "bool", "true to send, false to pause"),
+            value(
+                "signing",
+                None,
+                "false",
+                "false removes the signing key; enable it with --secret-file"
+            ),
+        ]
+    ),
+    cmd!(
+        "webhook rm",
+        "<name>",
+        1..1,
+        "delete a webhook and its queued deliveries",
+        "Deletes its delivery history too. A request already in flight may finish.",
+        "cpctl webhook rm agent",
+        []
+    ),
+    cmd!(
+        "webhook deliveries",
+        "<name>",
+        1..1,
+        "page through delivery history",
+        "2xx succeeds. Connection failures, 408, 429 and 5xx retry with jittered backoff for up to seven days and pause the whole endpoint with its own backoff; Retry-After is honoured up to an hour. Other statuses fail at once, including Apprise's 424 (one of its services failed). Redirects are never followed. History is kept for seven days. Order is not guaranteed and retries can duplicate notifications. Read the error, fix the receiver, then retry failed deliveries.",
+        "cpctl webhook deliveries agent --status failed",
+        [
+            value(
+                "limit",
+                Some('n'),
+                "many",
+                "at most this many, up to 100 (default 100)"
+            ),
+            value(
+                "cursor",
+                None,
+                "cursor",
+                "from the previous page's next step"
+            ),
+            value(
+                "status",
+                None,
+                "status",
+                "only pending, delivered or failed"
+            ),
+        ]
+    ),
+    cmd!(
+        "webhook retry",
+        "<name> <delivery-id>",
+        2..2,
+        "retry a failed delivery",
+        "Needs an enabled webhook and a failed delivery. Keeps its ID and event; uses the current destination and credentials and a fresh seven-day window. Ends the endpoint's backoff.",
+        "cpctl webhook retry agent 765a0b0c-0000-4000-8000-000000000001",
+        []
+    ),
+    cmd!(
+        "webhook types",
+        "",
+        0..0,
+        "list destination formats and how they authenticate",
+        "Generic sends event JSON and can be signed. Discord, Slack, Teams workflows, Google Chat, Mattermost and Rocket.Chat use provider webhook URLs; ntfy a topic URL; Gotify /message with an application token; Apprise API a saved configuration. Use --headers-file for authentication headers.",
+        "cpctl webhook types",
+        []
+    ),
+    cmd!(
+        "webhook events",
+        "",
+        0..0,
+        "list event types a webhook can subscribe to",
+        "'*' alone subscribes to every type, including ones added later. Origin is incoming (the peer's moves), outgoing (yours) or both; peering.requested is incoming. Replies notify even when the turn stays. An unsent notification is replaced by a newer one of the same type, origin and thread, and unsent peering-request notifications by the newest: read the thread for everything that changed. A peer's move that changes nothing sends none. thread.overruled means a move of yours took no effect because the peer's came first.",
+        "cpctl webhook events",
+        []
+    ),
 ];
 
 /// Groups whose commands share a first word, for `help <group>`.
-pub(crate) const GROUPS: &[&str] = &["peer", "token"];
+pub(crate) const GROUPS: &[&str] = &["peer", "token", "webhook"];
 
 /// Flags every command takes.
 pub(crate) static GLOBAL: &[Flag] = &[
@@ -595,6 +777,7 @@ Common tasks:
   wait for their answer        cpctl wait <ref> --timeout 30m
   act on a thread              cpctl show <ref>, then one of its "next:" commands
   give an agent thread access  cpctl token add <name> -o <file>
+  wake an agent or ping a chat cpctl help webhook add
 
 Commands:
 {commands}
@@ -631,7 +814,8 @@ commands that only remove something, --json prints {}. In --json actions
 and in refusals, cpd's comment action is cpctl reply.
 
 With an agent token (cpctl token add), only me, inbox, ls, show, wait, watch
-and the thread actions work; the rest are the owner's.
+and the thread actions work; the rest are the owner's. webhook types and
+webhook events need no daemon.
 
 Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 4 not found, 5 not allowed now, conflicts, or an agent token refused,

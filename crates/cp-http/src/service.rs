@@ -364,17 +364,44 @@ impl<H: Host> Service<H> {
                 h.core(move |c| c.delete_agent_token(&name)).await?;
                 empty()
             }
-            Op::ListWebhooks
-            | Op::CreateWebhook
-            | Op::GetWebhook
-            | Op::UpdateWebhook
-            | Op::DeleteWebhook
-            | Op::ListWebhookDeliveries
-            | Op::RetryWebhookDelivery => {
-                return Err(Error::new(
-                    ErrorKind::NotFound,
-                    "webhooks are not available yet",
-                ));
+            Op::ListWebhooks => {
+                let webhooks = h.core(|c| c.webhooks()).await?;
+                json(200, &cp_api::WebhookList { webhooks })
+            }
+            Op::CreateWebhook => {
+                let w: cp_api::WebhookCreate = decode(req)?;
+                json(201, &h.core(move |c| c.create_webhook(w)).await?)
+            }
+            Op::GetWebhook => {
+                let name = param_name(params, "name")?;
+                json(200, &h.core(move |c| c.webhook(&name)).await?)
+            }
+            Op::UpdateWebhook => {
+                let name = param_name(params, "name")?;
+                let u: cp_api::WebhookUpdate = decode(req)?;
+                json(200, &h.core(move |c| c.update_webhook(&name, u)).await?)
+            }
+            Op::DeleteWebhook => {
+                let name = param_name(params, "name")?;
+                h.core(move |c| c.delete_webhook(&name)).await?;
+                empty()
+            }
+            Op::ListWebhookDeliveries => {
+                let name = param_name(params, "name")?;
+                let q: cp_api::WebhookDeliveriesQuery = query(req)?;
+                json(
+                    200,
+                    &h.core(move |c| {
+                        c.webhook_deliveries(&name, q.cursor.as_ref(), q.limit, q.status)
+                    })
+                    .await?,
+                )
+            }
+            Op::RetryWebhookDelivery => {
+                let name = param_name(params, "name")?;
+                let id: cp_thread::Id = param(params, "id")?;
+                h.core(move |c| c.retry_webhook(&name, &id)).await?;
+                empty()
             }
         })
     }

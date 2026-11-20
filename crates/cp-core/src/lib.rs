@@ -16,6 +16,7 @@ mod secrets;
 mod sql;
 mod threads;
 mod tokens;
+mod webhooks;
 
 pub use crate::core::{Config, Core, Effects};
 pub use delivery::{Attempt, GIVE_UP_401, MAX_BACKOFF, MIN_BACKOFF, Outcome, backoff};
@@ -26,3 +27,7 @@ pub use runtime::{Millis, Runtime};
 pub use schema::{SCHEMA_VERSION, STATEMENTS};
 pub use sql::{Row, Sql, SqlError, Value};
 pub use tokens::Agent;
+pub use webhooks::{
+    MAX_PEERING_NOTICES, Message, WEBHOOK_TIMEOUT_SECS, WEBHOOK_TTL, WebhookJob, WebhookRequest,
+    WebhookResult, WebhookSend, render, signature,
+};
