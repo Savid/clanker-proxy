@@ -29,7 +29,7 @@ it with `cpctl`.
 
 2. **Amp secrets:** `CP_URL` and `CP_TOKEN` (the token). Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread, and saves it as a secret. A secret is an environment variable in the orb too; Amp just hides its value in output. A running orb picks up changes after `amp orb restart-processes`.
 
-3. **Start the inbox:** make a new Amp space (e.g. `clanker-proxy`) and paste in the prompt `cloudflare.sh` printed. It must:
+3. **Start the inbox:** make a new Amp space (e.g. `clanker-proxy`) and start a thread with the prompt `cloudflare.sh` printed. It must:
    - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
    - copy the plugin to `.amp/plugins/cp-inbox.ts` and run `plugins: reload`.
 
