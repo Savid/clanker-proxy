@@ -7,14 +7,25 @@ import test from 'node:test'
 
 const subject = '00000000-0000-4000-8000-000000000001'
 const peer = 'alice'
-const key = Buffer.alloc(32, 7)
+const token = 'cpa_' + 'T'.repeat(43)
+const hookURL = 'https://example.invalid/webhook'
+// The key the plugin derives from its agent token and webhook URL.
+const key = createHmac('sha256', token).update(`cp-inbox webhook\n${hookURL}`).digest()
+// What the plugin sent cpd, by fixture.
+const registrations = []
 
 async function fixture(t) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-inbox-test-'))
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
 	const cpctl = join(dir, 'cpctl')
-	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_WEBHOOK_SECRET: key.toString('base64') }
+	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_URL: 'https://cpd.test/', CP_TOKEN: token }
+	const realFetch = globalThis.fetch
+	globalThis.fetch = async (url, init) => {
+		registrations.push({ url, init })
+		return new Response('{}', { status: 200 })
+	}
+	t.after(() => { globalThis.fetch = realFetch })
 	const previous = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]))
 	Object.assign(process.env, env)
 	t.after(async () => {
@@ -63,7 +74,7 @@ if (args[1] === 'ls') {
 		on() {}, registerTool() {}, registerCommand() {},
 		createWebhook: async (registration) => {
 			handler = registration.handler
-			return { url: 'https://example.invalid/webhook' }
+			return { url: hookURL }
 		},
 	}
 	const plugin = await import(`./cp-inbox.ts?fixture=${randomUUID()}`)
@@ -154,4 +165,19 @@ test('an overruled move reaches only the conversation that made it', async (t) =
 	assert.match(f.messages[0], new RegExp(`cpctl show ${subject}`))
 	await f.deliver(f.event('thread.overruled', 'resolved', false, '00000000-0000-4000-8000-000000000002'))
 	assert.equal(f.messages.length, 1, 'no conversation is started for it')
+})
+
+test('the inbox registers itself with cpd, signed with a key both sides derive', async (t) => {
+	registrations.length = 0
+	const f = await fixture(t)
+	await new Promise((resolve) => setImmediate(resolve))
+	const r = registrations.at(-1)
+	assert.equal(r.url, 'https://cpd.test/api/v1/me/webhook')
+	assert.equal(r.init.method, 'POST')
+	assert.equal(r.init.headers.authorization, `Bearer ${token}`)
+	assert.deepEqual(JSON.parse(r.init.body), { url: hookURL, secret: key.toString('base64') })
+	// Events signed with that key are accepted.
+	await f.respond({ state: 'acked' })
+	await f.deliver(f.event('thread.reopen', 'acked', true))
+	assert.equal(f.messages.length, 1)
 })

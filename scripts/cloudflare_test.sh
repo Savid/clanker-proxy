@@ -108,15 +108,15 @@ const ok = s.CP_NAME === "tester" && s.CP_URL === "http://127.0.0.1:18519" && s.
 process.exit(ok ? 0 : 1);
 ' "$work/secrets.json" || fail "settings file does not match"
 
-# Amp: settings, the prompt for the orb, and the webhook step; with no
-# terminal, the secrets appear as the files that hold them.
+# Amp: the prompt for the orb and the two values; with no terminal, the
+# token appears as the file that holds it.
 rm -f "$token_file"
 run --name tester --worker cp-test --url "http://127.0.0.1:$port" --agent amp || fail "amp setup failed"
 grep -q 'CP_URL  *http://127.0.0.1:18519' "$work/out" || fail "amp: no CP_URL"
 grep -q 'CP_TOKEN  *secret, in .*cp-test.amp-inbox.token' "$work/out" || fail "amp: CP_TOKEN"
-grep -q 'CP_WEBHOOK_SECRET  *secret, in .*cp-test.amp-webhook.key' "$work/out" || fail "amp: CP_WEBHOOK_SECRET"
+if grep -q 'CP_WEBHOOK_SECRET\|webhook add' "$work/out"; then fail "amp: a webhook step is left"; fi
 grep -q 'Make this thread my clanker-proxy inbox' "$work/out" || fail "amp: no prompt for the orb"
-grep -q 'cpctl webhook add amp --url-file - --secret-file' "$work/out" || fail "amp: no webhook step"
+grep -q 'registers itself with your daemon' "$work/out" || fail "amp: no closing line"
 if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi
 grep -q '^cpa_' "$work/home/.config/clanker-proxy/cp-test.amp-inbox.token" || fail "amp: agent token not saved"
 

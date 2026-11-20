@@ -1,9 +1,10 @@
 //! The schema both hosts use, verbatim. Times are Unix milliseconds unless
 //! a column says seconds; an event's `at` is seconds, as on the wire.
 
-/// The version `STATEMENTS` create. v0.3.0 replaced peer secrets with
-/// keys, so earlier data is refused rather than migrated.
-pub const BASELINE: u32 = 4;
+/// The version `STATEMENTS` create. Before 1.0 a storage change bumps
+/// this instead of adding a migration: earlier data is refused, and its
+/// owner starts again from empty storage.
+pub const BASELINE: u32 = 5;
 
 /// Changes since the baseline, in order: entry `i` moves stored data from
 /// version `BASELINE + i` to the next. Append only: deployed data has
@@ -128,7 +129,8 @@ pub const STATEMENTS: &[&str] = &[
         secret TEXT NOT NULL,
         headers TEXT NOT NULL,
         retry_after INTEGER NOT NULL DEFAULT 0,
-        failures INTEGER NOT NULL DEFAULT 0
+        failures INTEGER NOT NULL DEFAULT 0,
+        agent TEXT
     ) STRICT",
     // sending marks an attempt in flight, so a newer notification for the
     // same thread does not replace it.

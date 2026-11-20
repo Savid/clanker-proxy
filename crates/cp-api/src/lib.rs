@@ -19,9 +19,9 @@ pub use text::{
     WebhookSecret, WebhookUrl,
 };
 pub use webhooks::{
-    Provider, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin,
-    WebhookEventType, WebhookEvents, WebhookHeader, WebhookList, WebhookOrigin, WebhookPayload,
-    WebhookType, WebhookUpdate,
+    OwnWebhook, Provider, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList,
+    WebhookEventOrigin, WebhookEventType, WebhookEvents, WebhookHeader, WebhookList, WebhookOrigin,
+    WebhookPayload, WebhookType, WebhookUpdate,
 };
 
 /// Headers on every call between daemons: the caller's public key, the Unix

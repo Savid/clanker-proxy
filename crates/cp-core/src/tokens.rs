@@ -120,6 +120,11 @@ impl<S: Sql, R: Runtime> Core<S, R> {
 
     /// Revokes an agent token.
     pub fn delete_agent_token(&mut self, name: &Name) -> Result<(), Error> {
+        // Its webhook goes with it.
+        match self.delete_agent_webhook(name) {
+            Err(e) if e.kind != ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
         if self
             .sql
             .execute("DELETE FROM agent_tokens WHERE name = ?", &[text(name)])?

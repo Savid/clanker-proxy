@@ -96,14 +96,19 @@ interface State {
 }
 
 export default async function (amp: PluginAPI) {
-	const secret = process.env.CP_WEBHOOK_SECRET?.trim()
-	const key = secret ? Buffer.from(secret, 'base64') : undefined
-	if (!key || key.length !== 32) {
-		// Without a key nothing can be verified. Not registering makes Amp drop
-		// events instead of queueing them behind a handler that cannot act.
-		amp.logger.log('cp-inbox: set CP_WEBHOOK_SECRET to a base64 32-byte key (the cpd -secret-file contents)')
+	const cpURL = process.env.CP_URL?.trim().replace(/\/+$/, '')
+	const cpToken = process.env.CP_TOKEN?.trim()
+	if (!cpURL || !cpToken) {
+		// Without them nothing can be verified or answered. Not registering
+		// makes Amp drop events instead of queueing them behind a handler that
+		// cannot act.
+		amp.logger.log('cp-inbox: set CP_URL and CP_TOKEN in the project settings')
 		return
 	}
+	// The webhook's signing key is derived from the agent token and the URL,
+	// so every orb of the project computes the same key without storing one,
+	// and a new token means a new key.
+	let key: Buffer | undefined
 
 	let state: State
 	try {
@@ -385,7 +390,7 @@ export default async function (amp: PluginAPI) {
 		headers: ['webhook-id', 'webhook-timestamp', 'webhook-signature'],
 		handler: (event, ctx) =>
 			serial(async () => {
-				const n = verify(event, key)
+				const n = key ? verify(event, key) : undefined
 				if (!n) {
 					ctx.logger.log('cp-inbox: dropped unverified event', event.id)
 					return
@@ -403,19 +408,39 @@ export default async function (amp: PluginAPI) {
 				}
 			}),
 	})
-	// The owner copies the URL from a secret dialog, which no thread or
-	// transcript records, to configure cpd where they hold the owner token.
-	// It is not stored, so no agent can read or replace it.
-	amp.registerCommand('cp-inbox-webhook-url', { title: 'Show webhook URL', category: 'cp-inbox', description: 'The URL to give cpctl webhook add' }, async (ctx) => {
-		await ctx.ui.input({
-			title: 'cp-inbox webhook URL',
-			helpText:
-				'Copy it into a private file where you run cpctl as the owner, then run cpctl webhook add with --url-file. Anyone with it can post events: never paste it into a thread.',
-			initialValue: url,
-			secret: true,
-			requireHuman: true,
-		})
-	})
+	key = webhookKey(cpToken, url)
+	void register(amp, cpURL, cpToken, url, key)
+}
+
+// webhookKey is the key cpd signs this inbox's notifications with.
+function webhookKey(token: string, url: string): Buffer {
+	return createHmac('sha256', token).update(`cp-inbox webhook\n${url}`).digest()
+}
+
+// register tells cpd where to send this inbox's notifications, retrying for a
+// while if cpd is unreachable. The agent token can register only its own
+// webhook, and only for its own peers.
+async function register(amp: PluginAPI, cpURL: string, token: string, url: string, key: Buffer): Promise<void> {
+	for (let attempt = 0; attempt < 30; attempt++) {
+		try {
+			const res = await fetch(`${cpURL}/api/v1/me/webhook`, {
+				method: 'POST',
+				headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+				body: JSON.stringify({ url, secret: key.toString('base64') }),
+				redirect: 'error',
+				signal: AbortSignal.timeout(10_000),
+			})
+			if (res.ok) {
+				amp.logger.log('cp-inbox: registered with cpd')
+				return
+			}
+			amp.logger.log(`cp-inbox: cpd refused the webhook (HTTP ${res.status})`)
+			if (res.status !== 429 && res.status < 500) return
+		} catch {
+			amp.logger.log('cp-inbox: cannot reach cpd at CP_URL; retrying')
+		}
+		await new Promise((resolve) => setTimeout(resolve, 60_000))
+	}
 }
 
 async function currentState(subject: string, peer: string, signal: AbortSignal): Promise<string> {
@@ -508,7 +533,7 @@ function checkPaths(input: unknown, key = ''): Verdict {
 // the agent writes and runs is not inspected.
 function checkShell(command: string, subject: string, depth = 0): Verdict {
 	const plain = command.replace(/\\(.)/g, '$1')
-	if (/CP_TOKEN|CP_WEBHOOK_SECRET/.test(plain) || secretPath.test(plain)) return forbid('owner credentials stay with the owner')
+	if (/CP_TOKEN/.test(plain) || secretPath.test(plain)) return forbid('owner credentials stay with the owner')
 	if (/CP_(URL|DIR)/.test(plain)) return forbid('cpctl must reach your daemon with your settings')
 	if (plain.includes('${!')) return forbid('indirect variable reads can expose credentials')
 	if (depth > 3) return forbid('the command nests too deeply to check')

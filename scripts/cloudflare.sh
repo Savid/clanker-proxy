@@ -26,8 +26,8 @@ Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
   --url <url>        the URL peers use, if not the workers.dev one
   --token-file <f>   use the owner token in this file
   --agent <how>      how your agents run: amp (Amp orbs: also makes the agent
-                     token and webhook key an Amp inbox needs), local (on
-                     this machine), or none (decide later)
+                     token an Amp inbox needs), local (on this machine), or
+                     none (decide later)
   --bundle <file>    deploy this Worker bundle instead of downloading one
 
 Environment: CP_VERSION picks a release (default: the latest);
@@ -297,9 +297,9 @@ fi
 # with where the value is saved, so it stays out of logs and transcripts.
 secret_line() { # secret_line <label> <file>
     if [ -n "$tty" ]; then
-        printf '     %-18s %s   secret\n' "$1" "$(cat "$2")" >"$tty"
+        printf '     %-9s %s   secret\n' "$1" "$(cat "$2")" >"$tty"
     else
-        printf '     %-18s secret, in %s\n' "$1" "$2"
+        printf '     %-9s secret, in %s\n' "$1" "$2"
     fi
 }
 
@@ -310,38 +310,30 @@ use_here() {
 
 if [ "$agent" = amp ]; then
     agent_file=$config/$worker.amp-inbox.token
-    key_file=$config/$worker.amp-webhook.key
     if curl -fsS -H @"$tmp/auth" -H 'content-type: application/json' -d '{"name":"amp-inbox"}' \
         "$url/api/v1/agent-tokens" >"$tmp/agent.json" 2>/dev/null; then
         (umask 077 && sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$tmp/agent.json" >"$agent_file")
     elif [ ! -s "$agent_file" ]; then
         fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
     fi
-    [ -s "$key_file" ] || (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '\n' >"$key_file" && echo >>"$key_file")
     pin=$version
     [ "$pin" != local ] || pin="the latest release"
     say ""
-    say "1. In Amp, start a new thread in an orb of the project the inbox should"
-    say "   live in, and send it:"
+    say "Set up your Amp inbox. In Amp, start a new thread in an orb of the"
+    say "project the inbox should live in, and send it:"
     say ""
     say "     Make this thread my clanker-proxy inbox. First ask me, in Amp's"
-    say "     private dialog, for three values to save in this project's settings:"
-    say "     CP_URL as an environment variable, CP_TOKEN and CP_WEBHOOK_SECRET as"
-    say "     secrets. Make sure this orb picks them up, then follow steps 3-5 and"
-    say "     \"Persist the setup\" in $repo/blob/master/docs/amp.md,"
-    say "     pinning the setup script to $pin. When the plugin is loaded, tell me"
-    say "     to run \"cp-inbox: Show webhook URL\". Never ask me to paste that URL"
-    say "     into this thread."
+    say "     private dialog, for two values to save in this project's settings:"
+    say "     CP_URL as an environment variable and CP_TOKEN as a secret. Make"
+    say "     sure this orb picks them up, then follow steps 3-4 and \"Persist the"
+    say "     setup\" in $repo/blob/master/docs/amp.md,"
+    say "     pinning the setup script to $pin."
     say ""
-    say "2. When it asks, enter:"
-    say "     $(printf '%-18s %s' CP_URL "$url")"
+    say "When it asks, enter:"
+    say "     $(printf '%-9s %s' CP_URL "$url")"
     secret_line CP_TOKEN "$agent_file"
-    secret_line CP_WEBHOOK_SECRET "$key_file"
     say ""
-    say "3. When it gives you the webhook URL, run here:"
-    use_here
-    say "     cpctl webhook add amp --url-file - --secret-file $key_file --origin incoming"
-    say "   and paste the URL, press Enter, then Ctrl-D."
+    say "The inbox registers itself with your daemon; nothing else to do."
 else
     say ""
     say "Use it from this machine:"

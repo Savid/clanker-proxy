@@ -459,3 +459,87 @@ fn a_send_lost_in_a_crash_still_expires() {
         "a late answer changes nothing"
     );
 }
+
+#[test]
+fn an_agent_token_registers_its_own_webhook() {
+    let clock = Clock::new();
+    let (mut alice, mut bob) = (
+        Daemon::new("alice", &clock, 1),
+        Daemon::new("bob", &clock, 2),
+    );
+    peer(&mut alice, &mut bob);
+    let scope = common::scope(&["bob"]);
+    alice
+        .call(|c| {
+            c.create_agent_token(cp_api::AgentTokenInput {
+                name: name("inbox"),
+                peers: scope.clone(),
+                expires_at: None,
+            })
+        })
+        .unwrap();
+    let own = |u: &str| cp_api::OwnWebhook {
+        url: WebhookUrl::new(u.into()).unwrap(),
+        secret: WebhookSecret::new(key()).unwrap(),
+    };
+
+    for private in [
+        "http://127.0.0.1:9000/hook",
+        "https://10.0.0.1/hook",
+        "https://localhost/hook",
+        "https://runner.internal/hook",
+        "https://[::1]/hook",
+    ] {
+        assert_eq!(
+            kind(&alice.call(|c| c.set_agent_webhook(&name("inbox"), &scope, &own(private)))),
+            ErrorKind::Invalid,
+            "{private}"
+        );
+    }
+    let w = alice
+        .call(|c| c.set_agent_webhook(&name("inbox"), &scope, &own("https://amp.test/a")))
+        .unwrap();
+    assert_eq!(w.agent, Some(name("inbox")));
+    assert_eq!(
+        (w.origin, w.events, w.peers),
+        (WebhookOrigin::Incoming, WebhookEvents::All, scope.clone())
+    );
+    // Registering again replaces it.
+    let w = alice
+        .call(|c| c.set_agent_webhook(&name("inbox"), &scope, &own("https://amp.test/b")))
+        .unwrap();
+    assert_eq!(w.destination, "https://amp.test");
+    assert_eq!(alice.call(|c| c.webhooks()).unwrap().len(), 1);
+
+    // It hears the peer's thread.
+    bob.send("alice", "for the agent");
+    settle(&mut alice, &mut bob);
+    let sent = drain(&mut alice, |_| ok());
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].url, "https://amp.test/b");
+
+    // An owner's webhook keeps its name.
+    alice
+        .call(|c| c.create_webhook(create("mine", WebhookType::Generic, "https://x.test/")))
+        .unwrap();
+    assert_eq!(
+        kind(&alice.call(|c| c.set_agent_webhook(
+            &name("mine"),
+            &scope,
+            &own("https://amp.test/c")
+        ))),
+        ErrorKind::Conflict
+    );
+
+    // Revoking the token deletes its webhook.
+    alice
+        .call(|c| c.delete_agent_token(&name("inbox")))
+        .unwrap();
+    let left: Vec<_> = alice
+        .call(|c| c.webhooks())
+        .unwrap()
+        .into_iter()
+        .map(|w| w.name.to_string())
+        .collect();
+    assert_eq!(left, ["mine"]);
+}

@@ -14,6 +14,8 @@ pub enum Access {
     /// The owner, or an agent token the owner made, which may be limited to
     /// some peers' threads.
     OwnerOrAgent,
+    /// An agent token only: what an agent sets up for itself.
+    Agent,
     /// Another daemon, by a request signed with its key.
     Peer,
 }
@@ -119,6 +121,8 @@ operations! {
     DeleteWebhook => "deleteWebhook", Delete, "/api/v1/webhooks/{name}", Owner, false;
     ListWebhookDeliveries => "listWebhookDeliveries", Get, "/api/v1/webhooks/{name}/deliveries", Owner, false;
     RetryWebhookDelivery => "retryWebhookDelivery", Post, "/api/v1/webhooks/{name}/deliveries/{id}/retry", Owner, false;
+    SetOwnWebhook => "setOwnWebhook", Post, "/api/v1/me/webhook", Agent, true;
+    DeleteOwnWebhook => "deleteOwnWebhook", Delete, "/api/v1/me/webhook", Agent, false;
 }
 
 /// Token prefixes, so a token's kind shows and kinds are never confused.

@@ -12,9 +12,10 @@ use std::net::IpAddr;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use cp_api::{
-    Cursor, DeliveryStatus, Error, ErrorKind, MAX_DELIVERIES, Peers, Webhook, WebhookCreate,
-    WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin, WebhookEventType, WebhookEvents,
-    WebhookHeader, WebhookHeaderName, WebhookOrigin, WebhookPayload, WebhookType, WebhookUpdate,
+    Cursor, DeliveryStatus, Error, ErrorKind, MAX_DELIVERIES, OwnWebhook, Peers, Webhook,
+    WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin, WebhookEventType,
+    WebhookEvents, WebhookHeader, WebhookHeaderName, WebhookOrigin, WebhookPayload, WebhookType,
+    WebhookUpdate,
 };
 use cp_thread::{Id, Name, State};
 use hmac::{Hmac, KeyInit as _, Mac as _};
@@ -70,6 +71,42 @@ fn check_url(raw: &str) -> Result<url::Url, Error> {
     Ok(u)
 }
 
+/// Checks an agent token's own webhook goes somewhere public. An agent
+/// token lives where peers' text runs, so it must not be able to make the
+/// daemon post into the network it sits in.
+fn check_public(raw: &str) -> Result<(), Error> {
+    let u = check_url(raw)?;
+    let private = match u.host() {
+        Some(url::Host::Domain(d)) => {
+            let d = d.trim_end_matches('.').to_ascii_lowercase();
+            let tld = d.rsplit('.').next().unwrap_or_default();
+            matches!(tld, "localhost" | "local" | "internal")
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            let [a, b, ..] = ip.octets();
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || (a == 100 && (64..128).contains(&b))
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.to_ipv4_mapped().is_some()
+        }
+        None => true,
+    };
+    if u.scheme() != "https" || private {
+        return Err(invalid("an agent token's webhook needs a public https URL"));
+    }
+    Ok(())
+}
+
 fn reserved(name: &str) -> bool {
     name.starts_with("webhook-")
         || name.starts_with("proxy-")
@@ -102,6 +139,8 @@ struct Config {
     secret: String,
     headers: Vec<(String, String)>,
     paused_until: Millis,
+    /// The agent token that registered it for itself, if one did.
+    agent: Option<Name>,
 }
 
 impl Config {
@@ -193,6 +232,7 @@ impl Config {
             signing: !self.secret.is_empty(),
             header_names,
             paused_until: (self.paused_until > now).then(|| self.paused_until.at()),
+            agent: self.agent.clone(),
         }
     }
 }
@@ -211,7 +251,7 @@ fn canonical(name: &str) -> String {
 }
 
 const CONFIG_COLUMNS: &str =
-    "name, type, url, events, origin, peers, enabled, secret, headers, retry_after";
+    "name, type, url, events, origin, peers, enabled, secret, headers, retry_after, agent";
 
 fn json_err(_: serde_json::Error) -> Error {
     Error::new(ErrorKind::Internal, "stored webhook settings")
@@ -232,6 +272,7 @@ fn config_from(r: &Row) -> Result<Config, Error> {
         secret: r.text(7)?.into(),
         headers,
         paused_until: Millis(r.int(9)?),
+        agent: r.opt_parse(10)?,
     })
 }
 
@@ -411,6 +452,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 .map_or_else(String::new, |s| s.expose().to_string()),
             headers: headers_of(&w.headers),
             paused_until: Millis::default(),
+            agent: None,
         };
         c.validate()?;
         self.known_peers(&c.peers)?;
@@ -482,6 +524,68 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             )?;
         }
         self.webhook(name)
+    }
+
+    /// Registers, or replaces, the webhook the agent token `agent` has for
+    /// itself: generic, signed, for the peers' moves only, and only for the
+    /// token's `peers`. Lets an agent runner be woken without the owner.
+    pub fn set_agent_webhook(
+        &mut self,
+        agent: &Name,
+        peers: &Peers,
+        w: &OwnWebhook,
+    ) -> Result<Webhook, Error> {
+        let url = w.url.expose().to_string();
+        check_public(&url)?;
+        if w.secret.expose().is_empty() {
+            return Err(invalid("an agent token's webhook must be signed"));
+        }
+        if let Ok(existing) = self.load_webhook(agent)
+            && existing.agent.as_ref() != Some(agent)
+        {
+            return Err(Error::new(
+                ErrorKind::Conflict,
+                format!("the owner has a webhook named {agent}; they can remove or rename it"),
+            ));
+        }
+        let c = Config {
+            name: agent.clone(),
+            kind: WebhookType::Generic,
+            url,
+            events: WebhookEvents::All,
+            origin: WebhookOrigin::Incoming,
+            peers: peers.clone(),
+            enabled: true,
+            secret: w.secret.expose().to_string(),
+            headers: Vec::new(),
+            paused_until: Millis::default(),
+            agent: Some(agent.clone()),
+        };
+        c.validate()?;
+        let exists = self.load_webhook(agent).is_ok();
+        self.save_webhook(&c, !exists)?;
+        self.sql.execute(
+            "UPDATE webhooks SET agent = ? WHERE name = ?",
+            &[text(agent), text(agent)],
+        )?;
+        self.webhook(agent)
+    }
+
+    /// Removes the webhook the agent token `agent` registered, and its
+    /// deliveries.
+    pub fn delete_agent_webhook(&mut self, agent: &Name) -> Result<(), Error> {
+        self.sql.execute(
+            "DELETE FROM webhook_deliveries WHERE webhook IN (SELECT name FROM webhooks WHERE agent = ?)",
+            &[text(agent)],
+        )?;
+        if self
+            .sql
+            .execute("DELETE FROM webhooks WHERE agent = ?", &[text(agent)])?
+            == 0
+        {
+            return Err(Error::new(ErrorKind::NotFound, "this token has no webhook"));
+        }
+        Ok(())
     }
 
     /// Deletes a webhook and its deliveries.

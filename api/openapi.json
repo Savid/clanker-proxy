@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.3.2"
+    "version": "0.4.0"
   },
   "servers": [
     {
@@ -285,6 +285,82 @@
           {
             "ownerToken": []
           },
+          {
+            "agentToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/webhook": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Register this agent token's webhook",
+        "description": "For agent tokens: registers, or replaces, the one webhook this token has, so an agent runner can be woken without the owner. It is generic and signed with the given key, hears only the peers' moves, and only for the token's peers. The URL must be public https. Revoking the token deletes it. The owner adds webhooks with createWebhook instead.",
+        "operationId": "setOwnWebhook",
+        "requestBody": {
+          "description": "Where to send notifications, and the signing key.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnWebhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Remove this agent token's webhook",
+        "description": "For agent tokens: removes the webhook the token registered, and its deliveries.",
+        "operationId": "deleteOwnWebhook",
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
           {
             "agentToken": []
           }
@@ -1856,6 +1932,24 @@
         "writeOnly": false,
         "maxLength": 500
       },
+      "OwnWebhook": {
+        "type": "object",
+        "description": "The webhook an agent token registers for itself, as an inbox: generic,\nsigned with `secret`, for the peers' moves only, and for the token's\npeers only. Registering again replaces it.",
+        "required": [
+          "url",
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "$ref": "#/components/schemas/WebhookSecret"
+          },
+          "url": {
+            "$ref": "#/components/schemas/WebhookUrl",
+            "description": "A public https URL."
+          }
+        },
+        "additionalProperties": false
+      },
       "Peer": {
         "type": "object",
         "description": "A daemon this one exchanges threads with.",
@@ -2472,6 +2566,17 @@
           "headerNames"
         ],
         "properties": {
+          "agent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Name",
+                "description": "The agent token that registered this webhook for itself; absent for\nthe owner's own. Revoking the token deletes it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "destination": {
             "type": "string",
             "description": "Scheme and host only; path and query are never returned."
