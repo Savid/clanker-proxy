@@ -115,7 +115,7 @@ run --name tester --worker cp-test --url "http://127.0.0.1:$port" --agent amp ||
 grep -q 'CP_URL  *http://127.0.0.1:18519' "$work/out" || fail "amp: no CP_URL"
 grep -q 'CP_TOKEN  *secret, in .*cp-test.amp-inbox.token' "$work/out" || fail "amp: CP_TOKEN"
 if grep -q 'CP_WEBHOOK_SECRET\|webhook add' "$work/out"; then fail "amp: a webhook step is left"; fi
-grep -q 'Make a thread as an inbox' "$work/out" || fail "amp: no prompt for the orb"
+grep -q 'Start a thread to be my clanker-proxy inbox' "$work/out" || fail "amp: no prompt for the orb"
 grep -q 'registers itself with your daemon' "$work/out" || fail "amp: no closing line"
 grep -q 'export CP_URL=http://127.0.0.1:18519 CP_TOKEN=' "$work/out" || fail "amp: no cpctl line for the owner"
 if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi
