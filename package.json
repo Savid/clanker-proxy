@@ -1,0 +1,8 @@
+{
+  "name": "clanker-proxy",
+  "private": true,
+  "description": "Pins the Cloudflare tooling used to run and deploy cpd-worker.",
+  "devDependencies": {
+    "wrangler": "4.159.0"
+  }
+}

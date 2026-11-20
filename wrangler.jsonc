@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clanker-proxy",
+  "main": "crates/cpd-worker/build/worker/shim.mjs",
+  "compatibility_date": "2026-11-01",
+  // A peer's daemon may be another Worker on the same account; without this
+  // flag that fetch fails with error 1042.
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "build": {
+    "command": "worker-build --release",
+    "cwd": "crates/cpd-worker",
+    "watch_dir": "crates"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "DAEMON", "class_name": "Daemon" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Daemon"] }],
+  // Re-arms the Durable Object's alarm if one was missed or aborted.
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "observability": { "enabled": true }
+}

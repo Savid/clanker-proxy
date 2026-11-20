@@ -14,39 +14,50 @@ permissions:
   contents: read
 
 env:
-  GOWORK: 'off'
+  CARGO_TERM_COLOR: always
 
 jobs:
-  api:
+  rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # rustup is preinstalled; with no argument it installs the toolchain
+      # rust-toolchain.toml pins.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
-          go-version-file: go.mod
-      - run: make lint-api
-      # Generated code is committed; it must match what the spec produces.
-      - run: make generate-check
+          tool: cargo-nextest,cargo-deny
+      - run: make lint-rust lint-deps test-rust
 
-  go:
+  worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+          node-version-file: .tool-versions
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - run: cargo install worker-build --version 0.9.0 --locked
+      - run: make worker-smoke
+
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: v2.14.0
-      - run: make lint-install test
-      - run: make vuln
-      - run: make tidy-check
+          persist-credentials: false
+      - run: make lint-install test-install
 
   amp:
     runs-on: ubuntu-latest
@@ -60,13 +71,3 @@ jobs:
           node-version-file: .tool-versions
           package-manager-cache: false
       - run: make test-amp
-
-  image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Proves the Dockerfile builds; nothing is pushed.
-      - run: docker build --build-arg VERSION=ci .

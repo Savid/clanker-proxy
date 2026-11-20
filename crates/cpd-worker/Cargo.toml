@@ -1,0 +1,23 @@
+[package]
+name = "cpd-worker"
+description = "clanker-proxy daemon as a Cloudflare Worker and Durable Object"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+futures-util.workspace = true
+js-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+worker.workspace = true
+
+[lints]
+workspace = true
