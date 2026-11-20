@@ -12,9 +12,15 @@ pid=
 
 cleanup() {
     if [ -n "$pid" ]; then
-        # wrangler re-executes itself and starts workerd; end the whole group.
-        kill -TERM -- "-$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        # wrangler re-executes itself and starts workerd: end the whole
+        # group, and never block on a process that will not stop.
+        kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        i=0
+        while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 20 ]; do
+            sleep 0.5
+            i=$((i + 1))
+        done
+        kill -KILL -- "-$pid" 2>/dev/null || true
     fi
     rm -rf "$tmp"
 }
@@ -29,12 +35,12 @@ fail() {
 
 [ -x "$wrangler" ] || fail "run npm ci first"
 
-# Job control gives the background job its own process group.
-set -m
-"$wrangler" dev --port "$port" --ip 127.0.0.1 --test-scheduled \
+# setsid makes wrangler a process group leader, so cleanup can end it and
+# everything it starts. (Job control would too, but dash, CI's sh, has none
+# in scripts.)
+setsid "$wrangler" dev --port "$port" --ip 127.0.0.1 --test-scheduled \
     --persist-to "$tmp/state" >"$tmp/wrangler.log" 2>&1 &
 pid=$!
-set +m
 
 i=0
 until grep -q 'Ready on' "$tmp/wrangler.log"; do

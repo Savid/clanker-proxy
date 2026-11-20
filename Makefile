@@ -51,8 +51,12 @@ test-install: ## Offline installer tests
 test-amp: ## Node tests for the Amp plugin example
 	node --test examples/amp/cp-inbox.test.mjs
 
+.PHONY: worker-build
+worker-build: ## Build cpd-worker to WebAssembly (needs worker-build 0.9.0)
+	cd crates/cpd-worker && worker-build --release
+
 .PHONY: worker-smoke
-worker-smoke: ## Run cpd-worker under wrangler dev and probe it (needs npm ci)
+worker-smoke: worker-build ## Run cpd-worker under wrangler dev and probe it (needs npm ci)
 	sh scripts/worker_smoke.sh
 
 .PHONY: worker-dev
