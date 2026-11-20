@@ -293,6 +293,21 @@ if [ -z "$agent" ]; then
     fi
 fi
 
+# Prints a line holding a secret: on a terminal with the value, otherwise
+# with where the value is saved, so it stays out of logs and transcripts.
+secret_line() { # secret_line <label> <file>
+    if [ -n "$tty" ]; then
+        printf '     %-18s %s   secret\n' "$1" "$(cat "$2")" >"$tty"
+    else
+        printf '     %-18s secret, in %s\n' "$1" "$2"
+    fi
+}
+
+use_here() {
+    say "     curl -fsSL $repo/releases/latest/download/install.sh | sh   (once, for cpctl)"
+    say "     export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\""
+}
+
 if [ "$agent" = amp ]; then
     agent_file=$config/$worker.amp-inbox.token
     key_file=$config/$worker.amp-webhook.key
@@ -303,35 +318,36 @@ if [ "$agent" = amp ]; then
         fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
     fi
     [ -s "$key_file" ] || (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '\n' >"$key_file" && echo >>"$key_file")
+    pin=$version
+    [ "$pin" != local ] || pin="the latest release"
     say ""
-    say "Amp project settings (Settings, this project, Environment):"
-    say "  CP_URL             $url"
-    say "  CP_TOKEN           secret, in $agent_file"
-    say "  CP_WEBHOOK_SECRET  secret, in $key_file"
-    show ""
-    show "To paste into Amp, shown once:"
-    show "  CP_TOKEN           $(cat "$agent_file")"
-    show "  CP_WEBHOOK_SECRET  $(cat "$key_file")"
-fi
-
-say ""
-say "Use it from this machine:"
-say "  curl -fsSL $repo/releases/latest/download/install.sh | sh"
-say "  export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\"   (add to your shell profile)"
-case $agent in
-    local)
+    say "1. Add these to your Amp project settings (Environment):"
+    say "     $(printf '%-18s %s' CP_URL "$url")"
+    secret_line CP_TOKEN "$agent_file"
+    secret_line CP_WEBHOOK_SECRET "$key_file"
+    say ""
+    say "2. In Amp, start a new thread in an orb of that project and send it:"
+    say ""
+    say "     Make this thread my clanker-proxy inbox: follow steps 3-5 and \"Persist"
+    say "     the setup\" in $repo/blob/master/docs/amp.md,"
+    say "     pinning the setup script to $pin. CP_URL, CP_TOKEN and"
+    say "     CP_WEBHOOK_SECRET are in this project's settings. When the plugin is"
+    say "     loaded, tell me to run \"cp-inbox: Show webhook URL\". Never ask me"
+    say "     to paste that URL into this thread."
+    say ""
+    say "3. When it gives you the webhook URL, run here:"
+    use_here
+    say "     cpctl webhook add amp --url-file - --secret-file $key_file --origin incoming"
+    say "   and paste the URL, press Enter, then Ctrl-D."
+else
+    say ""
+    say "Use it from this machine:"
+    use_here
+    if [ "$agent" = local ]; then
         say ""
         say "Then tell your agent: run cpctl help. It's the manual written for agents."
-        ;;
-    amp)
-        say ""
-        say "Then in Amp, start a thread in an orb of that project and ask it to make"
-        say "itself your clanker-proxy inbox, following steps 3-5 of"
-        say "  $repo/blob/master/docs/amp.md"
-        say "When it shows the webhook URL, save it to a file and run:"
-        say "  cpctl webhook add amp --url-file <file> --secret-file $key_file --origin incoming"
-        ;;
-esac
+    fi
+fi
 share "$name" "$url"
 say ""
 say "Run this script again any time to update."
