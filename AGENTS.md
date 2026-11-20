@@ -18,6 +18,7 @@ make worker-smoke   # cpd-worker under wrangler dev (needs npm ci and worker-bui
 make check          # everything CI runs
 make fmt
 make test-amp       # node tests for examples/amp; run when changing it
+make generate       # write api/openapi.json from cp-api
 cargo xtask deps    # the pure-crate dependency rule
 ```
 
@@ -29,7 +30,25 @@ cargo xtask deps    # the pure-crate dependency rule
 - `crates/cp-http`: host-agnostic HTTP service built from the operation table.
 - `crates/cpd`: native host. `crates/cpd-worker`: Worker + Durable Object host.
 - `crates/cpctl`: the CLI. `crates/cp-conformance`: black-box tests over HTTP.
-- `xtask`: repository automation. `api/openapi.yaml`: generated, committed.
+- `xtask`: repository automation. `api/openapi.json`: generated, committed.
+
+## API: code first
+
+- `crates/cp-api` is the source of truth: request and response types,
+  bounded newtypes, and `Op` (every operation with its method, path and
+  access). `api/openapi.json` is generated from it (`make generate`) and
+  committed; CI fails when it is stale or vacuum finds a warning.
+- To add or change an operation: change the types, the `Op` table in
+  `access.rs` and its `#[utoipa::path]` description in `doc.rs`, then
+  `make generate`. Access is declared only in `Op::access`; the spec's
+  `security` is written from it, and a test fails if the table and the
+  documented operations differ.
+- Paths under `/api/v1/`, camelCase JSON, times as `YYYY-MM-DDTHH:MM:SSZ`.
+  Every error is an RFC 9457 problem from an `ErrorKind`. Inputs are bounded
+  types that cannot hold an invalid value; secrets are write-only types
+  whose `Debug` is redacted.
+- Spec lint exceptions go in `.vacuum.yaml` (whole rules) or
+  `.vacuum-ignore.yaml` (one finding), each with a reason.
 
 ## Rules
 

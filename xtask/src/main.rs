@@ -8,7 +8,10 @@ use std::process::{Command, ExitCode};
 /// Crates whose logic must run unchanged on every host. They may not reach
 /// I/O, clocks or randomness, so none of these may be in their dependency
 /// closure.
-const PURE_CRATES: &[&str] = &["cp-thread"];
+const PURE_CRATES: &[&str] = &["cp-thread", "cp-api"];
+
+/// Where the generated OpenAPI document is committed.
+const SPEC: &str = "api/openapi.json";
 
 const FORBIDDEN: &[&str] = &[
     "getrandom",
@@ -23,9 +26,11 @@ const FORBIDDEN: &[&str] = &[
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1);
+    let check = std::env::args().any(|a| a == "--check");
     let result = match task.as_deref() {
         Some("deps") => deps(),
-        _ => Err("usage: cargo xtask deps".to_string()),
+        Some("openapi") => openapi(check),
+        _ => Err("usage: cargo xtask deps | openapi [--check]".to_string()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -95,4 +100,29 @@ fn deps() -> Result<(), String> {
     } else {
         Err(failures.join("\n"))
     }
+}
+
+/// Writes the OpenAPI document generated from cp-api, or with `check`,
+/// fails if the committed one differs.
+fn openapi(check: bool) -> Result<(), String> {
+    let mut json = cp_api::openapi()
+        .to_pretty_json()
+        .map_err(|e| format!("encode OpenAPI: {e}"))?;
+    json.push('\n');
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(SPEC);
+    if check {
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        if committed != json {
+            return Err(format!("{SPEC} is stale; run cargo xtask openapi"));
+        }
+        println!("{SPEC} is current");
+    } else {
+        std::fs::create_dir_all(path.parent().unwrap_or(&path))
+            .map_err(|e| format!("create api/: {e}"))?;
+        std::fs::write(&path, json).map_err(|e| format!("write {SPEC}: {e}"))?;
+        println!("wrote {SPEC}");
+    }
+    Ok(())
 }

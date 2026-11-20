@@ -15,7 +15,7 @@ build: ## Build the native workspace (release)
 check: lint test worker-smoke test-amp ## Everything CI runs
 
 .PHONY: lint
-lint: lint-rust lint-deps lint-install ## All linters
+lint: lint-rust lint-deps lint-api lint-install ## All linters
 
 .PHONY: lint-rust
 lint-rust: ## rustfmt and clippy, natively and for WebAssembly
@@ -27,6 +27,15 @@ lint-rust: ## rustfmt and clippy, natively and for WebAssembly
 lint-deps: ## Advisories, licenses, sources, and the pure-crate dependency rule
 	cargo deny check
 	$(CARGO) xtask deps
+
+.PHONY: generate
+generate: ## Write api/openapi.json from cp-api
+	$(CARGO) xtask openapi
+
+.PHONY: lint-api
+lint-api: ## The committed OpenAPI document is current and lints clean (needs npm ci)
+	$(CARGO) xtask openapi --check
+	npx vacuum lint --fail-severity warn -r .vacuum.yaml --ignore-file .vacuum-ignore.yaml api/openapi.json
 
 .PHONY: lint-install
 lint-install: ## shellcheck the scripts

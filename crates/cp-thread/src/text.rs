@@ -227,6 +227,10 @@ string_type!(
 );
 
 impl Body {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Whether the body has no text but whitespace.
     pub fn is_blank(&self) -> bool {
         self.0.trim().is_empty()

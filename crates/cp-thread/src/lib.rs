@@ -7,6 +7,8 @@
 
 mod event;
 mod fold;
+#[cfg(feature = "schema")]
+mod schema;
 mod text;
 mod thread;
 mod time;

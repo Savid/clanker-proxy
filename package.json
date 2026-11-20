@@ -1,8 +1,9 @@
 {
   "name": "clanker-proxy",
   "private": true,
-  "description": "Pins the Cloudflare tooling used to run and deploy cpd-worker.",
+  "description": "Pins the Node tooling: wrangler runs and deploys cpd-worker; vacuum lints the OpenAPI document.",
   "devDependencies": {
+    "@quobix/vacuum": "0.39.3",
     "wrangler": "4.159.0"
   }
 }
