@@ -40,8 +40,9 @@ fmt: ## Format Rust code
 test: test-rust test-install ## Rust and installer tests
 
 .PHONY: test-rust
-test-rust: ## Rust tests
+test-rust: ## Rust tests (nextest, plus doctests)
 	$(CARGO) nextest run --workspace --locked --no-tests=pass
+	$(CARGO) test --workspace --doc --locked
 
 .PHONY: test-install
 test-install: ## Offline installer tests
