@@ -20,6 +20,8 @@ allow = [
   "BSD-2-Clause",
   "BSD-3-Clause",
   "CC0-1.0",
+  # Mozilla's root certificates (webpki-root-certs), a permissive data licence.
+  "CDLA-Permissive-2.0",
   "ISC",
   "MIT",
   "Unicode-3.0",

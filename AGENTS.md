@@ -22,13 +22,26 @@ make generate       # write api/openapi.json from cp-api
 cargo xtask deps    # the pure-crate dependency rule
 ```
 
+## Trying it by hand
+
+Give each daemon its own data directory, never the owner's `~/.cp`. Peering
+needs two, each with a `--url` the other can reach (http only on loopback):
+
+```bash
+cargo build -p cpd
+CP_DIR=/tmp/a target/debug/cpd --name alice --url http://127.0.0.1:18471 --listen 127.0.0.1:18471 &
+CP_DIR=/tmp/b target/debug/cpd --name bob --url http://127.0.0.1:18472 --listen 127.0.0.1:18472 &
+curl -s -H "Authorization: Bearer $(cat /tmp/a/owner.token)" http://127.0.0.1:18471/api/v1/me
+```
+
 ## Layout
 
 - `crates/cp-thread`: event format, workflow, replay, clocks. Pure.
 - `crates/cp-api`: API types, bounded newtypes, the operation table, OpenAPI generation.
 - `crates/cp-core`: daemon logic over a synchronous `Sql` trait. Pure, sans-IO.
   `crates/cp-sqlite`: that `Sql` on rusqlite, for `cpd` and tests.
-- `crates/cp-http`: host-agnostic HTTP service built from the operation table.
+- `crates/cp-http`: the API over the core for any host: routing from the operation
+  table, access before the body is read, dispatch, peer calls, delivery.
 - `crates/cpd`: native host. `crates/cpd-worker`: Worker + Durable Object host.
 - `crates/cpctl`: the CLI. `crates/cp-conformance`: black-box tests over HTTP.
 - `xtask`: repository automation. `api/openapi.json`: generated, committed.

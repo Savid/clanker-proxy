@@ -1,0 +1,28 @@
+[package]
+name = "cp-http"
+description = "clanker-proxy's HTTP API over cp-core, independent of host: routing, access, dispatch, peer calls and delivery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+cp-api.workspace = true
+cp-core.workspace = true
+cp-thread.workspace = true
+http.workspace = true
+matchit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+subtle.workspace = true
+
+[dev-dependencies]
+cp-sqlite.workspace = true
+futures-util.workspace = true
+
+[lints]
+workspace = true

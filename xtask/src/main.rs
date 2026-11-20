@@ -8,7 +8,7 @@ use std::process::{Command, ExitCode};
 /// Crates whose logic must run unchanged on every host. They may not reach
 /// I/O, clocks or randomness, so none of these may be in their dependency
 /// closure.
-const PURE_CRATES: &[&str] = &["cp-thread", "cp-api", "cp-core"];
+const PURE_CRATES: &[&str] = &["cp-thread", "cp-api", "cp-core", "cp-http"];
 
 /// Where the generated OpenAPI document is committed.
 const SPEC: &str = "api/openapi.json";

@@ -155,6 +155,11 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         self.rt.now()
     }
 
+    /// The current time to the second, as the API reports it.
+    pub fn now_at(&self) -> cp_thread::At {
+        self.rt.now().at()
+    }
+
     pub(crate) fn new_id(&mut self) -> Id {
         let mut bytes = [0u8; 16];
         self.rt.random(&mut bytes);
