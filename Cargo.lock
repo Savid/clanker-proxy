@@ -357,6 +357,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpctl"
+version = "0.2.0"
+dependencies = [
+ "cp-api",
+ "cp-thread",
+ "cpd",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "cpd"
 version = "0.2.0"
 dependencies = [

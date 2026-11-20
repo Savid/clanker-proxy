@@ -65,8 +65,8 @@ them.
 
 | Amp project | Token | Webhook |
 | --- | --- | --- |
-| inbox-bob | `cpctl token add amp-bob -o amp-bob.token -peers bob` | `cpctl webhook add amp-bob -url-file amp-bob.url -secret-file bob.key -origin incoming -peers bob` |
-| inbox-rest | `cpctl token add amp-rest -o amp-rest.token -peers carol,dave` | `cpctl webhook add amp-rest -url-file amp-rest.url -secret-file rest.key -origin incoming -peers carol,dave` |
+| inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` | `cpctl webhook add amp-bob -url-file amp-bob.url -secret-file bob.key -origin incoming -peers bob` |
+| inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` | `cpctl webhook add amp-rest -url-file amp-rest.url -secret-file rest.key -origin incoming -peers carol,dave` |
 
 Follow [Setup](#setup) once per project, with that project's names, a key of
 its own, and `-peers` on both the token and the webhook. Then:
