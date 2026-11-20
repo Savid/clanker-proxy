@@ -117,6 +117,7 @@ grep -q 'CP_TOKEN  *secret, in .*cp-test.amp-inbox.token' "$work/out" || fail "a
 if grep -q 'CP_WEBHOOK_SECRET\|webhook add' "$work/out"; then fail "amp: a webhook step is left"; fi
 grep -q 'Make this thread my clanker-proxy inbox' "$work/out" || fail "amp: no prompt for the orb"
 grep -q 'registers itself with your daemon' "$work/out" || fail "amp: no closing line"
+grep -q 'export CP_URL=http://127.0.0.1:18519 CP_TOKEN=' "$work/out" || fail "amp: no cpctl line for the owner"
 if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi
 grep -q '^cpa_' "$work/home/.config/clanker-proxy/cp-test.amp-inbox.token" || fail "amp: agent token not saved"
 

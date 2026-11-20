@@ -345,6 +345,30 @@ if [ -z "$agent" ]; then
     fi
 fi
 
+# ---- cpctl on this machine ----
+
+# The owner approves peers and manages tokens with cpctl here, so it is kept
+# at the Worker's release. Not fatal: the Worker is up either way.
+bin=${CP_INSTALL_DIR:-$HOME/.local/bin}
+cli=
+if [ "$version" != local ]; then
+    if [ "$("$bin/cpctl" --version 2>/dev/null || true)" = "cpctl $version" ]; then
+        cli=$bin/cpctl
+    elif curl -fsSL -o "$tmp/install.sh" "$base/install.sh" &&
+        CP_VERSION=$version CP_INSTALL_DIR=$bin sh "$tmp/install.sh" >"$tmp/install.log" 2>&1; then
+        cli=$bin/cpctl
+        say "Installed cpctl $version in $bin."
+    else
+        say "Could not install cpctl here; the install line below does it."
+    fi
+    if [ -n "$cli" ]; then
+        case :${PATH:-}: in
+            *:"$bin":*) ;;
+            *) say "Add $bin to your PATH." ;;
+        esac
+    fi
+fi
+
 # Prints a line holding a secret: on a terminal with the value, otherwise
 # with where the value is saved, so it stays out of logs and transcripts.
 secret_line() { # secret_line <label> <file>
@@ -356,7 +380,7 @@ secret_line() { # secret_line <label> <file>
 }
 
 use_here() {
-    say "     curl -fsSL $repo/releases/latest/download/install.sh | sh   (once, for cpctl)"
+    [ -n "$cli" ] || say "     curl -fsSL $repo/releases/latest/download/install.sh | sh"
     say "     export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\""
 }
 
@@ -383,6 +407,9 @@ if [ "$agent" = amp ]; then
     secret_line CP_TOKEN "$agent_file"
     say ""
     say "The inbox registers itself with your daemon; nothing else to do."
+    say ""
+    say "To approve peers, use cpctl from this machine:"
+    use_here
 else
     say ""
     say "Use it from this machine:"
