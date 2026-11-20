@@ -8,7 +8,7 @@ use std::process::{Command, ExitCode};
 /// Crates whose logic must run unchanged on every host. They may not reach
 /// I/O, clocks or randomness, so none of these may be in their dependency
 /// closure.
-const PURE_CRATES: &[&str] = &[];
+const PURE_CRATES: &[&str] = &["cp-thread"];
 
 const FORBIDDEN: &[&str] = &[
     "getrandom",
@@ -36,13 +36,27 @@ fn main() -> ExitCode {
     }
 }
 
-/// Checks each pure crate's normal dependencies as built for WebAssembly.
-/// `cargo tree -p` resolves features for that crate alone, so a feature
-/// another crate enables (say `uuid/v4` in a host) does not hide or invent
-/// a dependency here.
+/// Checks each pure crate's normal dependencies as built for WebAssembly,
+/// then builds it for WebAssembly. `cargo tree -p` resolves features for
+/// that crate alone, so a feature another crate enables (say `uuid/v4` in a
+/// host) does not hide or invent a dependency here.
 fn deps() -> Result<(), String> {
     let mut failures = Vec::new();
     for krate in PURE_CRATES {
+        let check = Command::new(env!("CARGO"))
+            .args([
+                "check",
+                "--locked",
+                "--package",
+                krate,
+                "--target",
+                "wasm32-unknown-unknown",
+            ])
+            .status()
+            .map_err(|e| format!("run cargo check: {e}"))?;
+        if !check.success() {
+            failures.push(format!("{krate} does not build for wasm32-unknown-unknown"));
+        }
         let output = Command::new(env!("CARGO"))
             .args([
                 "tree",

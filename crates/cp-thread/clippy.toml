@@ -1,0 +1,11 @@
+# Clippy reads the nearest clippy.toml only, so this repeats the workspace's.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Pure: hosts pass the time in.
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "take the time as an argument" },
+  { path = "std::time::Instant::now", reason = "take the time as an argument" },
+]
