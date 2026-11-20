@@ -71,13 +71,23 @@ jobs:
       - run: make worker-smoke
 
   install:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The setup scripts run on owners' machines: test them on both systems.
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: make lint-install test-install
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .tool-versions
+          package-manager-cache: false
+      - if: runner.os == 'Linux'
+        run: make lint-install test-install
+      - run: make test-setup
 
   amp:
     runs-on: ubuntu-latest

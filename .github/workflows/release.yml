@@ -14,6 +14,7 @@ on:
       - scripts/package.sh
       - scripts/release_smoke.sh
       - scripts/worker_bundle.sh
+      - scripts/cloudflare.sh
   workflow_dispatch:
 
 concurrency:
@@ -200,8 +201,8 @@ jobs:
       - name: Assemble the release
         run: |
           mkdir release
-          cp build/dist/*.tar.gz scripts/install.sh release/
-          (cd release && sha256sum -- *.tar.gz install.sh > checksums.txt)
+          cp build/dist/*.tar.gz scripts/install.sh scripts/cloudflare.sh release/
+          (cd release && sha256sum -- *.tar.gz install.sh cloudflare.sh > checksums.txt)
           cat release/checksums.txt
           set -- release/*.tar.gz
           [ "$#" -eq 5 ] || { echo "::error::expected 4 archives and the Worker bundle, got $#"; exit 1; }

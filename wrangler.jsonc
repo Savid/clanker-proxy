@@ -24,7 +24,10 @@
     ]
   },
   "durable_objects": {
-    "bindings": [{ "name": "DAEMON", "class_name": "Daemon" }]
+    "bindings": [{ "name": "DAEMON", "class_name": "Daemon" }],
+    // A deploy restarts the daemon at once, so new code and settings apply
+    // to the next request. Streams reconnect within 2 s; delivery is durable.
+    "code_update_strategy": { "mode": "immediate" }
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Daemon"] }],
   // Settings live in the Worker, not here: CP_NAME, CP_URL and

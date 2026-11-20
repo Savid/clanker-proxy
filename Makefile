@@ -46,7 +46,7 @@ fmt: ## Format Rust code
 	$(CARGO) fmt --all
 
 .PHONY: test
-test: test-rust test-install ## Rust and installer tests
+test: test-rust test-install test-setup ## Rust, installer and setup-script tests
 
 .PHONY: test-rust
 test-rust: ## Rust tests (nextest, plus doctests)
@@ -56,6 +56,10 @@ test-rust: ## Rust tests (nextest, plus doctests)
 .PHONY: test-install
 test-install: ## Offline installer tests
 	sh scripts/install_test.sh
+
+.PHONY: test-setup
+test-setup: ## Offline tests of the Cloudflare setup script (needs Node and python3)
+	sh scripts/cloudflare_test.sh
 
 .PHONY: test-amp
 test-amp: ## Node tests for the Amp plugin example
