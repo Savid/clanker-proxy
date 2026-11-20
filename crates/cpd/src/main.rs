@@ -48,8 +48,10 @@ fn default_dir() -> PathBuf {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    // Colour only on a terminal: container and service logs keep plain text.
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(args.log_level)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_writer(std::io::stderr);
     match args.log_format {
         LogFormat::Text => subscriber.init(),

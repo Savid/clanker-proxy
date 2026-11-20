@@ -19,6 +19,7 @@ make check          # everything CI runs
 make fmt
 make test-amp       # node tests for examples/amp; run when changing it
 make generate       # write api/openapi.json from cp-api
+make image          # clanker-proxy:local for this machine (needs Docker, musl-tools)
 cargo xtask deps    # the pure-crate dependency rule
 ```
 
@@ -68,6 +69,15 @@ loopback like any other.
   whose `Debug` is redacted.
 - Spec lint exceptions go in `.vacuum.yaml` (whole rules) or
   `.vacuum-ignore.yaml` (one finding), each with a reason.
+
+## Releasing
+
+Bump `version` in the root `Cargo.toml`, merge, then tag `vX.Y.Z` to match.
+`.github/workflows/release.yml` checks the tag, runs `make lint test`, builds
+static Linux and macOS archives on native runners, publishes them with
+`checksums.txt` and `install.sh`, and pushes `ghcr.io/savid/clanker-proxy`
+for amd64 and arm64, all attested. A PR that touches the release path runs
+all of it except publishing.
 
 ## Docs
 
