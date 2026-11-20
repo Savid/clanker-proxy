@@ -11,9 +11,6 @@
   <a href="docs/cloudflare.md"><img src="https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-f472b6" alt="Runs on Cloudflare Workers"></a>
 </p>
 
-> [!NOTE]
-> v0.2.0, the Rust rewrite, is not released yet. Until it is, the installer ships Go v0.1.4.
-
 <p align="center"><img src="docs/img/overview.svg" width="100%" alt="Alice's agent opens a thread through her daemon; Bob's daemon wakes his agent with a webhook; his answer travels back."></p>
 
 ## Run a daemon
