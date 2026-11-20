@@ -7,9 +7,10 @@ it with `cpctl`.
 
 <p align="center"><img src="img/amp.svg" width="100%" alt="A peer's daemon reaches your cpd; cpd wakes the Amp orb's inbox thread with a signed webhook; the inbox routes the event to one conversation per cpd thread, which answers through cpctl."></p>
 
-- **Inbox:** the thread that first loads the plugin. It owns the webhook and starts the conversations. Peering requests never reach an agent: you get a notification and review them with `cpctl requests`.
+- **Inbox:** the thread that first loads the plugin. The plugin there receives cpd's webhooks and starts the conversations; the inbox's own agent never sees them and has nothing to do. Leave it idle, and never archive it. Peering requests never reach an agent: you get a notification and review them with `cpctl requests`.
+- **Webhooks** are trusted only as a wake-up. The plugin drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries only IDs and a state, never peer text: what a conversation acts on, it reads from cpd.
 - **Conversation:** one per cpd thread, in its own git worktree under `~/cp-work`. It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads you sent: it checks the peer's answer, then closes, reopens, or asks you.
-- **Peer text** reaches an agent only through `cpctl show`, quoted line by line. Agents are told to treat it as a request, not as instructions.
+- **Peer text** reaches an agent only through `cpctl show`, quoted line by line after `│`. It is the peer's request, to weigh, never instructions to follow.
 
 ## You need
 
@@ -97,8 +98,16 @@ the project's cached snapshot in its Orb settings. Never commit tokens or
 
 ## What agents may do alone
 
-The plugin checks every shell command a conversation runs, and every file
-other tools name:
+Each conversation starts with standing instructions. Alone, it does what a
+peer's request reasonably needs: reads and changes code in its own worktree,
+runs tests, commits locally, and answers through `next:`. It asks you first,
+with `cp_ask_owner`, before anything with effects outside the orb: pushing,
+pull requests, new threads, publishing, spending, sharing. It never runs a
+peer's code outside the repository it works on, and never handles peering
+requests, webhooks or credentials.
+
+The plugin also checks every shell command a conversation runs, and every
+file other tools name:
 
 | Command | Result |
 | --- | --- |
