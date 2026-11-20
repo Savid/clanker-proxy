@@ -11,45 +11,30 @@ daemons and with other Workers, and needs no server.
 - **Delivery** to peers and webhooks runs from the alarm, never inside a request: at most 40 calls per alarm (the free plan allows 50), with the next alarm set at once if more is due.
 - **Cron**, every 15 min, re-arms a lost alarm.
 
-## Deploy
+## Set up
 
-Needs a Cloudflare account, the toolchain in `rust-toolchain.toml`, and Node.
+Needs Node.js 20+ and a Cloudflare account (the free plan is enough):
 
 ```bash
-rustup target add wasm32-unknown-unknown
-cargo install worker-build --version 0.9.0 --locked
-npm ci
+curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloudflare.sh | sh
 ```
 
-1. Deploy. The first deploy prints the Worker's URL, such as `https://clanker-proxy.alice.workers.dev`. Requests answer `503` until step 2.
+It does the following:
+- logs you in to Cloudflare if needed, and asks for a Worker name and your name;
+- deploys the prebuilt Worker and stores its settings;
+- prints your URL, and your owner token once: store that in your password manager. It's also saved to `~/.config/clanker-proxy/<worker>.token`, readable only by you.
 
-   ```bash
-   npx wrangler deploy
-   ```
+Run it again any time to update; your data and settings carry over.
 
-2. Store the settings as secrets: the owner's name (fixed by the first start), that URL, and a new owner token. Keep `owner.token`: it's your `cpctl` credential. Secrets survive every redeploy.
+**With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--worker <name>] [--amp]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
 
-   ```bash
-   printf 'cpo_%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > owner.token
-   chmod 600 owner.token
-   echo alice | npx wrangler secret put CP_NAME
-   echo https://clanker-proxy.alice.workers.dev | npx wrangler secret put CP_URL
-   npx wrangler secret put CP_OWNER_TOKEN < owner.token
-   ```
-
-3. Point `cpctl` at it:
-
-   ```bash
-   export CP_URL=https://clanker-proxy.alice.workers.dev CP_TOKEN="$(cat owner.token)"
-   cpctl me
-   ```
-
-A missing or malformed setting makes every request answer `503` saying what
-to fix. The Worker logs say the same, and never contain the token.
+**Amp inbox:** add `--amp`. The script also makes the agent token and webhook key, and prints what goes in your Amp project settings. Then follow steps 3–5 of [amp.md](amp.md) in an orb.
 
 ## Local
 
-`make worker-dev` serves `http://127.0.0.1:18787`, configured from
+From a clone of the repository, `make worker-bundle` packs what the release
+ships, and `sh scripts/cloudflare.sh --bundle build/dist/clanker-proxy_worker.tar.gz`
+deploys it. `make worker-dev` serves `http://127.0.0.1:18787`, configured from
 `.dev.vars` (git ignores it):
 
 ```bash
@@ -65,5 +50,4 @@ conformance suite against it with a native daemon. CI runs it on every change.
 
 - **Logs:** one JSON line per request (request ID, method, path, status, ms), never queries, headers or bodies. The ID comes from `X-Request-Id` or Cloudflare's ray ID and is echoed back. Keep logs with `observability` in `wrangler.jsonc`.
 - **Cost:** an open stream (`cpctl wait`, `watch`, the Amp plugin) keeps the object in memory. A full day of one stream is about 11,000 GB-s, inside the free daily allowance.
-- **Updates:** `cpctl me` says when a release is out, and `cpctl peer ls` says when a peer runs a newer one. To update, `git pull`, check out the release tag, and `npx wrangler deploy`. Data and settings carry over: storage migrates forward on the first request. A release can talk to peers on the previous minor release, so peers need not update together.
 - **Starting over:** set `CP_STORAGE` to a new name (it names the object; default `owner`) and deploy. The old object keeps its data, unreachable. Then peer again.

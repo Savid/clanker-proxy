@@ -1,0 +1,288 @@
+#!/bin/sh
+# Sets up, or updates, clanker-proxy on Cloudflare: downloads the prebuilt
+# Worker from a release, deploys it with wrangler, and stores its settings.
+#
+#   curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloudflare.sh | sh
+#
+# On a terminal it asks what it needs. Without one (an agent running it),
+# pass the answers: --name <owner> [--worker <name>] [--amp].
+# Secrets are shown only on a terminal, never on standard output, so they
+# stay out of logs and agent transcripts; files hold them either way.
+set -eu
+
+repo=https://github.com/Savid/clanker-proxy
+config=${XDG_CONFIG_HOME:-$HOME/.config}/clanker-proxy
+data=${XDG_DATA_HOME:-$HOME/.local/share}/clanker-proxy
+
+usage() {
+    cat <<'EOF'
+usage: cloudflare.sh [options]
+
+Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
+
+  --name <owner>     your name: lower-case letters, digits, single hyphens
+  --worker <name>    the Worker's name (default clanker-proxy); its URL is
+                     https://<name>.<your-subdomain>.workers.dev
+  --url <url>        the URL peers use, if not the workers.dev one
+  --token-file <f>   use the owner token in this file
+  --amp              also make the agent token and webhook key an Amp inbox needs
+  --bundle <file>    deploy this Worker bundle instead of downloading one
+
+Environment: CP_VERSION picks a release (default: the latest);
+CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID log in without a browser.
+Needs Node.js 20+ and curl.
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+fail() {
+    printf 'clanker-proxy: %s\n' "$*" >&2
+    exit 1
+}
+
+# A terminal to ask on and show secrets to, even though this script
+# arrives on standard input.
+# CP_NO_TTY and CP_WRANGLER exist for scripts/cloudflare_test.sh.
+tty=
+if [ -z "${CP_NO_TTY:-}" ] && (: </dev/tty >/dev/tty) 2>/dev/null; then
+    tty=/dev/tty
+fi
+
+# ask <prompt> <default>: the answer, or the default without a terminal.
+ask() {
+    if [ -z "$tty" ]; then
+        printf '%s\n' "$2"
+        return
+    fi
+    printf '%s [%s]: ' "$1" "$2" >"$tty"
+    answer=
+    IFS= read -r answer <"$tty" || true
+    printf '%s\n' "${answer:-$2}"
+}
+
+# Shows a secret on the terminal only.
+show() {
+    if [ -n "$tty" ]; then
+        printf '%s\n' "$*" >"$tty"
+    fi
+}
+
+valid_name() { # valid_name <value> <max length>
+    [ "${#1}" -le "$2" ] && printf '%s' "$1" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
+}
+
+name='' worker='' url='' token_file='' amp='' bundle=''
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        -h | --help) usage; exit 0 ;;
+        --amp) amp=yes; shift; continue ;;
+        --name | --worker | --url | --token-file | --bundle) ;;
+        *) fail "unknown option $1 (see --help)" ;;
+    esac
+    [ "$#" -ge 2 ] || fail "$1 needs a value (see --help)"
+    case $1 in
+        --name) name=$2 ;;
+        --worker) worker=$2 ;;
+        --url) url=$2 ;;
+        --token-file) token_file=$2 ;;
+        --bundle) bundle=$2 ;;
+    esac
+    shift 2
+done
+
+for tool in node npm curl tar; do
+    command -v "$tool" >/dev/null 2>&1 || fail "needs $tool (Node.js 20+ and curl)"
+done
+node -e 'process.exit(+process.versions.node.split(".")[0] >= 20 ? 0 : 1)' ||
+    fail "needs Node.js 20 or later"
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/clanker-proxy-cf.XXXXXXXX")
+trap 'rm -rf "$tmp"' 0
+trap 'exit 1' HUP INT TERM
+
+# ---- the Worker ----
+
+dir=$data/worker
+mkdir -p "$dir" "$config"
+if [ -n "$bundle" ]; then
+    cp "$bundle" "$tmp/worker.tar.gz" || fail "cannot read $bundle"
+    version=local
+else
+    version=${CP_VERSION:-}
+    if [ -z "$version" ]; then
+        latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$repo/releases/latest") ||
+            fail "cannot find the latest release"
+        version=${latest##*/}
+    fi
+    printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || fail "not a release tag: $version"
+    base=$repo/releases/download/$version
+    curl -fsSL -o "$tmp/worker.tar.gz" "$base/clanker-proxy_worker.tar.gz" ||
+        fail "cannot download the Worker for $version"
+    curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" || fail "cannot download checksums.txt"
+    want=$(awk '$2 == "clanker-proxy_worker.tar.gz" { print $1 }' "$tmp/checksums.txt")
+    if command -v sha256sum >/dev/null 2>&1; then
+        have=$(sha256sum "$tmp/worker.tar.gz")
+    else
+        have=$(shasum -a 256 "$tmp/worker.tar.gz")
+    fi
+    if [ -z "$want" ] || [ "${have%% *}" != "$want" ]; then
+        fail "checksum mismatch; nothing was deployed"
+    fi
+fi
+say "clanker-proxy $version for Cloudflare"
+rm -rf "$dir/build"
+tar -xzf "$tmp/worker.tar.gz" -C "$dir" || fail "cannot unpack the Worker"
+(cd "$dir" && npm ci --no-audit --no-fund --loglevel=error >"$tmp/npm.log" 2>&1) || {
+    tail -n 20 "$tmp/npm.log" >&2
+    fail "npm ci failed"
+}
+
+wr() {
+    (cd "$dir" && "${CP_WRANGLER:-./node_modules/.bin/wrangler}" "$@")
+}
+
+# ---- Cloudflare login ----
+
+if ! wr whoami 2>/dev/null | grep -q 'Account ID'; then
+    if [ -z "$tty" ] || [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+        fail "not logged in to Cloudflare: run 'npx wrangler login', or set CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID"
+    fi
+    say "Log in to Cloudflare in the browser that opens."
+    # shellcheck disable=SC2094 # the terminal, read and written by design
+    wr login <"$tty" >"$tty" 2>&1 || fail "Cloudflare login failed"
+fi
+
+# ---- what to deploy ----
+
+worker=${worker:-$(ask "Worker name (its URL is https://<name>.<your-subdomain>.workers.dev)" clanker-proxy)}
+valid_name "$worker" 63 || fail "Worker name $worker: lower-case letters, digits and single hyphens"
+
+existing=
+if wr secret list --name "$worker" 2>/dev/null | grep -q '"CP_OWNER_TOKEN"'; then
+    existing=yes
+fi
+
+# Deploys, waiting out the Cloudflare API's lag right after a first upload.
+deploy() {
+    i=0
+    while :; do
+        i=$((i + 1))
+        if wr deploy --name "$worker" "$@" >"$tmp/deploy.log" 2>&1; then
+            return
+        fi
+        if [ "$i" -lt 8 ] && grep -qE 'code: (10007|10079)' "$tmp/deploy.log"; then
+            say "Cloudflare is still registering the new Worker; trying again in 20 seconds."
+            sleep 20
+            continue
+        fi
+        tail -n 20 "$tmp/deploy.log" >&2
+        if grep -q '10079' "$tmp/deploy.log"; then
+            fail "deploy failed: delete the half-made Worker (npx wrangler delete --name $worker), wait a minute, and run this again"
+        fi
+        if grep -qi 'workers.dev subdomain' "$tmp/deploy.log"; then
+            fail "choose your workers.dev subdomain once at https://dash.cloudflare.com (Workers & Pages), then run this again"
+        fi
+        fail "deploy failed"
+    done
+}
+
+if [ -n "$existing" ]; then
+    say "Updating $worker; its settings stay as they are."
+    deploy
+    found=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
+    say "Updated: ${url:-$found} now runs $version."
+    exit 0
+fi
+
+[ -n "$name" ] || [ -n "$tty" ] || fail "pass --name <your name>: there is no terminal to ask on"
+default_name=$(printf '%s' "${USER:-me}" | tr 'A-Z_.' 'a-z--' | tr -cd 'a-z0-9-')
+name=${name:-$(ask "Your name, as peers will see it" "${default_name:-me}")}
+valid_name "$name" 39 || fail "name $name: lower-case letters, digits and single hyphens, at most 39"
+
+# The owner token: a file given, the one saved by an earlier run, one
+# entered, or a new one.
+token_file=${token_file:-$config/$worker.token}
+if [ ! -s "$token_file" ]; then
+    choice=$(ask "Owner token: (g)enerate a new one or (e)nter your own" g)
+    (umask 077 && : >"$token_file")
+    if [ "$choice" = e ] && [ -n "$tty" ]; then
+        printf 'Owner token (input hidden): ' >"$tty"
+        stty -echo <"$tty"
+        IFS= read -r entered <"$tty" || entered=
+        stty echo <"$tty"
+        printf '\n' >"$tty"
+        printf '%s\n' "$entered" | grep -Eq '^cpo_[A-Za-z0-9_-]{43}$' ||
+            fail "an owner token is cpo_ and 43 base64url characters"
+        printf '%s\n' "$entered" >"$token_file"
+    else
+        printf 'cpo_%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" >"$token_file"
+    fi
+fi
+grep -Eq '^cpo_[A-Za-z0-9_-]{43}$' "$token_file" || fail "$token_file does not hold an owner token"
+
+say "Deploying $worker..."
+deploy
+if [ -z "$url" ]; then
+    url=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
+    [ -n "$url" ] || fail "deployed, but wrangler printed no workers.dev URL; run again with --url <the Worker's URL>"
+fi
+
+# All three settings go out in one deploy, so no version ever runs with only
+# some of them. The file holds the owner token: it lives in $tmp, removed on exit.
+(umask 077 && NAME=$name URL=$url TOKEN=$(cat "$token_file") node -e '
+process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN: process.env.TOKEN.trim() }));
+' >"$tmp/secrets.json")
+say "Storing settings..."
+deploy --secrets-file "$tmp/secrets.json"
+
+# The header goes through a file, so the token never appears in a process list.
+(umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$token_file")" >"$tmp/auth")
+i=0
+until curl -fsS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -lt 30 ] || fail "$url does not answer yet; check it with: curl $url/api/v1/health"
+    sleep 2
+done
+
+say ""
+say "clanker-proxy is running at $url, owner $name."
+say "Owner token saved to $token_file (only you can read it)."
+show ""
+show "OWNER TOKEN, shown once: store it in your password manager."
+show "  $(cat "$token_file")"
+
+if [ -z "$amp" ] && [ -n "$tty" ]; then
+    if [ "$(ask "Prepare an Amp inbox (agent token and webhook key)? (y/n)" n)" = y ]; then
+        amp=yes
+    fi
+fi
+if [ "$amp" = yes ]; then
+    agent_file=$config/$worker.amp-inbox.token
+    key_file=$config/$worker.amp-webhook.key
+    if curl -fsS -H @"$tmp/auth" -H 'content-type: application/json' -d '{"name":"amp-inbox"}' \
+        "$url/api/v1/agent-tokens" >"$tmp/agent.json" 2>/dev/null; then
+        (umask 077 && sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$tmp/agent.json" >"$agent_file")
+    elif [ ! -s "$agent_file" ]; then
+        fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
+    fi
+    [ -s "$key_file" ] || (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '\n' >"$key_file" && echo >>"$key_file")
+    say ""
+    say "Amp project settings (Settings, this project, Environment):"
+    say "  CP_URL             $url"
+    say "  CP_TOKEN           secret, in $agent_file"
+    say "  CP_WEBHOOK_SECRET  secret, in $key_file"
+    show ""
+    show "To paste into Amp, shown once:"
+    show "  CP_TOKEN           $(cat "$agent_file")"
+    show "  CP_WEBHOOK_SECRET  $(cat "$key_file")"
+fi
+
+say ""
+say "next:"
+say "  curl -fsSL $repo/releases/latest/download/install.sh | sh   install cpctl"
+say "  export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\"   use it (add to your shell profile)"
+say "  cpctl peer add <name> <their url>   connect to a friend"
+if [ "$amp" = yes ]; then
+    say "  $repo/blob/master/docs/amp.md   finish the Amp inbox (steps 3-5)"
+fi
+say "  run this script again   update to a newer release"

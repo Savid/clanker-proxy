@@ -13,6 +13,8 @@ on:
       - Dockerfile
       - scripts/package.sh
       - scripts/release_smoke.sh
+      - scripts/worker_bundle.sh
+      - scripts/cloudflare.sh
   workflow_dispatch:
 
 concurrency:
@@ -99,6 +101,36 @@ jobs:
           path: build/dist/
           if-no-files-found: error
 
+  worker:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: worker
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .tool-versions
+          package-manager-cache: false
+      - run: npm ci --no-audit --no-fund
+      - run: cargo install worker-build --version 0.9.0 --locked
+      - run: make worker-build && sh scripts/worker_bundle.sh
+      - name: The bundle deploys with Node alone
+        run: |
+          d=$(mktemp -d)
+          tar -xzf build/dist/clanker-proxy_worker.tar.gz -C "$d"
+          cd "$d" && npm ci --no-audit --no-fund && npx wrangler deploy --dry-run --outdir out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-worker
+          path: build/dist/clanker-proxy_worker.tar.gz
+          if-no-files-found: error
+
   image:
     needs: [check, build]
     runs-on: ubuntu-latest
@@ -150,7 +182,7 @@ jobs:
           push-to-registry: true
 
   publish:
-    needs: [build, image]
+    needs: [build, image, worker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -169,11 +201,11 @@ jobs:
       - name: Assemble the release
         run: |
           mkdir release
-          cp build/dist/*.tar.gz scripts/install.sh release/
-          (cd release && sha256sum -- *.tar.gz install.sh > checksums.txt)
+          cp build/dist/*.tar.gz scripts/install.sh scripts/cloudflare.sh release/
+          (cd release && sha256sum -- *.tar.gz install.sh cloudflare.sh > checksums.txt)
           cat release/checksums.txt
           set -- release/*.tar.gz
-          [ "$#" -eq 4 ] || { echo "::error::expected 4 archives, got $#"; exit 1; }
+          [ "$#" -eq 5 ] || { echo "::error::expected 4 archives and the Worker bundle, got $#"; exit 1; }
       - if: env.PUBLISH == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:

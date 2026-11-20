@@ -46,7 +46,7 @@ fmt: ## Format Rust code
 	$(CARGO) fmt --all
 
 .PHONY: test
-test: test-rust test-install ## Rust and installer tests
+test: test-rust test-install test-setup ## Rust, installer and setup-script tests
 
 .PHONY: test-rust
 test-rust: ## Rust tests (nextest, plus doctests)
@@ -56,6 +56,10 @@ test-rust: ## Rust tests (nextest, plus doctests)
 .PHONY: test-install
 test-install: ## Offline installer tests
 	sh scripts/install_test.sh
+
+.PHONY: test-setup
+test-setup: ## Offline tests of the Cloudflare setup script (needs Node and python3)
+	sh scripts/cloudflare_test.sh
 
 .PHONY: test-amp
 test-amp: ## Node tests for the Amp plugin example
@@ -68,6 +72,10 @@ image: ## Build the clanker-proxy:local container image for this machine (needs 
 .PHONY: worker-build
 worker-build: ## Build cpd-worker to WebAssembly (needs worker-build 0.9.0)
 	cd crates/cpd-worker && worker-build --release
+
+.PHONY: worker-bundle
+worker-bundle: worker-build ## Pack build/dist/clanker-proxy_worker.tar.gz, deployable with Node alone
+	sh scripts/worker_bundle.sh
 
 .PHONY: worker-smoke
 worker-smoke: worker-build ## Run cpd-worker under wrangler dev, probe it, and run conformance against it (needs npm ci)
