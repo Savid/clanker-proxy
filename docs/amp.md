@@ -68,16 +68,18 @@ those peers.
 Commit `.amp/plugins/cp-inbox.ts` and an executable `.agents/setup` so
 future orbs get both; Amp snapshots the result. The script installs the
 `cpctl` matching the release your daemon runs, so it follows the daemon when
-you update it:
+you update it, or the latest release if it cannot ask the daemon:
 
 ```sh
 #!/bin/sh
 set -eu
 bin="$HOME/.local/bin"
-# The daemon's release, read with the agent token from the project settings.
-version=$(curl -fsS -H "Authorization: Bearer $CP_TOKEN" "$CP_URL/api/v1/me" |
+# The daemon's release, read with the agent token; the latest release when
+# the settings are not set here or the daemon cannot be reached.
+version=$(curl -fsS -H "Authorization: Bearer ${CP_TOKEN:-}" "${CP_URL:-}/api/v1/me" 2>/dev/null |
     sed -n 's/.*"version":"\(v[0-9][^"]*\)".*/\1/p')
-[ -n "$version" ] || { echo "cannot read the daemon's release from CP_URL" >&2; exit 1; }
+[ -n "$version" ] || version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    https://github.com/Savid/clanker-proxy/releases/latest | sed 's|.*/tag/||')
 if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $version" ]; then
     installer=$(mktemp)
     trap 'rm -f "$installer"' EXIT
