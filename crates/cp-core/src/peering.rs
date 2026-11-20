@@ -1,4 +1,5 @@
-//! Peering: asking to connect, approving requests, and peers' secrets.
+//! Peering: asking to connect, approving requests, and knowing peers by
+//! their keys.
 //!
 //! Steps that call another daemon are split in two: the core prepares and
 //! records what is about to happen, the host makes the call, and the core
@@ -6,15 +7,16 @@
 //! again.
 
 use cp_api::{
-    Approval, Code, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerSecret,
-    PeerStatus, PeeringRequest, ReceiptStatus, Request, RequestList, RequestReceipt, RequestRef,
-    Version, prefix,
+    Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
+    PeeringRequest, PublicKey, ReceiptStatus, Request, RequestList, RequestReceipt, RequestRef,
+    Version,
 };
 use cp_thread::Name;
 
 use crate::core::Core;
 use crate::runtime::{Millis, Runtime};
 use crate::secrets;
+use crate::signing::{MAX_SKEW_SECS, SignedCall, code};
 use crate::sql::{Row, Sql, text};
 
 /// How long a peering request waits for the owner, and how long events to a
@@ -32,15 +34,14 @@ fn err(kind: ErrorKind, detail: impl Into<String>) -> Error {
     Error::new(kind, detail)
 }
 
-/// A request about to go to another daemon.
+/// A POST to another daemon, ready to send: `path` on `url`, with these
+/// headers (a signature, when the call is signed) and body.
 #[derive(Clone, Debug)]
-pub struct Outbound {
-    /// The daemon to call.
+pub struct Call {
     pub url: DaemonUrl,
-    /// What to send: a peering request, or (for an approval) nothing but
-    /// this secret as the bearer.
-    pub request: Option<PeeringRequest>,
-    pub secret: PeerSecret,
+    pub path: &'static str,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
 }
 
 /// An approval waiting on the requester's daemon to confirm.
@@ -48,25 +49,25 @@ pub struct Outbound {
 pub struct PendingApproval {
     pub request: RequestRef,
     pub name: Name,
-    pub call: Outbound,
+    pub call: Call,
 }
 
 struct PeerRow {
     name: Name,
     url: DaemonUrl,
-    secret: String,
+    key: PublicKey,
     status: PeerStatus,
     added_at: Millis,
     version: Option<Version>,
 }
 
-const PEER_COLUMNS: &str = "name, url, secret, status, added_at, version";
+const PEER_COLUMNS: &str = "name, url, key, status, added_at, version";
 
 fn peer_row(r: &Row) -> Result<PeerRow, Error> {
     Ok(PeerRow {
         name: r.parse(0)?,
         url: r.parse(1)?,
-        secret: r.text(2)?.to_string(),
+        key: r.parse(2)?,
         status: match r.text(3)? {
             "active" => PeerStatus::Active,
             _ => PeerStatus::Requested,
@@ -80,12 +81,12 @@ fn peer_row(r: &Row) -> Result<PeerRow, Error> {
 }
 
 impl<S: Sql, R: Runtime> Core<S, R> {
-    fn peer_view(p: &PeerRow) -> Result<Peer, Error> {
+    fn peer_view(&self, p: &PeerRow) -> Result<Peer, Error> {
         Ok(Peer {
             name: p.name.clone(),
             url: p.url.clone(),
             status: p.status,
-            code: secrets::code(&p.secret)?,
+            code: code(&p.key, &self.key)?,
             added_at: p.added_at.at(),
             version: p.version.clone(),
         })
@@ -103,7 +104,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
 
     fn live_op(&self) -> Result<Option<Row>, Error> {
         Ok(self.sql.query_one(
-            "SELECT request_id, name, url, secret_hash, previous_hash FROM peering_op WHERE expires_at > ?",
+            "SELECT request_id, name, url, key, previous_key FROM peering_op WHERE expires_at > ?",
             &[self.now().0.into()],
         )?)
     }
@@ -116,7 +117,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         )?;
         let peers = rows
             .iter()
-            .map(|r| Self::peer_view(&peer_row(r)?))
+            .map(|r| self.peer_view(&peer_row(r)?))
             .collect::<Result<_, _>>()?;
         Ok(PeerList { peers })
     }
@@ -125,7 +126,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         let p = self
             .load_peer(name)?
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
-        Self::peer_view(&p)
+        self.peer_view(&p)
     }
 
     /// Whether `name` is or was a peer: what a token or webhook may be
@@ -193,21 +194,43 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(previous)
     }
 
-    /// Records a peer the owner is asking to connect with, and the request
-    /// to send. The peer is saved first, so the other daemon's acceptance
-    /// finds it even if it arrives before the request's answer. If sending
-    /// fails, the host calls [`Core::abort_add_peer`].
-    pub fn add_peer(&mut self, input: PeerInput) -> Result<Outbound, Error> {
+    /// Checks the owner may ask the daemon at `input.url` to peer, and
+    /// returns the request to send. Nothing is stored until it answers:
+    /// [`Core::finish_add_peer`] records the peer with the key it sent back.
+    pub fn add_peer(&mut self, input: PeerInput) -> Result<Call, Error> {
         let PeerInput { name, url, note } = input;
-        if self.load_peer(&name)?.is_some() {
+        self.check_new_peer(&name, &url)?;
+        let own_url = self.url.clone().ok_or_else(|| {
+            err(
+                ErrorKind::Unprocessable,
+                "this daemon has no public URL to give them; restart it with its URL",
+            )
+        })?;
+        let request = PeeringRequest {
+            name: self.me.clone(),
+            url: own_url,
+            key: self.key.clone(),
+            note,
+        };
+        Ok(Call {
+            url,
+            path: "/api/v1/peering-requests",
+            headers: Vec::new(),
+            body: serde_json::to_vec(&request)
+                .map_err(|e| err(ErrorKind::Internal, e.to_string()))?,
+        })
+    }
+
+    fn check_new_peer(&self, name: &Name, url: &DaemonUrl) -> Result<(), Error> {
+        if self.load_peer(name)?.is_some() {
             return Err(err(
                 ErrorKind::Conflict,
                 format!("{name} is already a peer"),
             ));
         }
-        self.approvable(&name, &url)?;
+        self.approvable(name, url)?;
         if let Some(r) = self.sql.query_one(
-            "SELECT id, name, secret FROM requests WHERE url = ?",
+            "SELECT id, name, key FROM requests WHERE url = ?",
             &[text(url.as_str())],
         )? {
             return Err(err(
@@ -216,53 +239,56 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                     "{url} already asked to peer as {} (request {}, code {}); approve that request instead",
                     r.text(1)?,
                     r.text(0)?,
-                    secrets::code(r.text(2)?)?
+                    code(&r.parse(2)?, &self.key)?
                 ),
             ));
         }
-        let own_url = self.url.clone().ok_or_else(|| {
-            err(
-                ErrorKind::Unprocessable,
-                "this daemon has no public URL to give them; restart it with its URL",
-            )
-        })?;
-        let secret = secrets::mint(&mut self.rt, prefix::PEER);
-        let peer_secret =
-            PeerSecret::new(secret.clone()).map_err(|e| err(ErrorKind::Internal, e.to_string()))?;
-        self.sql.execute(
-            "INSERT INTO peers (name, url, secret, secret_hash, status, added_at) VALUES (?, ?, ?, ?, 'requested', ?)",
-            &[text(&name), text(url.as_str()), secret.clone().into(), secrets::hash(&secret).into(), self.now().0.into()],
-        )?;
-        Ok(Outbound {
-            url,
-            request: Some(PeeringRequest {
-                name: self.me.clone(),
-                url: own_url,
-                secret: peer_secret.clone(),
-                note,
-            }),
-            secret: peer_secret,
-        })
-    }
-
-    /// Forgets a peer whose request could not be sent, unless it has since
-    /// been accepted or replaced.
-    pub fn abort_add_peer(&mut self, name: &Name, secret: &PeerSecret) -> Result<(), Error> {
-        self.sql.execute(
-            "DELETE FROM peers WHERE name = ? AND secret_hash = ? AND status = 'requested'",
-            &[text(name), secrets::hash(secret.expose()).into()],
-        )?;
         Ok(())
     }
 
-    /// The peer just asked for, for the API's answer.
-    pub fn requested_peer(&self, name: &Name) -> Result<Peer, Error> {
+    /// Records the peer the owner asked, now that its daemon has the request
+    /// and sent back its key. Checks again: anything may have changed while
+    /// the request was out.
+    pub fn finish_add_peer(
+        &mut self,
+        name: &Name,
+        url: &DaemonUrl,
+        receipt: &RequestReceipt,
+    ) -> Result<Peer, Error> {
+        self.check_new_peer(name, url)?;
+        if receipt.key == self.key {
+            return Err(err(ErrorKind::Unprocessable, "that URL is this daemon"));
+        }
+        if let Some(r) = self.sql.query_one(
+            "SELECT name FROM peers WHERE key = ?",
+            &[text(receipt.key.as_str())],
+        )? {
+            return Err(err(
+                ErrorKind::Conflict,
+                format!("that daemon is already a peer, as {}", r.text(0)?),
+            ));
+        }
+        self.sql.execute(
+            "INSERT INTO peers (name, url, key, status, added_at) VALUES (?, ?, ?, 'requested', ?)",
+            &[
+                text(name),
+                text(url.as_str()),
+                text(receipt.key.as_str()),
+                self.now().0.into(),
+            ],
+        )?;
         self.peer(name)
     }
 
     /// Stores a peering request from another daemon for the owner to
     /// approve. Public, so rate-limited and capped.
     pub fn request_received(&mut self, req: &PeeringRequest) -> Result<RequestReceipt, Error> {
+        if req.key == self.key {
+            return Err(err(
+                ErrorKind::Unprocessable,
+                "a daemon cannot peer with itself",
+            ));
+        }
         let now = self.now();
         self.sql.execute(
             "DELETE FROM request_times WHERE at <= ?",
@@ -290,12 +316,12 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             &[now.plus(-REQUEST_TTL).0.into()],
         )?;
         self.sql.execute(
-            "INSERT INTO requests (id, name, url, secret, note, at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO requests (id, name, url, key, note, at) VALUES (?, ?, ?, ?, ?, ?)",
             &[
                 id.clone().into(),
                 text(&req.name),
                 text(req.url.as_str()),
-                req.secret.expose().into(),
+                text(req.key.as_str()),
                 req.note.as_ref().map(Note::as_str).into(),
                 now.0.into(),
             ],
@@ -317,14 +343,15 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         })?;
         Ok(RequestReceipt {
             status: ReceiptStatus::Pending,
-            code: secrets::code(req.secret.expose())?,
+            code: code(&req.key, &self.key)?,
+            key: self.key.clone(),
         })
     }
 
     /// Pending peering requests from the last week, oldest first.
     pub fn requests(&self) -> Result<RequestList, Error> {
         let rows = self.sql.query(
-            "SELECT id, name, url, secret, note, at FROM requests WHERE at >= ? ORDER BY at, id",
+            "SELECT id, name, url, key, note, at FROM requests WHERE at >= ? ORDER BY at, id",
             &[self.now().plus(-REQUEST_TTL).0.into()],
         )?;
         let mut requests = Vec::with_capacity(rows.len());
@@ -333,7 +360,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 id: r.parse(0)?,
                 name: r.parse(1)?,
                 url: r.parse(2)?,
-                code: secrets::code(r.text(3)?)?,
+                code: code(&r.parse(3)?, &self.key)?,
                 note: r.opt_parse(4)?,
                 at: Millis(r.int(5)?).at(),
             });
@@ -342,10 +369,11 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     }
 
     /// Starts approving a request: checks the name, records the approval as
-    /// confirming, and returns the call that proves the requester holds the
-    /// secret at the URL it gave. Until [`Core::commit_approval`] or
-    /// [`Core::abort_approval`], or the record expires, calls with that
-    /// secret (or the one it replaces) answer 503 to retry.
+    /// confirming, and returns the signed call telling the requester's daemon,
+    /// at the URL it gave, that it is accepted. Until
+    /// [`Core::commit_approval`] or [`Core::abort_approval`], or the record
+    /// expires, calls signed with the requester's key (or the key of the
+    /// peer it replaces) answer 503 to retry.
     pub fn begin_approval(
         &mut self,
         id: &RequestRef,
@@ -355,7 +383,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         let r = self
             .sql
             .query_one(
-                "SELECT name, url, secret FROM requests WHERE id = ? AND at >= ?",
+                "SELECT name, url, key FROM requests WHERE id = ? AND at >= ?",
                 &[text(id.as_str()), now.plus(-REQUEST_TTL).0.into()],
             )?
             .ok_or_else(|| {
@@ -369,7 +397,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             None => r.parse(0)?,
         };
         let url: DaemonUrl = r.parse(1)?;
-        let secret = r.text(2)?.to_string();
+        let key: PublicKey = r.parse(2)?;
         let previous = self.approvable(&name, &url)?;
         if self.live_op()?.is_some() {
             return Err(err(
@@ -378,25 +406,26 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             ));
         }
         self.sql.execute(
-            "INSERT OR REPLACE INTO peering_op (slot, request_id, name, url, secret_hash, previous_hash, expires_at) VALUES (1, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO peering_op (slot, request_id, name, url, key, previous_key, expires_at) VALUES (1, ?, ?, ?, ?, ?, ?)",
             &[
                 text(id.as_str()),
                 text(&name),
                 text(url.as_str()),
-                secrets::hash(&secret).into(),
-                previous.as_ref().map(|p| secrets::hash(&p.secret)).into(),
+                text(key.as_str()),
+                previous.as_ref().map(|p| p.key.to_string()).into(),
                 now.plus(CONFIRM_TTL).0.into(),
             ],
         )?;
-        let secret =
-            PeerSecret::new(secret).map_err(|e| err(ErrorKind::Internal, e.to_string()))?;
+        let path = "/api/v1/federation/accepted";
+        let headers = self.sign("POST", path, &key, b"")?;
         Ok(PendingApproval {
             request: id.clone(),
             name,
-            call: Outbound {
+            call: Call {
                 url,
-                request: None,
-                secret,
+                path,
+                headers,
+                body: Vec::new(),
             },
         })
     }
@@ -411,22 +440,27 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             .ok_or_else(|| err(ErrorKind::Conflict, "the approval timed out; approve again"))?;
         let name: Name = op.parse(1)?;
         let url: DaemonUrl = op.parse(2)?;
+        let key: PublicKey = op.parse(3)?;
         let previous = self.approvable(&name, &url)?;
-        if previous.as_ref().map(|p| secrets::hash(&p.secret))
-            != op.opt_text(4)?.map(str::to_string)
-        {
+        if previous.as_ref().map(|p| p.key.to_string()) != op.opt_text(4)?.map(str::to_string) {
             return Err(err(
                 ErrorKind::Conflict,
                 format!("{name} changed while approving; approve again"),
             ));
         }
-        let secret = pending.call.secret.expose().to_string();
         let now = self.now();
-        self.sql
-            .execute("DELETE FROM peers WHERE name = ?", &[text(&name)])?;
         self.sql.execute(
-            "INSERT INTO peers (name, url, secret, secret_hash, status, added_at) VALUES (?, ?, ?, ?, 'active', ?)",
-            &[text(&name), text(url.as_str()), secret.clone().into(), secrets::hash(&secret).into(), now.0.into()],
+            "DELETE FROM peers WHERE name = ? OR key = ?",
+            &[text(&name), text(key.as_str())],
+        )?;
+        self.sql.execute(
+            "INSERT INTO peers (name, url, key, status, added_at) VALUES (?, ?, ?, 'active', ?)",
+            &[
+                text(&name),
+                text(url.as_str()),
+                text(key.as_str()),
+                now.0.into(),
+            ],
         )?;
         self.sql
             .execute("DELETE FROM requests WHERE url = ?", &[text(url.as_str())])?;
@@ -469,7 +503,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(())
     }
 
-    /// Forgets a peer: their secret stops working and events not yet
+    /// Forgets a peer: their key stops working and events not yet
     /// delivered to them fail. Threads stay, and their name stays with their
     /// URL.
     pub fn remove_peer(&mut self, name: &Name) -> Result<(), Error> {
@@ -521,9 +555,6 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(())
     }
 
-    /// The peer whose secret this is. While an approval confirms that
-    /// secret, or the one it replaces, calls answer 503 to retry: the other
-    /// daemon may act on its acceptance before this one has saved it.
     /// Records the release `name`'s daemon reported, when it changed.
     pub fn note_peer_version(&self, name: &Name, version: &Version) -> Result<(), Error> {
         self.sql.execute(
@@ -533,14 +564,23 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(())
     }
 
-    pub fn authenticate_peer(&self, secret: &str) -> Result<Name, Error> {
-        let unknown = || err(ErrorKind::Unauthorized, "unknown peer secret");
-        if !secret.starts_with(prefix::PEER) {
-            return Err(unknown());
+    /// The peer that signed `call`. While an approval confirms the caller's
+    /// key, or the key of the peer it replaces, calls answer 503 to retry:
+    /// the other daemon may act on its acceptance before this one saved it.
+    pub fn authenticate_peer(&self, call: &SignedCall) -> Result<Name, Error> {
+        let refused = || err(ErrorKind::Unauthorized, "unknown peer key or bad signature");
+        let now = self.now().0.div_euclid(Millis::SECOND);
+        if (call.date - now).abs() > MAX_SKEW_SECS {
+            return Err(err(
+                ErrorKind::Unauthorized,
+                "signature time is more than five minutes from this daemon's clock",
+            ));
         }
-        let hash = secrets::hash(secret);
+        if !call.verifies(&self.key) {
+            return Err(refused());
+        }
         if let Some(op) = self.live_op()?
-            && (op.text(3)? == hash || op.opt_text(4)? == Some(hash.as_str()))
+            && (op.text(3)? == call.key.as_str() || op.opt_text(4)? == Some(call.key.as_str()))
         {
             return Err(err(
                 ErrorKind::Unavailable,
@@ -548,27 +588,31 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             )
             .retry_after(2));
         }
-        let row = self
-            .sql
-            .query_one(
-                "SELECT name, secret FROM peers WHERE secret_hash = ?",
-                &[hash.into()],
-            )?
-            .ok_or_else(unknown)?;
-        if !secrets::equal(row.text(1)?, secret) {
-            return Err(unknown());
-        }
-        row.parse(0)
+        self.peer_with_key(&call.key)?.ok_or_else(refused)
     }
 
-    /// The other daemon approved this one's request: the peer is active and
-    /// events queued for them are due now.
-    pub fn accepted(&mut self, secret: &str) -> Result<(), Error> {
-        let name = self.authenticate_peer(secret)?;
+    /// The peer known by `key`, if any.
+    pub fn peer_with_key(&self, key: &PublicKey) -> Result<Option<Name>, Error> {
+        self.sql
+            .query_one(
+                "SELECT name FROM peers WHERE key = ?",
+                &[text(key.as_str())],
+            )?
+            .map(|r| r.parse(0))
+            .transpose()
+    }
+
+    /// The daemon with `key`, which the host has authenticated, approved this
+    /// one's request: the peer is active and events queued for them are due
+    /// now.
+    pub fn accepted(&mut self, key: &PublicKey) -> Result<(), Error> {
+        let name = self
+            .peer_with_key(key)?
+            .ok_or_else(|| err(ErrorKind::Unauthorized, "unknown peer key"))?;
         self.peer_heard_from(&name)
     }
 
-    /// A peer proved it holds the secret (it delivered or confirmed), so a
+    /// A peer proved it holds its key (it delivered or confirmed), so a
     /// requested peer has been approved.
     pub(crate) fn peer_heard_from(&mut self, name: &Name) -> Result<(), Error> {
         let changed = self.sql.execute(
@@ -597,10 +641,5 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             self.effects.deliver = true;
         }
         Ok(())
-    }
-
-    /// A secret's code, for a request or peer the API shows.
-    pub fn code(secret: &str) -> Result<Code, Error> {
-        secrets::code(secret)
     }
 }

@@ -40,7 +40,7 @@ type Job = Box<dyn FnOnce(&mut C) + Send>;
 struct Inner {
     jobs: mpsc::Sender<Job>,
     http: reqwest::Client,
-    owner_token: String,
+    owner_hash: String,
     version: String,
     /// Thread changes, for streams. A slow stream misses changes rather
     /// than slowing the daemon.
@@ -55,7 +55,7 @@ pub struct NativeHost(Arc<Inner>);
 
 impl NativeHost {
     /// Starts the thread that owns `core`.
-    pub fn start(core: C, owner_token: String, version: String) -> Result<Self, String> {
+    pub fn start(core: C, owner_hash: String, version: String) -> Result<Self, String> {
         let (jobs, rx) = mpsc::channel::<Job>();
         std::thread::Builder::new()
             .name("cpd-sqlite".into())
@@ -78,7 +78,7 @@ impl NativeHost {
         Ok(Self(Arc::new(Inner {
             jobs,
             http,
-            owner_token,
+            owner_hash,
             version,
             changes: broadcast::channel(64).0,
             deliver: Notify::new(),
@@ -201,8 +201,8 @@ impl Host for NativeHost {
         })
     }
 
-    fn owner_token(&self) -> &str {
-        &self.0.owner_token
+    fn owner_hash(&self) -> &str {
+        &self.0.owner_hash
     }
 
     fn version(&self) -> &str {

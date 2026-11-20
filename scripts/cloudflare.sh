@@ -158,7 +158,7 @@ worker=${worker:-$(ask "Worker name (its URL is https://<name>.<your-subdomain>.
 valid_name "$worker" 63 || fail "Worker name $worker: lower-case letters, digits and single hyphens"
 
 existing=
-if wr secret list --name "$worker" 2>/dev/null | grep -q '"CP_OWNER_TOKEN"'; then
+if wr secret list --name "$worker" 2>/dev/null | grep -q '"CP_OWNER_TOKEN_HASH"'; then
     existing=yes
 fi
 
@@ -228,9 +228,11 @@ if [ -z "$url" ]; then
 fi
 
 # All three settings go out in one deploy, so no version ever runs with only
-# some of them. The file holds the owner token: it lives in $tmp, removed on exit.
+# some of them. The Worker gets only the owner token's SHA-256: the token
+# stays in the file on this machine.
 (umask 077 && NAME=$name URL=$url TOKEN=$(cat "$token_file") node -e '
-process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN: process.env.TOKEN.trim() }));
+const hash = require("crypto").createHash("sha256").update(process.env.TOKEN.trim()).digest("hex");
+process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash }));
 ' >"$tmp/secrets.json")
 say "Storing settings..."
 deploy --secrets-file "$tmp/secrets.json"

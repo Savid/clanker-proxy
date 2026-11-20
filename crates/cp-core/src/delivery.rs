@@ -7,7 +7,7 @@
 //! of a thread never silently diverge; only a peer that no longer knows
 //! this daemon, or never approved it, is given up on.
 
-use cp_api::{DaemonUrl, Error, ErrorKind, PeerSecret, WireEvent};
+use cp_api::{DaemonUrl, Error, ErrorKind, PublicKey, WireEvent};
 use cp_thread::{Id, Name};
 
 use crate::core::Core;
@@ -35,13 +35,20 @@ pub fn backoff(attempts: u32) -> i64 {
     wait
 }
 
-/// One event to send to a peer.
+/// The API path events are delivered to.
+pub const EVENTS_PATH: &str = "/api/v1/federation/events";
+
+/// One event to send to a peer: its body and the headers that sign it.
 #[derive(Clone, Debug)]
 pub struct Attempt {
     pub event: WireEvent,
     pub peer: Name,
     pub url: DaemonUrl,
-    pub secret: PeerSecret,
+    /// The peer's key when the attempt was made: a peer re-added with
+    /// another key gets a fresh signature.
+    pub key: PublicKey,
+    pub body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
     /// Attempts made before this one; [`Core::record`] applies only while
     /// this still matches, so a stale attempt changes nothing.
     pub attempts: u32,
@@ -54,7 +61,7 @@ pub enum Outcome {
     Delivered,
     /// The peer refused it for good (400, 409, 413, 422).
     Refused(String),
-    /// The peer does not know this daemon's secret (401).
+    /// The peer does not recognise this daemon's key (401).
     Unrecognized(String),
     /// Anything else: the network, the peer's or a proxy's error, a
     /// redirect. Retried.
@@ -108,7 +115,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     /// them.
     pub fn due(&self, budget: u32) -> Result<Vec<Attempt>, Error> {
         let rows = self.sql.query(
-            "SELECT o.event_id, o.peer, p.url, p.secret, o.attempts FROM outbox o \
+            "SELECT o.event_id, o.peer, p.url, p.key, o.attempts FROM outbox o \
              JOIN peers p ON p.name = o.peer \
              WHERE o.status = 'pending' AND o.next_attempt_at <= ?1 \
              AND o.seq = (SELECT min(seq) FROM outbox h WHERE h.peer = o.peer AND h.status = 'pending') \
@@ -127,27 +134,32 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 &[text(&id)],
             )?
             .ok_or_else(|| Error::new(ErrorKind::Internal, format!("queued event {id} is missing")))?;
-        let event = crate::threads::event_from_row(&stored)?;
+        let event = WireEvent::from(&crate::threads::event_from_row(&stored)?);
+        let key: PublicKey = r.parse(3)?;
+        let body = serde_json::to_vec(&event)
+            .map_err(|e| Error::new(ErrorKind::Internal, e.to_string()))?;
+        let headers = self.sign("POST", EVENTS_PATH, &key, &body)?;
         Ok(Attempt {
-            event: WireEvent::from(&event),
+            event,
             peer: r.parse(1)?,
             url: r.parse(2)?,
-            secret: PeerSecret::new(r.text(3)?.to_string())
-                .map_err(|e| Error::new(ErrorKind::Internal, e.to_string()))?,
+            key,
+            body,
+            headers,
             attempts: r.count(4)?,
         })
     }
 
     /// Whether `a` should still be sent: its event is pending with the same
-    /// attempts, to the same peer at the same URL and secret. The host asks
+    /// attempts, to the same peer at the same URL and key. The host asks
     /// just before sending, since anything may have changed since `due`.
     pub fn still_pending(&self, a: &Attempt) -> Result<bool, Error> {
         Ok(self
             .sql
             .query_one(
                 "SELECT 1 FROM outbox o JOIN peers p ON p.name = o.peer \
-                 WHERE o.event_id = ? AND o.status = 'pending' AND o.attempts = ? AND p.name = ? AND p.url = ? AND p.secret = ?",
-                &[text(&a.event.id), a.attempts.into(), text(&a.peer), text(a.url.as_str()), a.secret.expose().into()],
+                 WHERE o.event_id = ? AND o.status = 'pending' AND o.attempts = ? AND p.name = ? AND p.url = ? AND p.key = ?",
+                &[text(&a.event.id), a.attempts.into(), text(&a.peer), text(a.url.as_str()), text(a.key.as_str())],
             )?
             .is_some())
     }

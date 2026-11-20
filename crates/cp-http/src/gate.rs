@@ -28,13 +28,15 @@ impl Gate {
     }
 
     /// The operation a request names, or the answer that refuses it: no such
-    /// route, no bearer of a kind the operation takes, or a declared body
-    /// over the limit. `authorization` is the raw header value.
+    /// route, no credential of the kind the operation takes (a bearer token,
+    /// or for calls between daemons a signature), or a declared body over
+    /// the limit. `authorization` is the raw header value.
     pub fn check(
         &self,
         method: &http::Method,
         path: &str,
         authorization: Option<&str>,
+        signed: bool,
         content_length: Option<u64>,
     ) -> Result<Op, Box<http::Response<Bytes>>> {
         let op = match self.router.route(method, path) {
@@ -55,7 +57,7 @@ impl Gate {
             Access::Owner | Access::OwnerOrAgent => {
                 token.starts_with(prefix::OWNER) || token.starts_with(prefix::AGENT)
             }
-            Access::Peer => token.starts_with(prefix::PEER),
+            Access::Peer => signed,
         };
         if !fits {
             return Err(Box::new(problem(&unauthorized())));
@@ -83,34 +85,53 @@ mod tests {
         let g = Gate::new();
         let get = http::Method::GET;
         let owner = Some("Bearer cpo_x");
-        assert_eq!(status(g.check(&get, "/api/v1/health", None, None)), 200);
-        assert_eq!(status(g.check(&get, "/api/v1/nope", owner, None)), 404);
         assert_eq!(
-            status(g.check(&http::Method::PUT, "/api/v1/threads", owner, None)),
-            405
-        );
-        assert_eq!(status(g.check(&get, "/api/v1/threads", None, None)), 401);
-        assert_eq!(
-            status(g.check(&get, "/api/v1/threads", Some("Bearer cpp_x"), None)),
-            401
-        );
-        assert_eq!(status(g.check(&get, "/api/v1/threads", owner, None)), 200);
-        assert_eq!(
-            status(g.check(&get, "/api/v1/threads", Some("bearer cpa_x"), None)),
+            status(g.check(&get, "/api/v1/health", None, false, None)),
             200
         );
         assert_eq!(
-            status(g.check(&get, "/api/v1/peers", Some("Bearer cpa_x"), None)),
+            status(g.check(&get, "/api/v1/nope", owner, false, None)),
+            404
+        );
+        assert_eq!(
+            status(g.check(&http::Method::PUT, "/api/v1/threads", owner, false, None)),
+            405
+        );
+        assert_eq!(
+            status(g.check(&get, "/api/v1/threads", None, false, None)),
+            401
+        );
+        assert_eq!(
+            status(g.check(&get, "/api/v1/threads", Some("Bearer cpp_x"), false, None)),
+            401
+        );
+        assert_eq!(
+            status(g.check(&get, "/api/v1/threads", owner, false, None)),
+            200
+        );
+        assert_eq!(
+            status(g.check(&get, "/api/v1/threads", Some("bearer cpa_x"), false, None)),
+            200
+        );
+        assert_eq!(
+            status(g.check(&get, "/api/v1/peers", Some("Bearer cpa_x"), false, None)),
             200
         );
         let post = http::Method::POST;
         assert_eq!(
-            status(g.check(&post, "/api/v1/threads", owner, Some(2 << 20))),
+            status(g.check(&post, "/api/v1/threads", owner, false, Some(2 << 20))),
             413
         );
         assert!(matches!(
-            g.check(&post, "/api/v1/peering-requests", None, Some(10)),
+            g.check(&post, "/api/v1/peering-requests", None, false, Some(10)),
             Ok(Op::RequestPeering)
         ));
+        // Calls between daemons need a signature, and a bearer will not do.
+        let events = "/api/v1/federation/events";
+        assert_eq!(
+            status(g.check(&post, events, Some("Bearer cpo_x"), false, None)),
+            401
+        );
+        assert_eq!(status(g.check(&post, events, None, true, None)), 200);
     }
 }

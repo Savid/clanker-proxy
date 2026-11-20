@@ -24,8 +24,7 @@ fn stored_version(sql: &Sqlite) -> String {
         .to_string()
 }
 
-/// Storage as the first release left it: the baseline schema, an owner and
-/// a peer.
+/// Storage at the baseline schema, with an owner and a peer.
 fn baseline() -> Sqlite {
     let sql = Sqlite::memory().unwrap();
     for s in STATEMENTS {
@@ -42,7 +41,7 @@ fn baseline() -> Sqlite {
         .unwrap();
     }
     sql.execute(
-        "INSERT INTO peers (name, url, secret, secret_hash, status, added_at) VALUES ('bob', 'https://bob.test', 'cpp_x', 'h', 'active', 1)",
+        "INSERT INTO peers (name, url, key, status, added_at) VALUES ('bob', 'https://bob.test', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'active', 1)",
         &[],
     )
     .unwrap();
@@ -81,7 +80,7 @@ fn data_from_a_newer_release_or_a_pre_release_build_is_refused() {
     let clock = Clock::new();
     for (stored, says) in [
         (SCHEMA_VERSION + 1, "newer release"),
-        (BASELINE - 1, "before the first release"),
+        (BASELINE - 1, "earlier release this one cannot migrate"),
     ] {
         let sql = baseline();
         sql.execute(

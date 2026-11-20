@@ -195,8 +195,8 @@ fn lower_hex(s: &str) -> bool {
 }
 
 bounded!(
-    /// A shared secret's short code, for two owners to compare: the first
-    /// four bytes of its SHA-256, as `xxxx-xxxx`.
+    /// The short code two owners compare before peering: the first four
+    /// bytes of a SHA-256 over both daemons' public keys, as `xxxx-xxxx`.
     Code,
     |s| match (s.get(..4), s.get(4..5), s.get(5..)) {
         (Some(a), Some("-"), Some(b))
@@ -295,6 +295,29 @@ bounded!(
         write_only: false,
         description: "Unix seconds.",
         example: Some("1791331200"),
+    }
+);
+
+bounded!(
+    /// A daemon's Ed25519 public key: 32 bytes, base64url without padding.
+    /// Peers know each other by it; every call between daemons is signed by
+    /// the matching private key, which never leaves its daemon.
+    PublicKey,
+    |s| if s.len() == 43
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    {
+        Ok(s)
+    } else {
+        Err(Invalid("public key: want 43 base64url characters".into()))
+    },
+    Bounds {
+        min: Some(43),
+        max: 43,
+        pattern: Some("^[A-Za-z0-9_-]{43}$"),
+        write_only: false,
+        description: "A daemon's Ed25519 public key, base64url without padding.",
+        example: Some("aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789-_aBcDe"),
     }
 );
 
@@ -488,26 +511,6 @@ fn base64url_secret(prefix: &'static str) -> impl Fn(&str) -> bool {
         })
     }
 }
-
-secret!(
-    /// The secret two peers share, `cpp_` and 43 base64url characters.
-    PeerSecret,
-    |s| if base64url_secret("cpp_")(s) {
-        Ok(())
-    } else {
-        Err(Invalid(
-            "secret: want cpp_ and 43 base64url characters".into(),
-        ))
-    },
-    Bounds {
-        min: Some(47),
-        max: 47,
-        pattern: Some("^cpp_[A-Za-z0-9_-]{43}$"),
-        write_only: true,
-        description: "The secret both daemons will use, as cpp_ and 43 base64url characters.",
-        example: None,
-    }
-);
 
 secret!(
     /// A bearer token handed to its holder once.

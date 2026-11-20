@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use cp_api::{
-    DaemonUrl, ListThreadsQuery, Op, PeerSecret, Peers, ThreadRef, WebhookEventType, WebhookEvents,
+    DaemonUrl, ListThreadsQuery, Op, Peers, ThreadRef, WebhookEventType, WebhookEvents,
     WebhookUpdate, WireEvent,
 };
 use cp_thread::{Action, Name};
@@ -126,12 +126,10 @@ fn peers() {
 }
 
 #[test]
-fn secrets_stay_out_of_debug() {
-    let secret = format!("cpp_{}", "A".repeat(43));
-    let s = PeerSecret::new(secret.clone()).unwrap();
-    assert!(!format!("{s:?}").contains(&secret));
-    assert_eq!(s.expose(), secret);
-    assert!(PeerSecret::new("cpp_short".into()).is_err());
+fn public_keys() {
+    assert!(cp_api::PublicKey::try_from("A".repeat(43)).is_ok());
+    assert!(cp_api::PublicKey::try_from("A".repeat(42)).is_err());
+    assert!(cp_api::PublicKey::try_from(format!("{}=", "A".repeat(42))).is_err());
 }
 
 #[test]

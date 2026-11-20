@@ -3,8 +3,8 @@
 
 use cp_api::{
     DEFAULT_LOG, DEFAULT_THREADS, Delivery, DeliveryStatus, Error, ErrorKind, GetThreadQuery,
-    ListThreadsQuery, MAX_LOG, MAX_THREADS, NewThread, Peers, Receipt, Thread, ThreadEvent,
-    ThreadRef, ThreadSummary, TurnFilter, WireEvent,
+    ListThreadsQuery, MAX_LOG, MAX_THREADS, NewThread, Peers, PublicKey, Receipt, Thread,
+    ThreadEvent, ThreadRef, ThreadSummary, TurnFilter, WireEvent,
 };
 use cp_thread::{
     Action, At, Body, Event, Fold, Id, Kind, Labels, Move, Name, Opening, Refusal, Role, Step,
@@ -452,11 +452,14 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         self.summary_of(&row)
     }
 
-    /// Stores an event a peer delivered, authenticated by `secret` here, in
-    /// the same transaction, so a peer removed since the request began
-    /// cannot get an event in.
-    pub fn receive(&mut self, secret: &str, wire: WireEvent) -> Result<Receipt, Error> {
-        let peer = self.authenticate_peer(secret)?;
+    /// Stores an event the peer with `key` delivered. The host has checked
+    /// the call's signature; the key is looked up again here, in the same
+    /// transaction, so a peer removed since the request began cannot get an
+    /// event in.
+    pub fn receive(&mut self, key: &PublicKey, wire: WireEvent) -> Result<Receipt, Error> {
+        let peer = self
+            .peer_with_key(key)?
+            .ok_or_else(|| Error::new(ErrorKind::Unauthorized, "unknown peer key"))?;
         let e = wire
             .into_event(peer.clone(), self.me.clone())
             .map_err(|err| Error::new(ErrorKind::Invalid, err.to_string()))?;

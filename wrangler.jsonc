@@ -31,7 +31,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Daemon"] }],
   // Settings live in the Worker, not here: CP_NAME, CP_URL and
-  // CP_OWNER_TOKEN as secrets (docs/cloudflare.md). Keeping vars means a
+  // CP_OWNER_TOKEN_HASH as secrets (docs/cloudflare.md). Keeping vars means a
   // redeploy never wipes settings made in the dashboard either.
   "keep_vars": true,
   // Public peering requests per client address, checked before they wake

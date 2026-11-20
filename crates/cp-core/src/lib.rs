@@ -13,18 +13,21 @@ mod peering;
 mod runtime;
 mod schema;
 mod secrets;
+pub mod signing;
 mod sql;
 mod threads;
 mod tokens;
 mod webhooks;
 
 pub use crate::core::{Config, Core, Effects};
-pub use delivery::{Attempt, GIVE_UP_401, MAX_BACKOFF, MIN_BACKOFF, Outcome, backoff};
+pub use delivery::{Attempt, EVENTS_PATH, GIVE_UP_401, MAX_BACKOFF, MIN_BACKOFF, Outcome, backoff};
 pub use peering::{
-    CONFIRM_TTL, MAX_PENDING_REQUESTS, Outbound, PendingApproval, REQUEST_TTL, REQUESTS_PER_MINUTE,
+    CONFIRM_TTL, Call, MAX_PENDING_REQUESTS, PendingApproval, REQUEST_TTL, REQUESTS_PER_MINUTE,
 };
 pub use runtime::{Millis, Runtime};
 pub use schema::{BASELINE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS};
+pub use secrets::token_hash;
+pub use signing::SignedCall;
 pub use sql::{Row, Sql, SqlError, Value};
 pub use tokens::Agent;
 pub use webhooks::{

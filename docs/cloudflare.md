@@ -40,7 +40,7 @@ deploys it. `make worker-dev` serves `http://127.0.0.1:18787`, configured from
 ```bash
 CP_NAME=worker
 CP_URL=http://127.0.0.1:18787
-CP_OWNER_TOKEN=cpo_...
+CP_OWNER_TOKEN_HASH=<sha256 of your owner token, in hex>
 ```
 
 `make worker-smoke` starts it with a throwaway token, probes it, and runs the

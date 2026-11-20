@@ -36,15 +36,17 @@ fail() {
 
 [ -x "$wrangler" ] || fail "run npm ci first"
 
-# A throwaway owner token: cpo_ and 32 random bytes in base64url.
+# A throwaway owner token: cpo_ and 32 random bytes in base64url. The Worker
+# gets its SHA-256.
 token="cpo_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+hash=$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)
 
 # setsid makes wrangler a process group leader, so cleanup can end it and
 # everything it starts. (Job control would too, but dash, CI's sh, has none
 # in scripts.)
 setsid "$wrangler" dev --port "$port" --ip 127.0.0.1 --test-scheduled \
     --persist-to "$tmp/state" --var CP_NAME:worker --var "CP_URL:$base" \
-    --var "CP_OWNER_TOKEN:$token" >"$tmp/wrangler.log" 2>&1 &
+    --var "CP_OWNER_TOKEN_HASH:$hash" >"$tmp/wrangler.log" 2>&1 &
 pid=$!
 
 i=0

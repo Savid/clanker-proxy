@@ -1,16 +1,14 @@
 //! The schema both hosts use, verbatim. Times are Unix milliseconds unless
 //! a column says seconds; an event's `at` is seconds, as on the wire.
 
-/// The version `STATEMENTS` create: the first released schema.
-pub const BASELINE: u32 = 2;
+/// The version `STATEMENTS` create. v0.3.0 replaced peer secrets with
+/// keys, so earlier data is refused rather than migrated.
+pub const BASELINE: u32 = 4;
 
 /// Changes since the baseline, in order: entry `i` moves stored data from
 /// version `BASELINE + i` to the next. Append only: deployed data has
 /// already run every shipped entry, so editing one would split installs.
-pub const MIGRATIONS: &[&[&str]] = &[
-    // 3: the release each peer's daemon reports calling this one.
-    &["ALTER TABLE peers ADD COLUMN version TEXT"],
-];
+pub const MIGRATIONS: &[&[&str]] = &[];
 
 /// The version this build stores data at.
 #[allow(clippy::cast_possible_truncation)] // a handful of migrations
@@ -27,11 +25,11 @@ pub const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS peers (
         name TEXT PRIMARY KEY,
         url TEXT NOT NULL UNIQUE,
-        secret TEXT NOT NULL,
-        secret_hash TEXT NOT NULL UNIQUE,
+        key TEXT NOT NULL UNIQUE,
         status TEXT NOT NULL CHECK (status IN ('requested', 'active')),
         added_at INTEGER NOT NULL,
-        first_401_at INTEGER
+        first_401_at INTEGER,
+        version TEXT
     ) STRICT",
     "CREATE TABLE IF NOT EXISTS former_peers (
         name TEXT PRIMARY KEY,
@@ -41,7 +39,7 @@ pub const STATEMENTS: &[&str] = &[
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         url TEXT NOT NULL,
-        secret TEXT NOT NULL,
+        key TEXT NOT NULL,
         note TEXT,
         at INTEGER NOT NULL
     ) STRICT",
@@ -55,8 +53,8 @@ pub const STATEMENTS: &[&str] = &[
         request_id TEXT NOT NULL,
         name TEXT NOT NULL,
         url TEXT NOT NULL,
-        secret_hash TEXT NOT NULL,
-        previous_hash TEXT,
+        key TEXT NOT NULL,
+        previous_key TEXT,
         expires_at INTEGER NOT NULL
     ) STRICT",
     "CREATE TABLE IF NOT EXISTS events (
