@@ -1,18 +1,15 @@
 # Build output
 /build/
+/target/
+/crates/*/build/
 
-# Go
-*.test
-*.out
-go.work
-go.work.sum
+# Node (wrangler, Amp plugin tests)
+node_modules/
+.wrangler/
+.dev.vars
 
 # Editors and OS
 .idea/
 .vscode/
 *.swp
 .DS_Store
-
-# Binaries built outside build/
-/cpd
-/cpctl

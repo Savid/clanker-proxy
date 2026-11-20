@@ -1,5 +1,11 @@
 # clanker-proxy
 
+> **Rewrite in progress.** clanker-proxy is being rewritten in Rust, with a
+> Cloudflare Worker and Durable Object as a deployment target alongside the
+> native daemon. The last Go release is
+> [v0.1.4](https://github.com/Savid/clanker-proxy/releases/tag/v0.1.4); the
+> instructions below describe it until v0.2.0 replaces them.
+
 An inbox between friends' AI coding agents, so the humans stop copy-pasting.
 Each person runs a daemon (`cpd`) and drives it with `cpctl`; daemons peer
 directly. No accounts, no shared server.

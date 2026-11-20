@@ -1,86 +1,65 @@
 .DEFAULT_GOAL := help
-.PHONY: help build image run check lint lint-go lint-api lint-install generate generate-check vuln tidy-check fmt test test-install test-amp release-check clean
 
-BIN_DIR ?= build/bin
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-# GOWORK=off: never pick up a go.work from a parent directory.
-GO := GOWORK=off go
-GO_BUILD := GOWORK=off CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)"
-LISTEN ?= 127.0.0.1:18471
-# The spec linter, run with go run so CI needs only Go.
-VACUUM := github.com/daveshanley/vacuum@v0.30.6
+CARGO ?= cargo
+WASM := --target wasm32-unknown-unknown
 
-## help: list targets
-help:
-	@sed -n 's/^## //p' $(MAKEFILE_LIST)
+.PHONY: help
+help: ## List targets
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
-## build: compile cpd and cpctl into build/bin
-build:
-	$(GO_BUILD) -o $(BIN_DIR)/cpd ./cmd/cpd
-	$(GO_BUILD) -o $(BIN_DIR)/cpctl ./cmd/cpctl
+.PHONY: build
+build: ## Build the native workspace (release)
+	$(CARGO) build --workspace --release --locked
 
-## image: build the clanker-proxy:local container image (cpd and cpctl)
-image:
-	docker build -t clanker-proxy:local --build-arg VERSION=$(VERSION) .
+.PHONY: check
+check: lint test worker-smoke test-amp ## Everything CI runs
 
-## run: build and start cpd on LISTEN (default 127.0.0.1:18471)
-run: build
-	$(BIN_DIR)/cpd -listen $(LISTEN)
+.PHONY: lint
+lint: lint-rust lint-deps lint-install ## All linters
 
-## check: lint, generated-code check, tests, govulncheck and tidy check
-check: lint generate-check test vuln tidy-check
+.PHONY: lint-rust
+lint-rust: ## rustfmt and clippy, natively and for WebAssembly
+	$(CARGO) fmt --all --check
+	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings
+	$(CARGO) clippy --package cpd-worker $(WASM) --locked -- -D warnings
 
-## lint: golangci-lint on Go, vacuum on the spec, shellcheck on the installer
-lint: lint-go lint-api lint-install
+.PHONY: lint-deps
+lint-deps: ## Advisories, licenses, sources, and the pure-crate dependency rule
+	cargo deny check
+	$(CARGO) xtask deps
 
-lint-go:
-	GOWORK=off golangci-lint run ./...
-
-lint-api:
-	$(GO) run $(VACUUM) lint -d -r .vacuum.yaml api/openapi.yaml
-
-lint-install:
+.PHONY: lint-install
+lint-install: ## shellcheck the scripts
 	shellcheck scripts/*.sh
 
-## generate: regenerate api/rest (ogen) from api/openapi.yaml
-generate:
-	$(GO) generate ./api/...
+.PHONY: fmt
+fmt: ## Format Rust code
+	$(CARGO) fmt --all
 
-## generate-check: fail if committed generated code differs from the spec's output
-generate-check: generate
-	@test -z "$$(git status --porcelain -- api/rest)" || \
-		{ git status --short -- api/rest; echo "generated code is stale: run make generate and commit it"; exit 1; }
+.PHONY: test
+test: test-rust test-install ## Rust and installer tests
 
-## vuln: report known vulnerabilities in the Go dependency graph
-vuln:
-	$(GO) tool govulncheck ./...
+.PHONY: test-rust
+test-rust: ## Rust tests
+	$(CARGO) nextest run --workspace --locked --no-tests=pass
 
-## tidy-check: fail if go.mod or go.sum would change under go mod tidy
-tidy-check:
-	$(GO) mod tidy -diff
-	$(GO) mod verify
-
-## fmt: format Go sources
-fmt:
-	GOWORK=off golangci-lint fmt ./...
-
-## test: Go race tests and offline installer tests
-test: test-install
-	$(GO) test -race ./...
-
-## test-install: exercise the installer without network access
-test-install:
+.PHONY: test-install
+test-install: ## Offline installer tests
 	sh scripts/install_test.sh
 
-## test-amp: run Amp plugin regression tests (requires Node.js 24)
-test-amp:
+.PHONY: test-amp
+test-amp: ## Node tests for the Amp plugin example
 	node --test examples/amp/cp-inbox.test.mjs
 
-## release-check: build release archives locally without publishing (requires GoReleaser)
-release-check:
-	GOWORK=off goreleaser check
-	GOWORK=off goreleaser release --snapshot --clean
+.PHONY: worker-smoke
+worker-smoke: ## Run cpd-worker under wrangler dev and probe it (needs npm ci)
+	sh scripts/worker_smoke.sh
 
-## clean: remove build output
-clean:
-	rm -rf build
+.PHONY: worker-dev
+worker-dev: ## Run cpd-worker locally on 127.0.0.1:18787
+	npx wrangler dev --port 18787 --ip 127.0.0.1 --test-scheduled
+
+.PHONY: clean
+clean: ## Remove build output
+	$(CARGO) clean
+	rm -rf build crates/cpd-worker/build .wrangler
