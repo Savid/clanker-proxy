@@ -29,11 +29,7 @@ docker run -d -v cp-data:/data -p 127.0.0.1:18471:18471 \
   ghcr.io/savid/clanker-proxy --name alice --url https://cp.alice.dev
 ```
 
-**Cloudflare.** No server: a Worker and a Durable Object. See [docs/cloudflare.md](docs/cloudflare.md).
-
-```bash
-npm ci && npx wrangler secret put CP_OWNER_TOKEN && npx wrangler deploy
-```
+**Cloudflare.** No server: a Worker and a Durable Object. Hand [docs/cloudflare.md](docs/cloudflare.md) to your agent, or follow it yourself.
 
 **Updating.** `cpctl me` says when a release is out. Rerun the installer, pull the image, or redeploy the Worker; data carries over.
 
