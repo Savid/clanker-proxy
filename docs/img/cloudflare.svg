@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="400" viewBox="0 0 960 400" role="img" aria-labelledby="t d">
+<title id="t">cpd-worker on Cloudflare</title>
+<desc id="d">Requests reach a stateless Worker, which serves the OpenAPI document and refuses requests with no API route, the wrong kind of token, or a body over 1 MiB, and rate-limits public peering requests, all before the Durable Object wakes. The Durable Object holds the daemon: SQLite with one transaction per core call, event streams in memory, and an alarm that delivers to peers and webhooks, at most 40 requests per run. A cron trigger every 15 minutes re-arms the alarm.</desc>
+<defs>
+  <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28"/></pattern>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <marker id="mg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#94a3b8" stroke-width="1.6"/></marker>
+  <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#f472b6" stroke-width="1.6"/></marker>
+  <marker id="ma" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#fbbf24" stroke-width="1.6"/></marker>
+</defs>
+<style>
+  text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;fill:#e2e8f0}
+  .h{font-size:18px;font-weight:700}.s{font-size:12px;fill:#7c8aa0}.i{font-size:13px}
+  .c{fill:#22d3ee}.p{fill:#f472b6}.a{fill:#fbbf24}.ok{fill:#4ade80}.no{fill:#f87171}
+  .box{fill:#0b1220}
+  .an{animation-duration:9s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+  @keyframes q1{0%{opacity:0;transform:translateX(0)}2%{opacity:1}11%{opacity:1;transform:translateX(62px)}13%,100%{opacity:0;transform:translateX(62px)}}
+  @keyframes gw{0%,11%{opacity:0}13%,19%{opacity:1}22%,100%{opacity:0}}
+  @keyframes q2{0%,19%{opacity:0;transform:translateX(0)}21%{opacity:1}29%{opacity:1;transform:translateX(62px)}31%,100%{opacity:0;transform:translateX(62px)}}
+  @keyframes gd{0%,29%{opacity:0}32%{opacity:1}38%,100%{opacity:0}}
+  @keyframes q3{0%,38%{opacity:0;transform:translateX(0)}40%{opacity:1}48%{opacity:1;transform:translateX(62px)}50%,100%{opacity:0;transform:translateX(62px)}}
+  @keyframes bad{0%,47%{opacity:0}49%,56%{opacity:1}59%,100%{opacity:0}}
+  @keyframes al{0%,58%{opacity:0}61%,68%{opacity:1}71%,100%{opacity:0}}
+  @keyframes q4{0%,66%{opacity:0;transform:translateY(0)}68%{opacity:1}75%{opacity:1;transform:translateY(42px)}77%,100%{opacity:0;transform:translateY(42px)}}
+  @keyframes go{0%,74%{opacity:0}77%,82%{opacity:1}85%,100%{opacity:0}}
+  @keyframes q5{0%,84%{opacity:0;transform:translate(0,0)}86%{opacity:1}94%{opacity:1;transform:translate(80px,-46px)}96%,100%{opacity:0;transform:translate(80px,-46px)}}
+  @keyframes k1{0%,36%{opacity:1}39%,100%{opacity:0}}
+  @keyframes k2{0%,37%{opacity:0}40%,57%{opacity:1}60%,100%{opacity:0}}
+  @keyframes k3{0%,58%{opacity:0}61%,83%{opacity:1}86%,100%{opacity:0}}
+  @keyframes k4{0%,84%{opacity:0}87%,98%{opacity:1}100%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.an{animation:none!important}.dot,.flash,.cap{display:none}.cap1{display:inline}}
+</style>
+<rect width="960" height="400" rx="18" fill="#070a10"/>
+<rect width="960" height="400" rx="18" fill="url(#grid)"/>
+<rect x=".5" y=".5" width="959" height="399" rx="18" fill="none" stroke="#1d2635"/>
+
+<!-- clients -->
+<rect x="40" y="110" width="152" height="76" rx="12" class="box" stroke="#94a3b8" stroke-opacity=".6"/>
+<text x="56" y="140" class="i" font-weight="700">clients</text>
+<text x="56" y="160" class="s">cpctl · peers</text>
+<text x="56" y="176" class="s">agents</text>
+<path d="M194 148H256" stroke="#94a3b8" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mg)"/>
+
+<!-- worker -->
+<rect x="260" y="40" width="250" height="210" rx="14" class="box" stroke="#fbbf24" stroke-width="1.6"/>
+<rect x="260" y="40" width="250" height="210" rx="14" fill="none" stroke="#fbbf24" stroke-width="2.5" filter="url(#glow)" class="an flash" style="animation-name:gw;opacity:0"/>
+<text x="280" y="72" class="h a">Worker</text>
+<text x="280" y="92" class="s">stateless gate</text>
+<g class="i">
+  <text x="280" y="124"><tspan class="ok">✓</tspan> route in the API</text>
+  <text x="280" y="148"><tspan class="ok">✓</tspan> token kind fits</text>
+  <text x="280" y="172"><tspan class="ok">✓</tspan> body ≤ 1 MiB</text>
+  <text x="280" y="196"><tspan class="ok">✓</tspan> peering 10/min/IP</text>
+  <text x="280" y="226" class="s">serves /openapi.json</text>
+</g>
+<g class="an flash" style="animation-name:bad;opacity:0">
+  <rect x="196" y="74" width="58" height="26" rx="13" fill="#2b0d0d" stroke="#f87171"/>
+  <text x="225" y="92" text-anchor="middle" font-size="13" font-weight="700" class="no">401</text>
+</g>
+<path d="M512 148H576" stroke="#f472b6" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mp)"/>
+
+<!-- durable object -->
+<rect x="580" y="40" width="340" height="210" rx="14" class="box" stroke="#f472b6" stroke-width="1.6"/>
+<rect x="580" y="40" width="340" height="210" rx="14" fill="none" stroke="#f472b6" stroke-width="2.5" filter="url(#glow)" class="an flash" style="animation-name:gd;opacity:0"/>
+<text x="600" y="72" class="h p">Durable Object</text>
+<text x="600" y="92" class="s">the daemon · one per owner</text>
+<g class="i">
+  <text x="600" y="128">SQLite <tspan class="s">· a transaction per call</tspan></text>
+  <text x="600" y="156">event streams <tspan class="s">· in memory</tspan></text>
+  <text x="600" y="184">alarm <tspan class="s">· delivers, ≤ 40 per run</tspan></text>
+</g>
+<rect x="590" y="166" width="320" height="28" rx="8" fill="none" stroke="#fbbf24" stroke-width="2" filter="url(#glow)" class="an flash" style="animation-name:al;opacity:0"/>
+<text x="600" y="226" class="s">requests never wait on other daemons</text>
+
+<!-- outbound and cron -->
+<path d="M750 252V290" stroke="#f472b6" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mp)"/>
+<rect x="580" y="294" width="340" height="52" rx="12" class="box" stroke="#94a3b8" stroke-opacity=".6"/>
+<rect x="580" y="294" width="340" height="52" rx="12" fill="none" stroke="#e2e8f0" stroke-width="2" filter="url(#glow)" class="an flash" style="animation-name:go;opacity:0"/>
+<text x="600" y="325" class="i" font-weight="700">peers <tspan class="s">·</tspan> webhooks</text>
+<rect x="260" y="294" width="250" height="52" rx="12" class="box" stroke="#fbbf24" stroke-opacity=".5"/>
+<text x="280" y="316" class="i a" font-weight="700">cron · every 15 min</text>
+<text x="280" y="334" class="s">re-arms a lost alarm</text>
+<path d="M512 302L590 256" stroke="#fbbf24" stroke-opacity=".5" stroke-dasharray="2 5" marker-end="url(#ma)"/>
+
+<!-- dots -->
+<circle cx="194" cy="148" r="4" fill="#4ade80" filter="url(#glow)" class="an dot" style="animation-name:q1;opacity:0"/>
+<circle cx="512" cy="148" r="4" fill="#f472b6" filter="url(#glow)" class="an dot" style="animation-name:q2;opacity:0"/>
+<circle cx="194" cy="148" r="4" fill="#f87171" filter="url(#glow)" class="an dot" style="animation-name:q3;opacity:0"/>
+<circle cx="750" cy="250" r="4" fill="#f472b6" filter="url(#glow)" class="an dot" style="animation-name:q4;opacity:0"/>
+<circle cx="512" cy="302" r="4" fill="#fbbf24" filter="url(#glow)" class="an dot" style="animation-name:q5;opacity:0"/>
+
+<!-- captions -->
+<g font-size="14">
+  <text x="40" y="378" class="an cap cap1" style="animation-name:k1"><tspan class="ok">01</tspan>  good requests reach the daemon</text>
+  <text x="40" y="378" class="an cap" style="animation-name:k2;opacity:0"><tspan class="no">02</tspan>  bad ones never wake it</text>
+  <text x="40" y="378" class="an cap" style="animation-name:k3;opacity:0"><tspan class="p">03</tspan>  the alarm delivers</text>
+  <text x="40" y="378" class="an cap" style="animation-name:k4;opacity:0"><tspan class="a">04</tspan>  cron keeps the alarm alive</text>
+</g>
+</svg>

@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="410" viewBox="0 0 960 410" role="img" aria-labelledby="t d">
+<title id="t">Thread lifecycle</title>
+<desc id="d">The sender sends; the thread is open and it is the recipient's turn. The recipient may ack (still their turn), ask with needs-input (the sender's turn; the sender's reply hands it back as acked), resolve (the sender reviews), or decline. The sender may withdraw. Either side may close an open, acked, needs-input or resolved thread, and reopen a resolved or closed one with a reason, which returns it to acked. An FYI closes when the recipient acks it.</desc>
+<defs>
+  <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28"/></pattern>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <marker id="mc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#22d3ee" stroke-width="1.6"/></marker>
+  <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#f472b6" stroke-width="1.6"/></marker>
+  <marker id="ma" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#fbbf24" stroke-width="1.6"/></marker>
+</defs>
+<style>
+  text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;fill:#e2e8f0}
+  .st{font-size:15px;font-weight:700;text-anchor:middle}
+  .e{font-size:12px}.xs{font-size:11px;fill:#7c8aa0;letter-spacing:.2em;font-weight:700}.s{font-size:12px;fill:#7c8aa0}
+  .c{fill:#22d3ee}.p{fill:#f472b6}.a{fill:#fbbf24}.g{fill:#94a3b8}
+  .ln{fill:none;stroke-width:1.5}
+  .lc{stroke:#22d3ee;marker-end:url(#mc)}.lp{stroke:#f472b6;marker-end:url(#mp)}.la{stroke:#fbbf24;marker-end:url(#ma)}
+  .hl{fill:none;stroke-width:3;filter:url(#glow);opacity:0}
+  .an{animation-duration:12s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+  @keyframes sOpen{0%{opacity:1}11%{opacity:1}13%,100%{opacity:0}}
+  @keyframes sAcked{0%,11%{opacity:0}13%,23%{opacity:1}26%,38%{opacity:0}40%,49%{opacity:1}51%,100%{opacity:0}}
+  @keyframes sNeeds{0%,24%{opacity:0}26%,37%{opacity:1}39%,100%{opacity:0}}
+  @keyframes sRes{0%,49%{opacity:0}51%,62%{opacity:1}64%,100%{opacity:0}}
+  @keyframes sClosed{0%,62%{opacity:0}64%,90%{opacity:1}94%,100%{opacity:0}}
+  @keyframes eAck{0%,9%{opacity:0}11%,14%{opacity:1}16%,100%{opacity:0}}
+  @keyframes eNeeds{0%,22%{opacity:0}24%,27%{opacity:1}29%,100%{opacity:0}}
+  @keyframes eReply{0%,35%{opacity:0}37%,40%{opacity:1}42%,100%{opacity:0}}
+  @keyframes eRes{0%,47%{opacity:0}49%,52%{opacity:1}54%,100%{opacity:0}}
+  @keyframes eClose{0%,60%{opacity:0}62%,65%{opacity:1}67%,100%{opacity:0}}
+  @keyframes c1{0%,11%{opacity:1}13%,100%{opacity:0}}
+  @keyframes c2{0%,11%{opacity:0}13%,23%{opacity:1}25%,100%{opacity:0}}
+  @keyframes c3{0%,24%{opacity:0}26%,37%{opacity:1}39%,100%{opacity:0}}
+  @keyframes c4{0%,38%{opacity:0}40%,49%{opacity:1}51%,100%{opacity:0}}
+  @keyframes c5{0%,49%{opacity:0}51%,62%{opacity:1}64%,100%{opacity:0}}
+  @keyframes c6{0%,62%{opacity:0}64%,90%{opacity:1}94%,100%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.an{animation:none!important}.cap,.hl{display:none}}
+</style>
+<rect width="960" height="410" rx="18" fill="#070a10"/>
+<rect width="960" height="410" rx="18" fill="url(#grid)"/>
+<rect x=".5" y=".5" width="959" height="409" rx="18" fill="none" stroke="#1d2635"/>
+
+<!-- groups -->
+<rect x="40" y="70" width="428" height="262" rx="16" fill="none" stroke="#334155" stroke-dasharray="4 6"/>
+<text x="56" y="90" class="xs">ACTIVE</text>
+<text x="850" y="346" class="xs" text-anchor="middle">ENDED</text>
+
+<!-- edges -->
+<path class="ln lc" d="M130 28V92"/><text x="140" y="52" class="e c">send</text>
+<path class="ln lp" d="M202 118H296"/><text x="249" y="110" class="e p" text-anchor="middle">ack</text>
+<path class="ln lp" d="M442 118H556"/><text x="499" y="110" class="e p" text-anchor="middle">resolve</text>
+<path class="ln la" d="M702 118H776"/><text x="739" y="110" class="e a" text-anchor="middle">close</text>
+<path class="ln lp" d="M352 142V202"/><text x="342" y="176" class="e p" text-anchor="end">needs-input</text>
+<path class="ln lc" d="M388 204V144"/><text x="398" y="176" class="e c">reply</text>
+<path class="ln lp" d="M190 142L298 210" stroke-opacity=".6"/>
+<path class="ln la" d="M850 94C850 34 386 34 386 92" stroke-opacity=".8"/>
+<path class="ln la" d="M630 94C630 62 404 62 404 92" stroke-opacity=".8"/>
+<text x="618" y="30" class="e a" text-anchor="middle">reopen · with a reason</text>
+<path class="ln lp" d="M470 242H776"/><text x="623" y="234" class="e p" text-anchor="middle">decline</text>
+<path class="ln lc" d="M470 302H776"/><text x="623" y="294" class="e c" text-anchor="middle">withdraw</text>
+<text x="739" y="160" class="s" text-anchor="middle">or from</text>
+<text x="739" y="176" class="s" text-anchor="middle">any active</text>
+
+<!-- edge highlights -->
+<path class="hl an" style="animation-name:eAck;stroke:#f472b6" d="M202 118H296"/>
+<path class="hl an" style="animation-name:eNeeds;stroke:#f472b6" d="M352 142V202"/>
+<path class="hl an" style="animation-name:eReply;stroke:#22d3ee" d="M388 204V144"/>
+<path class="hl an" style="animation-name:eRes;stroke:#f472b6" d="M442 118H556"/>
+<path class="hl an" style="animation-name:eClose;stroke:#fbbf24" d="M702 118H776"/>
+
+<!-- states: border = whose turn -->
+<g>
+  <rect x="60" y="96" width="140" height="44" rx="22" fill="#2a0b1d" stroke="#f472b6" stroke-width="1.6"/>
+  <text x="130" y="123" class="st p">open</text>
+  <rect x="300" y="96" width="140" height="44" rx="22" fill="#2a0b1d" stroke="#f472b6" stroke-width="1.6"/>
+  <text x="370" y="123" class="st p">acked</text>
+  <rect x="300" y="206" width="140" height="44" rx="22" fill="#062530" stroke="#22d3ee" stroke-width="1.6"/>
+  <text x="370" y="233" class="st c">needs-input</text>
+  <rect x="560" y="96" width="140" height="44" rx="22" fill="#062530" stroke="#22d3ee" stroke-width="1.6"/>
+  <text x="630" y="123" class="st c">resolved</text>
+  <rect x="780" y="96" width="140" height="44" rx="22" fill="#111827" stroke="#64748b" stroke-width="1.6"/>
+  <text x="850" y="123" class="st g">closed</text>
+  <rect x="780" y="220" width="140" height="44" rx="22" fill="#111827" stroke="#64748b" stroke-width="1.6"/>
+  <text x="850" y="247" class="st g">declined</text>
+  <rect x="780" y="280" width="140" height="44" rx="22" fill="#111827" stroke="#64748b" stroke-width="1.6"/>
+  <text x="850" y="307" class="st g">withdrawn</text>
+</g>
+
+<!-- current state -->
+<rect class="hl an" style="animation-name:sOpen;stroke:#f472b6;opacity:1" x="60" y="96" width="140" height="44" rx="22"/>
+<rect class="hl an" style="animation-name:sAcked;stroke:#f472b6" x="300" y="96" width="140" height="44" rx="22"/>
+<rect class="hl an" style="animation-name:sNeeds;stroke:#22d3ee" x="300" y="206" width="140" height="44" rx="22"/>
+<rect class="hl an" style="animation-name:sRes;stroke:#22d3ee" x="560" y="96" width="140" height="44" rx="22"/>
+<rect class="hl an" style="animation-name:sClosed;stroke:#94a3b8" x="780" y="96" width="140" height="44" rx="22"/>
+
+<!-- captions -->
+<g font-size="14">
+  <text x="40" y="364" class="an cap" style="animation-name:c1"><tspan class="c">alice</tspan> sends · <tspan class="p">bob's</tspan> turn</text>
+  <text x="40" y="364" class="an cap" style="animation-name:c2;opacity:0"><tspan class="p">bob</tspan> acks · still his turn</text>
+  <text x="40" y="364" class="an cap" style="animation-name:c3;opacity:0"><tspan class="p">bob</tspan> asks · <tspan class="c">alice's</tspan> turn</text>
+  <text x="40" y="364" class="an cap" style="animation-name:c4;opacity:0"><tspan class="c">alice</tspan> replies · back to <tspan class="p">bob</tspan></text>
+  <text x="40" y="364" class="an cap" style="animation-name:c5;opacity:0"><tspan class="p">bob</tspan> resolves · <tspan class="c">alice</tspan> reviews</text>
+  <text x="40" y="364" class="an cap" style="animation-name:c6;opacity:0"><tspan class="c">alice</tspan> closes · done</text>
+</g>
+<g class="s">
+  <circle cx="46" cy="385" r="5" fill="#f472b6"/><text x="58" y="389">recipient's turn</text>
+  <circle cx="206" cy="385" r="5" fill="#22d3ee"/><text x="218" y="389">sender's turn</text>
+  <circle cx="350" cy="385" r="5" fill="#64748b"/><text x="362" y="389">ended</text>
+  <text x="440" y="389">reply works anytime · an fyi closes on ack</text>
+</g>
+</svg>

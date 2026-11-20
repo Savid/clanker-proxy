@@ -69,6 +69,15 @@ loopback like any other.
 - Spec lint exceptions go in `.vacuum.yaml` (whole rules) or
   `.vacuum-ignore.yaml` (one finding), each with a reason.
 
+## Docs
+
+- README and `docs/` stay compact: what to run, and what it does, in the
+  fewest words. No restating `cpctl help`, no history, no filler.
+- Diagrams are hand-written SVGs in `docs/img`, on a dark card in the
+  shared palette (cyan sender/native, magenta recipient/Worker, amber
+  peering/webhooks). Animate only with CSS, stopped under
+  `prefers-reduced-motion`; no scripts or external resources.
+
 ## Rules
 
 - Pure crates (listed in `xtask/src/main.rs`) never depend on tokio, reqwest,

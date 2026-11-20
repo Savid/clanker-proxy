@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430" role="img" aria-labelledby="t d">
+<title id="t">How clanker-proxy works</title>
+<desc id="d">Alice's agent opens a thread with cpctl on her daemon, cpd. Her daemon delivers it to Bob's daemon, here cpd-worker on Cloudflare; the daemons are peered with a shared code. Bob's daemon wakes his agent with a signed webhook, his agent resolves the thread, and the result travels back to Alice's daemon, where her agent's wait returns.</desc>
+<defs>
+  <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28" stroke-width="1"/></pattern>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <marker id="ac" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#22d3ee" stroke-width="1.6"/></marker>
+  <marker id="am" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#f472b6" stroke-width="1.6"/></marker>
+  <marker id="aa" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#fbbf24" stroke-width="1.6"/></marker>
+</defs>
+<style>
+  text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;fill:#e2e8f0}
+  .s{font-size:12px;fill:#7c8aa0}.xs{font-size:11px;fill:#7c8aa0;letter-spacing:.06em}
+  .lab{font-size:11px;letter-spacing:.25em;font-weight:700}
+  .c{fill:#22d3ee}.p{fill:#f472b6}.a{fill:#fbbf24}
+  .box{fill:#0b1220}
+  .an{animation-duration:9s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+  .d1{animation-name:d1}.pc{animation-name:pc}.wh{animation-name:wh}.d2{animation-name:d2}.pm{animation-name:pm}.d3{animation-name:d3}
+  .fb{animation-name:fb}.fw{animation-name:fw}.fa{animation-name:fa}.fg{animation-name:fg}
+  .k1{animation-name:k1}.k2{animation-name:k2}.k3{animation-name:k3}.k4{animation-name:k4}
+  .key{animation:key 3s ease-in-out infinite}
+  @keyframes d1{0%{opacity:0;transform:translateY(0)}1%{opacity:1}8%{opacity:1;transform:translateY(46px)}10%,100%{opacity:0;transform:translateY(46px)}}
+  @keyframes pc{0%,8%{opacity:0;transform:translateX(0)}10%{opacity:1;transform:translateX(0)}26%{opacity:1;transform:translateX(212px)}29%,100%{opacity:0;transform:translateX(212px)}}
+  @keyframes fb{0%,25%{opacity:0}28%{opacity:1}36%,100%{opacity:0}}
+  @keyframes wh{0%,28%{opacity:0;transform:translateY(0)}29%{opacity:1}37%{opacity:1;transform:translateY(58px)}39%,100%{opacity:0;transform:translateY(58px)}}
+  @keyframes fw{0%,36%{opacity:0}39%{opacity:1}47%,100%{opacity:0}}
+  @keyframes d2{0%,46%{opacity:0;transform:translateY(0)}47%{opacity:1}54%{opacity:1;transform:translateY(46px)}56%,100%{opacity:0;transform:translateY(46px)}}
+  @keyframes pm{0%,55%{opacity:0;transform:translateX(0)}57%{opacity:1;transform:translateX(0)}72%{opacity:1;transform:translateX(-212px)}75%,100%{opacity:0;transform:translateX(-212px)}}
+  @keyframes fa{0%,71%{opacity:0}74%{opacity:1}80%,100%{opacity:0}}
+  @keyframes d3{0%,78%{opacity:0;transform:translateY(0)}79%{opacity:1}86%{opacity:1;transform:translateY(-46px)}88%,100%{opacity:0;transform:translateY(-46px)}}
+  @keyframes fg{0%,86%{opacity:0}89%{opacity:1}97%,100%{opacity:0}}
+  @keyframes k1{0%,27%{opacity:1}30%,100%{opacity:0}}
+  @keyframes k2{0%,28%{opacity:0}31%,44%{opacity:1}47%,100%{opacity:0}}
+  @keyframes k3{0%,45%{opacity:0}48%,76%{opacity:1}79%,100%{opacity:0}}
+  @keyframes k4{0%,77%{opacity:0}80%,97%{opacity:1}100%{opacity:0}}
+  @keyframes key{0%,100%{opacity:.85}50%{opacity:1}}
+  @media (prefers-reduced-motion:reduce){.an,.key{animation:none!important}.dot,.cap,.flash{display:none}.k1{display:inline}}
+</style>
+<rect width="960" height="430" rx="18" fill="#070a10"/>
+<rect width="960" height="430" rx="18" fill="url(#grid)"/>
+<rect x=".5" y=".5" width="959" height="429" rx="18" fill="none" stroke="#1d2635"/>
+
+<!-- alice -->
+<text x="40" y="58" class="lab c">ALICE</text>
+<rect x="40" y="72" width="240" height="64" rx="10" class="box" stroke="#22d3ee" stroke-opacity=".55"/>
+<rect x="40" y="72" width="240" height="64" rx="10" fill="none" stroke="#22d3ee" stroke-width="2" filter="url(#glow)" class="an fg flash" opacity="0"/>
+<text x="58" y="100" font-size="15" font-weight="700">agent</text>
+<text x="58" y="121" class="s">cpctl send · wait · show</text>
+<path d="M160 138V186" stroke="#22d3ee" stroke-opacity=".45" stroke-dasharray="3 5"/>
+<rect x="40" y="190" width="240" height="84" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
+<rect x="40" y="190" width="240" height="84" rx="12" fill="none" stroke="#22d3ee" stroke-width="2.5" filter="url(#glow)" class="an fa flash" opacity="0"/>
+<text x="58" y="226" font-size="24" font-weight="700" class="c">cpd</text>
+<text x="58" y="250" class="s">native binary · SQLite</text>
+<text x="58" y="266" class="xs">your machine, behind TLS</text>
+<circle cx="160" cy="140" r="4" fill="#22d3ee" filter="url(#glow)" class="an d1 dot" opacity="0"/>
+<circle cx="160" cy="186" r="4" fill="#22d3ee" filter="url(#glow)" class="an d3 dot" opacity="0"/>
+
+<!-- bob -->
+<text x="920" y="58" text-anchor="end" class="lab p">BOB</text>
+<rect x="680" y="72" width="240" height="64" rx="10" class="box" stroke="#f472b6" stroke-opacity=".55"/>
+<text x="698" y="100" font-size="15" font-weight="700">agent</text>
+<text x="698" y="121" class="s">cpctl inbox · resolve</text>
+<path d="M800 138V186" stroke="#f472b6" stroke-opacity=".45" stroke-dasharray="3 5"/>
+<rect x="680" y="190" width="240" height="84" rx="12" class="box" stroke="#f472b6" stroke-width="1.6"/>
+<rect x="680" y="190" width="240" height="84" rx="12" fill="none" stroke="#f472b6" stroke-width="2.5" filter="url(#glow)" class="an fb flash" opacity="0"/>
+<text x="698" y="226" font-size="24" font-weight="700" class="p">cpd-worker</text>
+<text x="698" y="250" class="s">Worker · Durable Object</text>
+<text x="698" y="266" class="xs">Cloudflare, serverless</text>
+<circle cx="800" cy="140" r="4" fill="#f472b6" filter="url(#glow)" class="an d2 dot" opacity="0"/>
+
+<!-- peering key -->
+<g class="key" transform="translate(480 112)" filter="url(#glow)">
+  <circle cx="-34" cy="0" r="11" fill="none" stroke="#fbbf24" stroke-width="3"/>
+  <path d="M-23 0H34M20 0V9M28 0V7" stroke="#fbbf24" stroke-width="3" stroke-linecap="round" fill="none"/>
+</g>
+<text x="480" y="146" text-anchor="middle" class="xs a">PEERED · SHARED CODE c90a-94d3</text>
+
+<!-- lanes -->
+<path d="M284 214H672" stroke="#22d3ee" stroke-opacity=".5" stroke-dasharray="2 6" marker-end="url(#ac)"/>
+<path d="M676 252H288" stroke="#f472b6" stroke-opacity=".5" stroke-dasharray="2 6" marker-end="url(#am)"/>
+<g class="an pc" opacity="0">
+  <rect x="290" y="201" width="170" height="26" rx="13" fill="#062530" stroke="#22d3ee" filter="url(#glow)"/>
+  <text x="375" y="218" text-anchor="middle" font-size="12" class="c">open · bump the image</text>
+</g>
+<g class="an pm" opacity="0">
+  <rect x="502" y="239" width="170" height="26" rx="13" fill="#2a0b1d" stroke="#f472b6" filter="url(#glow)"/>
+  <text x="587" y="256" text-anchor="middle" font-size="12" class="p">resolve · done #4312</text>
+</g>
+<text x="480" y="292" text-anchor="middle" class="xs">HTTPS · PER-PEER BEARER · RETRIED UNTIL DELIVERED</text>
+
+<!-- webhook -->
+<path d="M800 276V334" stroke="#fbbf24" stroke-opacity=".5" stroke-dasharray="3 5" marker-end="url(#aa)"/>
+<text x="810" y="310" class="xs a">signed webhook</text>
+<rect x="680" y="340" width="240" height="58" rx="10" class="box" stroke="#fbbf24" stroke-opacity=".6"/>
+<rect x="680" y="340" width="240" height="58" rx="10" fill="none" stroke="#fbbf24" stroke-width="2.5" filter="url(#glow)" class="an fw flash" opacity="0"/>
+<text x="698" y="365" font-size="14" font-weight="700" class="a">Amp orb · chat · ntfy</text>
+<text x="698" y="385" class="s">wakes the agent, no polling</text>
+<circle cx="800" cy="278" r="4" fill="#fbbf24" filter="url(#glow)" class="an wh dot" opacity="0"/>
+
+<!-- captions -->
+<g font-size="14">
+  <text x="40" y="365" class="an k1 cap"><tspan class="c">01</tspan>  alice's agent opens a thread</text>
+  <text x="40" y="365" class="an k2 cap" opacity="0"><tspan class="a">02</tspan>  bob's daemon wakes his agent</text>
+  <text x="40" y="365" class="an k3 cap" opacity="0"><tspan class="p">03</tspan>  bob's agent resolves it</text>
+  <text x="40" y="365" class="an k4 cap" opacity="0"><tspan class="c">04</tspan>  alice's wait returns the result</text>
+</g>
+<text x="40" y="390" class="s">one daemon per owner · peers talk directly · no shared server</text>
+</svg>
