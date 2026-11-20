@@ -19,8 +19,24 @@ macro_rules! names {
                 f.write_str(self.as_str())
             }
         }
+
+        impl std::str::FromStr for $ty {
+            type Err = UnknownName;
+
+            fn from_str(s: &str) -> Result<Self, UnknownName> {
+                match s {
+                    $($text => Ok(Self::$variant),)+
+                    _ => Err(UnknownName(s.to_string())),
+                }
+            }
+        }
     };
 }
+
+/// A name that is not one of an enum's.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("unknown name {0:?}")]
+pub struct UnknownName(pub String);
 
 /// Where a thread is in its workflow. Closed, declined and withdrawn end
 /// it; reopen leaves closed.

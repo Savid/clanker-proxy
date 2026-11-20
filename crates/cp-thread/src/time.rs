@@ -19,6 +19,9 @@ pub struct At(Timestamp);
 pub struct AtError(String);
 
 impl At {
+    /// The Unix epoch.
+    pub const EPOCH: At = At(Timestamp::UNIX_EPOCH);
+
     /// The instant `seconds` after the Unix epoch.
     pub fn from_unix_seconds(seconds: i64) -> Result<Self, AtError> {
         Timestamp::from_second(seconds)

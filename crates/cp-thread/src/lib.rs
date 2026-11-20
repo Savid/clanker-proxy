@@ -14,7 +14,7 @@ mod thread;
 mod time;
 mod workflow;
 
-pub use event::{Event, EventError, MAX_CLOCK, Opening};
+pub use event::{Event, EventError, MAX_CLOCK, Move, Opening, Step, position};
 pub use fold::{
     ClockError, ENDING_SLACK, Fold, MAX_EVENTS, MAX_LEAD, MAX_THREAD_BODY, Refusal, RoomError,
     Usage,
@@ -25,4 +25,4 @@ pub use text::{
 };
 pub use thread::{Applied, ReplayError, Thread};
 pub use time::{At, AtError};
-pub use workflow::{Action, Kind, Role, Rule, State};
+pub use workflow::{Action, Kind, Role, Rule, State, UnknownName};

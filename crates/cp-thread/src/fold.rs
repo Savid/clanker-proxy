@@ -1,6 +1,6 @@
 //! A thread's state folded from its events, without the events themselves.
 
-use crate::event::Event;
+use crate::event::{Event, Move};
 use crate::text::{Id, Name};
 use crate::time::At;
 use crate::workflow::{Action, Kind, Role, State};
@@ -68,10 +68,10 @@ pub struct Usage {
 }
 
 impl Usage {
-    fn add(&mut self, e: &Event) {
+    fn add<M: Move>(&mut self, e: &M) {
         self.events = self.events.saturating_add(1);
-        self.body_bytes = self.body_bytes.saturating_add(e.body.bytes());
-        self.max_clock = self.max_clock.max(e.clock);
+        self.body_bytes = self.body_bytes.saturating_add(e.body_bytes());
+        self.max_clock = self.max_clock.max(e.clock());
     }
 }
 
@@ -101,22 +101,28 @@ impl Fold {
     /// The thread an open event starts, or `None` if `e` is not an open.
     pub fn open(e: &Event) -> Option<Self> {
         let opening = e.opening.as_ref()?;
-        if e.action != Action::Open {
+        Self::start(e, opening.kind)
+    }
+
+    /// The thread an open move of `kind` starts, or `None` if `m` is not an
+    /// open. For replaying stored moves, whose kind is kept apart.
+    pub fn start<M: Move>(m: &M, kind: Kind) -> Option<Self> {
+        if m.action() != Action::Open {
             return None;
         }
         let mut sender_usage = Usage::default();
-        sender_usage.add(e);
+        sender_usage.add(m);
         Some(Self {
-            id: e.thread.clone(),
-            kind: opening.kind,
-            sender: e.from.clone(),
-            recipient: e.to.clone(),
+            id: m.thread().clone(),
+            kind,
+            sender: m.from().clone(),
+            recipient: m.to().clone(),
             state: State::Open,
-            opened_at: e.at,
-            updated_at: e.at,
-            last_clock: e.clock,
-            last_id: e.id.clone(),
-            max_clock: e.clock,
+            opened_at: m.at(),
+            updated_at: m.at(),
+            last_clock: m.clock(),
+            last_id: m.id().clone(),
+            max_clock: m.clock(),
             sender_usage,
             recipient_usage: Usage::default(),
         })
@@ -124,77 +130,73 @@ impl Fold {
 
     /// Whether `e` replays after everything folded in, so [`Fold::step`]
     /// gives the same result as replaying the whole thread.
-    pub fn follows(&self, e: &Event) -> bool {
-        e.action != Action::Open && (e.clock, &e.id) > (self.last_clock, &self.last_id)
+    pub fn follows<M: Move>(&self, e: &M) -> bool {
+        e.action() != Action::Open && (e.clock(), e.id()) > (self.last_clock, &self.last_id)
     }
 
     /// Folds in `e`, which must replay after everything already folded in.
     /// Returns why it had no effect, if it had none.
-    pub fn step(&mut self, e: &Event) -> Option<Refusal> {
-        if let Some(usage) = self.usage_mut(&e.from) {
+    pub fn step<M: Move>(&mut self, e: &M) -> Option<Refusal> {
+        if let Some(usage) = self.usage_mut(e.from()) {
             usage.add(e);
         }
-        self.max_clock = self.max_clock.max(e.clock);
-        if (e.clock, &e.id) > (self.last_clock, &self.last_id) {
-            self.last_clock = e.clock;
-            self.last_id = e.id.clone();
+        self.max_clock = self.max_clock.max(e.clock());
+        if (e.clock(), e.id()) > (self.last_clock, &self.last_id) {
+            self.last_clock = e.clock();
+            self.last_id = e.id().clone();
         }
 
         if let Err(refusal) = self.check(e) {
             return Some(refusal);
         }
-        self.updated_at = self.updated_at.max(e.at);
+        self.updated_at = self.updated_at.max(e.at());
         self.state = self.after(e);
         None
     }
 
     /// Why `e` may not apply to the thread as it stands, if it may not.
-    pub fn check(&self, e: &Event) -> Result<(), Refusal> {
-        if e.thread != self.id {
-            return Err(Refusal::OtherThread(e.thread.clone()));
+    pub fn check<M: Move>(&self, e: &M) -> Result<(), Refusal> {
+        if *e.thread() != self.id {
+            return Err(Refusal::OtherThread(e.thread().clone()));
         }
-        let Some(role) = self.role_of(&e.from) else {
-            return Err(Refusal::NotParticipants {
-                from: e.from.clone(),
-                to: e.to.clone(),
-            });
+        let not_participants = || Refusal::NotParticipants {
+            from: e.from().clone(),
+            to: e.to().clone(),
         };
-        if e.to != *self.peer(&e.from) {
-            return Err(Refusal::NotParticipants {
-                from: e.from.clone(),
-                to: e.to.clone(),
-            });
+        let Some(role) = self.role_of(e.from()) else {
+            return Err(not_participants());
+        };
+        if e.to() != self.peer(e.from()) {
+            return Err(not_participants());
         }
-        if e.action == Action::Open {
+        let action = e.action();
+        if action == Action::Open {
             return Err(Refusal::AlreadyOpen);
         }
-        let Some(allowed) = e.action.rule() else {
+        let Some(allowed) = action.rule() else {
             return Ok(()); // a comment: either participant, any state
         };
         if !allowed.by.contains(&role) {
             let role = allowed.by.first().copied().unwrap_or(role);
-            return Err(Refusal::Role {
-                role,
-                action: e.action,
-            });
+            return Err(Refusal::Role { role, action });
         }
         if !allowed.from.contains(&self.state) {
             return Err(Refusal::State {
-                action: e.action,
+                action,
                 state: self.state,
             });
         }
-        if e.action == Action::Reopen && e.body.is_blank() {
+        if action == Action::Reopen && e.body_blank() {
             return Err(Refusal::NoReason);
         }
         Ok(())
     }
 
     /// The state once a checked event applies.
-    fn after(&self, e: &Event) -> State {
-        match e.action {
+    fn after<M: Move>(&self, e: &M) -> State {
+        match e.action() {
             // The sender answering a question hands the thread back.
-            Action::Comment if self.state == State::NeedsInput && e.from == self.sender => {
+            Action::Comment if self.state == State::NeedsInput && *e.from() == self.sender => {
                 State::Acked
             }
             Action::Comment | Action::Open => self.state,
@@ -228,20 +230,20 @@ impl Fold {
     }
 
     /// Refuses `e` when its author has no room for it in the thread.
-    pub fn room(&self, e: &Event) -> Result<(), RoomError> {
-        let usage = self.usage(&e.from).copied().unwrap_or_default();
+    pub fn room<M: Move>(&self, e: &M) -> Result<(), RoomError> {
+        let usage = self.usage(e.from()).copied().unwrap_or_default();
         if usage.events >= MAX_EVENTS.saturating_add(ENDING_SLACK) {
             return Err(RoomError::Exhausted {
-                author: e.from.clone(),
+                author: e.from().clone(),
                 thread: self.id.clone(),
             });
         }
         let over = usage.events >= MAX_EVENTS
-            || usage.body_bytes.saturating_add(e.body.bytes()) > MAX_THREAD_BODY;
-        let bare_ending = e.body.as_str().is_empty() && e.action.is_ending();
+            || usage.body_bytes.saturating_add(e.body_bytes()) > MAX_THREAD_BODY;
+        let bare_ending = e.body_empty() && e.action().is_ending();
         if over && !bare_ending {
             return Err(RoomError::Spent {
-                author: e.from.clone(),
+                author: e.from().clone(),
                 thread: self.id.clone(),
             });
         }
@@ -255,20 +257,20 @@ impl Fold {
     }
 
     /// Why a peer's event has a clock the thread cannot take, if it cannot.
-    pub fn check_clock(&self, e: &Event) -> Result<(), ClockError> {
-        if let Some(usage) = self.usage(&e.from)
-            && usage.max_clock >= e.clock
+    pub fn check_clock<M: Move>(&self, e: &M) -> Result<(), ClockError> {
+        if let Some(usage) = self.usage(e.from())
+            && usage.max_clock >= e.clock()
         {
             return Err(ClockError::NotAfter {
-                clock: e.clock,
-                author: e.from.clone(),
+                clock: e.clock(),
+                author: e.from().clone(),
                 seen: usage.max_clock,
             });
         }
         let limit = self.next_clock().saturating_add(MAX_LEAD);
-        if e.clock > limit {
+        if e.clock() > limit {
             return Err(ClockError::TooFar {
-                clock: e.clock,
+                clock: e.clock(),
                 limit,
             });
         }

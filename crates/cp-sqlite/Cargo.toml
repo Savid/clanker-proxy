@@ -1,0 +1,17 @@
+[package]
+name = "cp-sqlite"
+description = "cp-core's Sql on rusqlite, for the native daemon and tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+cp-api.workspace = true
+cp-core.workspace = true
+rusqlite.workspace = true
+
+[lints]
+workspace = true

@@ -27,6 +27,7 @@ cargo xtask deps    # the pure-crate dependency rule
 - `crates/cp-thread`: event format, workflow, replay, clocks. Pure.
 - `crates/cp-api`: API types, bounded newtypes, the operation table, OpenAPI generation.
 - `crates/cp-core`: daemon logic over a synchronous `Sql` trait. Pure, sans-IO.
+  `crates/cp-sqlite`: that `Sql` on rusqlite, for `cpd` and tests.
 - `crates/cp-http`: host-agnostic HTTP service built from the operation table.
 - `crates/cpd`: native host. `crates/cpd-worker`: Worker + Durable Object host.
 - `crates/cpctl`: the CLI. `crates/cp-conformance`: black-box tests over HTTP.
@@ -59,8 +60,11 @@ cargo xtask deps    # the pure-crate dependency rule
 - No panics in library code: clippy denies `unwrap`, `expect`, `panic!` and
   indexing outside tests. A panic in the Worker hangs the request and resets
   the Durable Object.
-- The core never awaits. Network I/O happens in the host between core calls,
-  so multi-step flows re-validate when they commit.
+- The core never awaits. Each `Core` call runs in one transaction the host
+  opens (`cp_sqlite::run` natively); network I/O happens in the host between
+  calls, so multi-step flows re-validate when they commit.
+- Thread state changes go in `cp-thread` (`Action::rule`, `Fold`) with a
+  table test; `cp-core/tests/simulation.rs` must keep converging.
 - Never log or print tokens or peer secrets; hold them as
   `secrecy::SecretString`.
 - Hard cutover: no backward compatibility, migrations, shims or deprecated

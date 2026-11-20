@@ -1,0 +1,25 @@
+[package]
+name = "cp-core"
+description = "clanker-proxy's daemon logic over SQL: threads, peering, tokens, delivery and webhook scheduling. Pure, sans-IO."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+cp-api.workspace = true
+cp-thread.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+cp-sqlite.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
