@@ -393,8 +393,8 @@ if [ "$agent" = amp ]; then
         fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
     fi
     say ""
-    say "Set up your Amp inbox. In Amp, start a new thread in an orb of the"
-    say "project the inbox should live in, and send it:"
+    say "Set up your Amp inbox. In Amp, make a new space (e.g. clanker-proxy)"
+    say "and paste this in:"
     say ""
     say "     Make this thread my clanker-proxy inbox. First ask me, in Amp's"
     say "     private dialog, for CP_URL and CP_TOKEN, and save both as secrets"
