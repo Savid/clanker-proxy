@@ -232,7 +232,9 @@ impl<H: Host> Service<H> {
         match op.access() {
             Access::Public => Ok(Caller::Public),
             Access::Owner | Access::OwnerOrAgent if owner => Ok(Caller::Owner),
-            Access::Owner | Access::OwnerOrAgent if token.starts_with(prefix::AGENT) => {
+            Access::Owner | Access::OwnerOrAgent | Access::Agent
+                if token.starts_with(prefix::AGENT) =>
+            {
                 let t = token.clone();
                 let agent = self
                     .host
@@ -387,6 +389,21 @@ impl<H: Host> Service<H> {
                 };
                 h.core(move |c| c.accepted(&key)).await?;
                 empty()
+            }
+            Op::SetOwnWebhook | Op::DeleteOwnWebhook => {
+                let Caller::Agent { name, peers, .. } = caller else {
+                    return Err(unauthorized());
+                };
+                if op == Op::DeleteOwnWebhook {
+                    h.core(move |c| c.delete_agent_webhook(&name)).await?;
+                    return Ok(empty());
+                }
+                let w: cp_api::OwnWebhook = decode(req)?;
+                json(
+                    200,
+                    &h.core(move |c| c.set_agent_webhook(&name, &peers, &w))
+                        .await?,
+                )
             }
             Op::ListAgentTokens => json(200, &h.core(|c| c.agent_tokens()).await?),
             Op::CreateAgentToken => {

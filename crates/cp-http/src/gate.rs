@@ -54,6 +54,7 @@ impl Gate {
         // 403, which says more than 401 would.
         let fits = match op.access() {
             Access::Public => true,
+            Access::Agent => token.starts_with(prefix::AGENT),
             Access::Owner | Access::OwnerOrAgent => {
                 token.starts_with(prefix::OWNER) || token.starts_with(prefix::AGENT)
             }

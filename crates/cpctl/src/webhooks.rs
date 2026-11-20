@@ -181,6 +181,12 @@ fn describe(out: &mut String, h: &Webhook) {
         joined_events(&h.events),
         for_peers(h),
     );
+    if let Some(agent) = &h.agent {
+        let _ = writeln!(
+            out,
+            "registered by agent token {agent}; revoking the token deletes it"
+        );
+    }
     if !h.header_names.is_empty() {
         let names: Vec<&str> = h
             .header_names
@@ -405,7 +411,10 @@ impl App {
                 ]];
                 for h in &l.webhooks {
                     rows.push(vec![
-                        h.name.to_string(),
+                        h.agent.as_ref().map_or_else(
+                            || h.name.to_string(),
+                            |a| format!("{} (agent {a})", h.name),
+                        ),
                         h.kind.to_string(),
                         h.enabled.to_string(),
                         origin_str(h.origin).into(),

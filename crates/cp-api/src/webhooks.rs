@@ -362,6 +362,21 @@ pub struct Webhook {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(read_only)]
     pub paused_until: Option<At>,
+    /// The agent token that registered this webhook for itself; absent for
+    /// the owner's own. Revoking the token deletes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<Name>,
+}
+
+/// The webhook an agent token registers for itself, as an inbox: generic,
+/// signed with `secret`, for the peers' moves only, and for the token's
+/// peers only. Registering again replaces it.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnWebhook {
+    /// A public https URL.
+    pub url: WebhookUrl,
+    pub secret: WebhookSecret,
 }
 
 /// A new webhook. Chat destinations authenticate with their URL or custom

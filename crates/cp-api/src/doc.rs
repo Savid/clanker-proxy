@@ -21,7 +21,7 @@ use crate::model::{
 };
 use crate::text::{Cursor, ThreadRef};
 use crate::webhooks::{
-    Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin,
+    OwnWebhook, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin,
     WebhookEventType, WebhookEvents, WebhookHeader, WebhookList, WebhookOrigin, WebhookPayload,
     WebhookType, WebhookUpdate,
 };
@@ -240,6 +240,21 @@ async fn list_webhook_deliveries() {}
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn retry_webhook_delivery() {}
 
+#[utoipa::path(post, path = "/api/v1/me/webhook", operation_id = "setOwnWebhook", tag = "webhooks",
+    summary = "Register this agent token's webhook",
+    description = "For agent tokens: registers, or replaces, the one webhook this token has, so an agent runner can be woken without the owner. It is generic and signed with the given key, hears only the peers' moves, and only for the token's peers. The URL must be public https. Revoking the token deletes it. The owner adds webhooks with createWebhook instead.",
+    request_body(content = OwnWebhook, description = "Where to send notifications, and the signing key."),
+    responses((status = 200, description = "The webhook.", body = Webhook),
+        (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
+async fn set_own_webhook() {}
+
+#[utoipa::path(delete, path = "/api/v1/me/webhook", operation_id = "deleteOwnWebhook", tag = "webhooks",
+    summary = "Remove this agent token's webhook",
+    description = "For agent tokens: removes the webhook the token registered, and its deliveries.",
+    responses((status = 204, description = "Removed."),
+        (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
+async fn delete_own_webhook() {}
+
 #[utoipa::path(post, path = "notification", operation_id = "receiveWebhookNotification", tag = "webhooks",
     summary = "Receive an event notification",
     description = "Implemented by a generic webhook receiver, not by the daemon. When signing is on, verify the signature and the timestamp's freshness. Deduplicate by Webhook-Id, then durably enqueue before answering 2xx. Other destination types get their provider's message format instead.",
@@ -276,7 +291,7 @@ async fn receive_webhook_notification() {}
         act_on_thread, stream_events, deliver_event, notify_peering_accepted,
         list_agent_tokens, create_agent_token, delete_agent_token, list_webhooks,
         create_webhook, get_webhook, update_webhook, delete_webhook, list_webhook_deliveries,
-        retry_webhook_delivery,
+        retry_webhook_delivery, set_own_webhook, delete_own_webhook,
     ),
     components(schemas(
         Problem, Health, HealthStatus, Me, PeeringRequest, ReceiptStatus, RequestReceipt, Request,
@@ -284,7 +299,7 @@ async fn receive_webhook_notification() {}
         ThreadSummary, Thread, ThreadEvent, Delivery, DeliveryStatus, ThreadList, TurnFilter,
         WireEvent, Receipt, AgentTokenInput, AgentTokenSummary, NewAgentToken, AgentTokenList,
         WebhookType, WebhookEventType, WebhookEvents, WebhookOrigin, WebhookEventOrigin,
-        WebhookHeader, Webhook, WebhookCreate, WebhookUpdate, WebhookList, WebhookDelivery,
+        WebhookHeader, Webhook, WebhookCreate, WebhookUpdate, OwnWebhook, WebhookList, WebhookDelivery,
         WebhookDeliveryList, WebhookPayload, Cursor, ThreadRef, crate::text::RequestRef, crate::text::UnixTime,
         State, Action, Kind, Role, Name, Id, At, Labels,
     )),
@@ -325,6 +340,7 @@ pub fn openapi() -> Document {
             Access::Public => Vec::new(),
             Access::Owner => vec![requirement("ownerToken")],
             Access::OwnerOrAgent => vec![requirement("ownerToken"), requirement("agentToken")],
+            Access::Agent => vec![requirement("agentToken")],
             Access::Peer => vec![requirement("peerSignature")],
         });
     }

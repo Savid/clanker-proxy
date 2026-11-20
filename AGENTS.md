@@ -104,11 +104,9 @@ all of it except publishing.
   table test; `cp-core/tests/simulation.rs` must keep converging.
 - Never log or print tokens or the daemon's private key; hold secrets as
   `secrecy::SecretString`.
-- Upgrades keep data and peers: a storage change is a new entry appended to
-  `MIGRATIONS` in `cp-core/src/schema.rs` (never edit a shipped one, and
-  test it on data from the previous release). Daemons stay wire-compatible
-  with the previous minor release. Patch releases change neither storage
-  nor the wire format, so they are always safe to roll out or back.
+- Before 1.0, a storage change bumps `BASELINE` in `cp-core/src/schema.rs`
+  and earlier data is refused (hard cutover); `MIGRATIONS` starts at 1.0,
+  append-only. Patch releases change neither storage nor the wire format.
 - Comments say what the code cannot: why, constraints, non-obvious
   consequences. No restating code, no history, no references to plans,
   reviews or tickets.

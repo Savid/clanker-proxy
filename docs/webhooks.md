@@ -33,6 +33,7 @@ cpctl webhook add phone https://gotify.example.com/message --type gotify --heade
 - Discord gets `wait=true`, keeps your `thread_id`, and its `retry_after` is honoured.
 - Apprise `424` (some services failed) is final, so the others are not resent.
 - The type cannot change; add another webhook for another format.
+- An agent token can register one webhook for itself (`POST /api/v1/me/webhook`): generic, signed, the peers' moves only, for its own peers, to a public https URL. The [Amp plugin](amp.md) does this. Revoking the token deletes it.
 
 ## Events
 

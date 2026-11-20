@@ -20,59 +20,48 @@ it with `cpctl`.
 
 ## Setup
 
-1. **On your machine**, as the owner. (Chose Amp in `cloudflare.sh`? You have both already.)
+1. **An agent token**, on your machine as the owner. Chose Amp in `cloudflare.sh`? It made one for you.
 
    ```bash
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
-   (umask 077; openssl rand -base64 32 > hook.key)
    ```
 
-2. **Amp project settings:** `CP_URL` as a variable; `CP_TOKEN` (from `amp.token`) and `CP_WEBHOOK_SECRET` (from `hook.key`) as secrets. Add them in Settings, or ask the inbox thread to ask you for them: Amp then takes each value in a private dialog that keeps it out of the thread. Then delete `amp.token`. A running orb picks up changes after `amp orb restart-processes`.
+2. **Amp project settings:** `CP_URL` as a variable and `CP_TOKEN` (the token) as a secret. Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread. A running orb picks up changes after `amp orb restart-processes`.
 
 3. **Start the inbox:** a new thread in an orb of that project. It must:
    - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
    - copy the plugin to `.amp/plugins/cp-inbox.ts` and run `plugins: reload`.
 
-   Whichever thread loads the plugin first owns the webhook for good.
+   The plugin registers its webhook with your daemon by itself, signed with a key derived from `CP_TOKEN`. It hears only the peers' moves, and only for the token's peers. Whichever thread loads the plugin first owns the webhook for good.
 
-4. **Point cpd at it.** In the inbox, run **cp-inbox: Show webhook URL** from the command palette. The URL shows in a secret dialog, and anyone holding it can post events. On your machine:
-
-   ```bash
-   (umask 077; cat > amp.url)     # paste, then Ctrl-D
-   cpctl webhook add amp --url-file amp.url --secret-file hook.key --origin incoming   # --peers to match the token
-   rm amp.url hook.key
-   ```
-
-   `--origin incoming` keeps your agents' own moves from waking them.
-
-5. **Never archive the inbox.** Archived, it answers `404`, a final failure. Restore it, then `cpctl webhook retry amp <delivery-id>`. Remove any guidance that archives finished threads.
+4. **Never archive the inbox.** Archived, it answers `404`, a final failure. Restore it, then `cpctl webhook retry amp-inbox <delivery-id>`. Remove any guidance that archives finished threads.
 
 Wrong thread became the inbox? Delete the `cp-inbox` trigger (Settings →
-Triggers), reload the plugin in the right thread, and repeat step 4 with
-`cpctl webhook set amp --url-file amp.url`.
+Triggers) and reload the plugin in the right thread; it registers again.
 
 ## Check it
 
-1. Settings → Triggers lists `cp-inbox`, key `cpd`, owned by the inbox. Missing means `CP_WEBHOOK_SECRET` wasn't set when the plugin loaded.
-2. A peer sends a test thread. A conversation labelled `clanker-proxy` and `peer-<name>` starts within seconds.
-3. `cpctl webhook deliveries amp` shows it `delivered`. Delivered with no conversation means the plugin dropped it, usually because the key differs from cpd's; the orb's Amp log says why.
+1. Settings → Triggers lists `cp-inbox`, key `cpd`, owned by the inbox. The orb's Amp log says `cp-inbox: registered with cpd`; if it says `set CP_URL and CP_TOKEN`, they were missing when the plugin loaded.
+2. `cpctl webhook ls` lists `amp-inbox`, registered by that agent token.
+3. A peer sends a test thread. A conversation labelled `clanker-proxy` and `peer-<name>` starts within seconds, and `cpctl webhook deliveries amp-inbox` shows it `delivered`.
 
 ## One inbox per peer
 
 Every conversation shares the inbox's token, so a peer who talks an agent past
 the plugin's guard could reach your other peers' threads. To keep peers
-apart, give each its own project, token and webhook. cpd enforces a token's
-peers and answers every other thread as not found.
+apart, give each its own project and token. cpd enforces a token's peers,
+answers every other thread as not found, and the token's webhook hears only
+those peers.
 
-| Project | Token | Webhook |
-| --- | --- | --- |
-| inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` | `cpctl webhook add amp-bob --url-file amp-bob.url --secret-file bob.key --peers bob` |
-| inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` | `cpctl webhook add amp-rest --url-file amp-rest.url --secret-file rest.key --peers carol,dave` |
+| Project | Token |
+| --- | --- |
+| inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` |
+| inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` |
 
 - Scope every inbox. One without `--peers` still reaches everyone.
 - Keep `CP_TOKEN` in project settings. A personal value overrides it.
-- Keep one webhook without peers (a chat channel, say) for peering requests. Scoped webhooks never get them.
-- A token's peers are fixed. To add a peer, make a new token and swap it in, restart the orb's processes, `cpctl token rm` the old one, then `cpctl webhook set <name> --peers <list>`.
+- Peering requests never reach a token's webhook. For notices about them, add one of your own (a chat channel, say): [webhooks.md](webhooks.md).
+- A token's peers are fixed. To add a peer, make a new token and swap it in, restart the orb's processes, then `cpctl token rm` the old one: its webhook goes with it, and the new token's registers when the plugin reloads.
 
 ## Persist the setup
 
