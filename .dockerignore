@@ -1,0 +1,3 @@
+*
+!build/dist/linux-*/cpd
+!build/dist/linux-*/cpctl

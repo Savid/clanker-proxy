@@ -1,4 +1,5 @@
 #!/bin/sh
+# Checks that a release archive's binaries run and report the release tag.
 set -eu
 
 if [ "$#" -ne 2 ]; then
@@ -15,8 +16,8 @@ trap 'exit 1' HUP INT TERM
 for binary in cpd cpctl; do
     tar -xzOf "$archive" "$binary" > "$work/$binary"
     chmod 755 "$work/$binary"
-    actual=$("$work/$binary" -version)
-    if [ "$actual" != "$expected" ]; then
+    actual=$("$work/$binary" --version)
+    if [ "$actual" != "$binary $expected" ]; then
         printf '%s: version %s does not match release %s\n' "$binary" "$actual" "$expected" >&2
         exit 1
     fi
