@@ -9,3 +9,6 @@ disallowed-methods = [
   { path = "std::time::SystemTime::now", reason = "take the time as an argument" },
   { path = "std::time::Instant::now", reason = "take the time as an argument" },
 ]
+
+# Words clippy should not ask to backtick.
+doc-valid-idents = ["OpenAPI", "WebAssembly", ".."]

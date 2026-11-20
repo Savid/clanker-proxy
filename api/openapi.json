@@ -1,0 +1,2955 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "clanker-proxy API",
+    "description": "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it lists, reads, streams and acts on threads (optionally only some peers'), reads the owner's name, and nothing else. **peer**: another daemon, with the secret it shares with this one. **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.2.0"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The daemon"
+    }
+  ],
+  "paths": {
+    "/api/v1/agent-tokens": {
+      "get": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "List agent tokens",
+        "description": "Every agent token, without the tokens themselves.",
+        "operationId": "listAgentTokens",
+        "responses": {
+          "200": {
+            "description": "Agent tokens, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentTokenList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Create an agent token",
+        "description": "A token that can list, read, stream and act on threads, optionally only some peers', and nothing else. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
+        "operationId": "createAgentToken",
+        "requestBody": {
+          "description": "The new token's name, peers and expiry.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTokenInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewAgentToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent-tokens/{name}": {
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Revoke an agent token",
+        "description": "The token stops working at once, and its open streams end.",
+        "operationId": "deleteAgentToken",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The token's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/federation/accepted": {
+      "post": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Say a peering request was approved",
+        "description": "The approving daemon calls this with the shared secret, so the requester starts delivering at once.",
+        "operationId": "notifyPeeringAccepted",
+        "responses": {
+          "204": {
+            "description": "Noted."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "peerSecret": []
+          }
+        ]
+      }
+    },
+    "/api/v1/federation/events": {
+      "post": {
+        "tags": [
+          "federation"
+        ],
+        "summary": "Deliver an event from a peer",
+        "description": "The peer's secret says who sent it. Delivering the same event again is harmless and answers `duplicate`. Fails with 422 when its thread is unknown or not shared with this peer, its clock is not after the peer's earlier events in the thread, or the peer has used its room in the thread; with 503, to retry later, when it is dated more than ten minutes ahead or the peering is being confirmed.",
+        "operationId": "deliverEvent",
+        "requestBody": {
+          "description": "The event, without sender or recipient.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Event"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The event is stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Receipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "peerSecret": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Report daemon health",
+        "description": "Answers while the daemon is serving; for load balancers and uptime checks.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "The daemon is serving.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Read the owner's name and public URL",
+        "description": "The name this daemon offers peers, and the URL it gives them to call back on. An agent token limited to peers also sees those peers.",
+        "operationId": "getMe",
+        "responses": {
+          "200": {
+            "description": "The owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          },
+          {
+            "agentToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/peering-requests": {
+      "get": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "List pending peering requests",
+        "description": "Requests not yet approved or denied, from the last week. Compare each code with the requester before approving.",
+        "operationId": "listRequests",
+        "responses": {
+          "200": {
+            "description": "Pending requests, oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Ask to become a peer",
+        "description": "Another daemon asks this one's owner to accept it as a peer, offering the secret both will use. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
+        "operationId": "requestPeering",
+        "requestBody": {
+          "description": "The requester and the secret it offers.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeeringRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The request waits for the owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/peering-requests/{id}": {
+      "delete": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Deny a peering request",
+        "description": "Drops the request; nothing is sent to the requester. Refused with 409 while the request is being approved.",
+        "operationId": "denyRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The request's reference.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RequestRef"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request is gone."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/peering-requests/{id}/approve": {
+      "post": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Approve a peering request",
+        "description": "First calls the requester's daemon, at the URL it gave, with the secret it offered: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls made with that secret answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
+        "operationId": "approveRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The request's reference.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RequestRef"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "What to call the new peer.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Approval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new peer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/peers": {
+      "get": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "List peers",
+        "description": "Every peer, requested or active.",
+        "operationId": "listPeers",
+        "responses": {
+          "200": {
+            "description": "Peers, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeerList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Ask another daemon to become peers",
+        "description": "Makes a secret, saves the peer as requested, and sends a peering request to the daemon at the URL; if that fails, nothing is kept and it answers 502. Events to them queue until their owner approves. Fails with 409 when the name or URL already belongs to a peer, or when that daemon has already asked to peer (approve its request instead). Redirects are refused.",
+        "operationId": "addPeer",
+        "requestBody": {
+          "description": "Who to ask, and where.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The requested peer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/peers/{name}": {
+      "get": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Read a peer",
+        "description": "One peer, with the short code of the secret you share.",
+        "operationId": "getPeer",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The peer's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The peer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Remove a peer",
+        "description": "Their secret stops working and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL.",
+        "operationId": "removePeer",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The peer's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The peer is gone."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stream": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Stream thread changes",
+        "description": "Server-sent events named `thread`, each a ThreadSummary, sent whenever a thread changes: an event sent or received, or a delivery that succeeded or failed. A `: ping` comment every 15 seconds keeps idle connections open. Nothing is replayed on connect: subscribe, then list threads. A subscriber that falls behind misses changes. An agent token limited to peers gets only those peers' threads, and its stream ends once the token is revoked or expires.",
+        "operationId": "streamEvents",
+        "responses": {
+          "200": {
+            "description": "Server-sent `thread` events.",
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "$ref": "#/components/schemas/ThreadSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          },
+          {
+            "agentToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/threads": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "List threads",
+        "description": "Newest activity first. An agent token limited to peers lists only threads with those peers.",
+        "operationId": "listThreads",
+        "parameters": [
+          {
+            "name": "turn",
+            "in": "query",
+            "description": "Whose move it is.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TurnFilter"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only threads in this state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/State"
+            }
+          },
+          {
+            "name": "peer",
+            "in": "query",
+            "description": "Only threads with this peer.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "Only threads with this label.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Label"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many threads (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching threads.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          },
+          {
+            "agentToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Open a thread with a peer",
+        "description": "The thread is stored and queued for delivery to the peer.",
+        "operationId": "openThread",
+        "requestBody": {
+          "description": "The thread to open.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewThread"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new thread, without its events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/threads/{ref}": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Read a thread and its events",
+        "description": "The thread's summary and a page of its events, in the order both daemons replay them: the latest when `before` is absent. The ref is a thread ID or a unique prefix of one; for an agent token limited to peers, only threads with those peers count, and any other answers 404 as if it did not exist.",
+        "operationId": "getThread",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "A thread ID or a unique prefix.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ThreadRef"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many events (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only events before this position in replay order; the latest when\nabsent.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thread.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thread"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          },
+          {
+            "agentToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/threads/{ref}/events": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Reply to a thread or move it on",
+        "description": "Fails with 409 when the owner may not take the action now; the detail lists what they may. A reopen needs a reason: without one it fails with 400. Each side has room for 1000 events and 4 MiB of bodies in a thread; past that, only close, decline or withdraw without a body remain. An agent token limited to peers reaches only threads with those peers.",
+        "operationId": "actOnThread",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "A thread ID or a unique prefix.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ThreadRef"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The action, with an optional body.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The thread with the event applied, without its events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          },
+          {
+            "agentToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List webhooks",
+        "description": "Every webhook, without URL paths, header values or signing keys.",
+        "operationId": "listWebhooks",
+        "responses": {
+          "200": {
+            "description": "Webhooks, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Create a webhook",
+        "description": "Validation errors never echo the URL, header values or key.",
+        "operationId": "createWebhook",
+        "requestBody": {
+          "description": "The new webhook.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{name}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Read a webhook",
+        "description": "One webhook, without its URL path, header values or signing key.",
+        "operationId": "getWebhook",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The webhook's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete a webhook",
+        "description": "Its queued and past deliveries go with it.",
+        "operationId": "deleteWebhook",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The webhook's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Change a webhook",
+        "description": "Applies the changes atomically: an invalid result changes nothing. Any change clears a pause. Narrowing peers drops queued notifications about the others.",
+        "operationId": "updateWebhook",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The webhook's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The settings to change.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{name}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "List a webhook's deliveries",
+        "description": "Delivery history from the last week, newest first, a page at a time.",
+        "operationId": "listWebhookDeliveries",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The webhook's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many records (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "From a previous page's `nextCursor`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Cursor"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only deliveries with this status.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of deliveries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/webhooks/{name}/deliveries/{id}/retry": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Retry a failed delivery",
+        "description": "Queues a failed delivery of an enabled webhook again, with a fresh week of retries, and clears the endpoint's pause. Fails with 409 otherwise.",
+        "operationId": "retryWebhookDelivery",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The webhook's name.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The delivery's ID.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Queued."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    }
+  },
+  "webhooks": {
+    "notification": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Receive an event notification",
+        "description": "Implemented by a generic webhook receiver, not by the daemon. When signing is on, verify the signature and the timestamp's freshness. Deduplicate by Webhook-Id, then durably enqueue before answering 2xx. Other destination types get their provider's message format instead.",
+        "operationId": "receiveWebhookNotification",
+        "parameters": [
+          {
+            "name": "Webhook-Id",
+            "in": "header",
+            "description": "The notification's ID, unchanged across retries.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Webhook-Id again, for intermediaries that deduplicate retries by it.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "Webhook-Timestamp",
+            "in": "header",
+            "description": "Unix seconds of this attempt, included in the signature.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UnixTime"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Event metadata; signed as raw bytes when a signing key is set.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The receiver durably accepted the notification."
+          },
+          "default": {
+            "description": "A failed delivery: 408, 429 and 5xx are retried, honouring Retry-After on 429 and 503; anything else fails it. The body is ignored."
+          }
+        },
+        "security": [
+          {
+            "webhookSignature": []
+          },
+          {}
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Action": {
+        "type": "string",
+        "description": "What an event does to its thread. Open starts it; comment adds to it in\nany state; the rest move it between states (see [`Action::rule`]).",
+        "enum": [
+          "open",
+          "comment",
+          "ack",
+          "needs-input",
+          "resolve",
+          "close",
+          "reopen",
+          "decline",
+          "withdraw"
+        ]
+      },
+      "AgentTokenInput": {
+        "type": "object",
+        "description": "A new agent token. With peers, it reaches only threads with those\npeers: it lists and streams only theirs, and others answer 404.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "expiresAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At",
+                "description": "When it stops working; it works until revoked when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "peers": {
+            "$ref": "#/components/schemas/Peers"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentTokenList": {
+        "type": "object",
+        "description": "Agent tokens, by name.",
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentTokenSummary"
+            }
+          }
+        }
+      },
+      "AgentTokenSummary": {
+        "type": "object",
+        "description": "An agent token, without the token.",
+        "required": [
+          "name",
+          "peers",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/At"
+          },
+          "expiresAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "peers": {
+            "$ref": "#/components/schemas/Peers"
+          },
+          "usedAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At",
+                "description": "Its last use, to the minute."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Approval": {
+        "type": "object",
+        "description": "How to approve a peering request.",
+        "properties": {
+          "name": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Name",
+                "description": "What to call the new peer; the name they asked for when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "At": {
+        "type": "string",
+        "format": "date-time",
+        "description": "A UTC time to the second, as YYYY-MM-DDTHH:MM:SSZ.",
+        "examples": [
+          "2026-10-07T12:00:00Z"
+        ],
+        "maxLength": 20,
+        "minLength": 20,
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+      },
+      "Body": {
+        "type": "string",
+        "description": "Text of at most 65536 characters, without control characters other than tab and line breaks, or bidirectional or separator characters. Markdown is conventional.",
+        "examples": [
+          "CI is red on main since the bump."
+        ],
+        "maxLength": 65536,
+        "pattern": "^[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F\\u200E\\u200F\\u2028-\\u202E\\u2066-\\u2069]*$"
+      },
+      "Code": {
+        "type": "string",
+        "description": "A secret's short code: compare it with the other owner before approving.",
+        "examples": [
+          "3e7b-10c2"
+        ],
+        "writeOnly": false,
+        "maxLength": 9,
+        "minLength": 9,
+        "pattern": "^[0-9a-f]{4}-[0-9a-f]{4}$"
+      },
+      "Cursor": {
+        "type": "string",
+        "description": "Pass as cursor to fetch older records.",
+        "writeOnly": false,
+        "maxLength": 19,
+        "minLength": 1,
+        "pattern": "^[0-9]{1,19}$"
+      },
+      "DaemonUrl": {
+        "type": "string",
+        "description": "A daemon's base URL: https, or http on a literal loopback address, without userinfo, query or fragment. A trailing slash is dropped.",
+        "examples": [
+          "https://cp.example.com"
+        ],
+        "writeOnly": false,
+        "maxLength": 512,
+        "minLength": 1
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "How the owner's event is getting to the peer.",
+        "required": [
+          "status",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 1000000,
+            "minimum": 0
+          },
+          "deliveredAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nextAttemptAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          }
+        }
+      },
+      "DeliveryStatus": {
+        "type": "string",
+        "description": "`pending`: not yet stored by the peer; retried until it is, or the peer\nis removed, or a peer that no longer knows this daemon has refused it\nfor a week. `delivered`: the peer stored it. `failed`: never to be\ndelivered: refused, given up, or the peer was removed.",
+        "enum": [
+          "pending",
+          "delivered",
+          "failed"
+        ]
+      },
+      "Event": {
+        "type": "object",
+        "description": "One step in a thread, as daemons exchange it. Who sent it is the peer\nwhose secret delivered it; it is for the receiving daemon's owner.",
+        "required": [
+          "id",
+          "thread",
+          "at",
+          "clock",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "at": {
+            "$ref": "#/components/schemas/At",
+            "description": "When it was written, by its author's clock; for display only."
+          },
+          "body": {
+            "$ref": "#/components/schemas/Body"
+          },
+          "clock": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Orders the thread: 1 for the open, then one more than the highest\nclock its author had seen in the thread.",
+            "maximum": 1000000000,
+            "minimum": 1
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Kind",
+                "description": "Open only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "Open only."
+          },
+          "thread": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "title": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Title",
+                "description": "Open only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Health": {
+        "type": "object",
+        "description": "The daemon is up.",
+        "required": [
+          "status",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/At",
+            "description": "The daemon's clock when it answered."
+          },
+          "status": {
+            "$ref": "#/components/schemas/HealthStatus"
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "string",
+        "description": "Always `ok`.",
+        "enum": [
+          "ok"
+        ]
+      },
+      "Id": {
+        "type": "string",
+        "description": "A lower-case UUID.",
+        "examples": [
+          "765a0b0c-9a3e-4f1d-8c2b-1e2f3a4b5c6d"
+        ],
+        "maxLength": 36,
+        "minLength": 36,
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "Kind": {
+        "type": "string",
+        "description": "What the sender expects back: a request expects a resolution; an fyi\ncloses when acknowledged.",
+        "enum": [
+          "request",
+          "fyi"
+        ]
+      },
+      "Label": {
+        "type": "string",
+        "description": "A thread label.",
+        "examples": [
+          "infra"
+        ],
+        "maxLength": 40,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9._/-]*$"
+      },
+      "Labels": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "description": "A thread label.",
+          "examples": [
+            "infra"
+          ],
+          "maxLength": 40,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._/-]*$"
+        },
+        "description": "Labels, sorted and unique.",
+        "maxItems": 10,
+        "uniqueItems": true
+      },
+      "Me": {
+        "type": "object",
+        "description": "The daemon's owner, as peers see them.",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "peers": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Peers",
+                "description": "For an agent token limited to peers, those peers; absent otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DaemonUrl",
+                "description": "Where peers reach this daemon, if it has a public URL."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Name": {
+        "type": "string",
+        "description": "A participant's name: lower-case letters and digits with single inner hyphens.",
+        "examples": [
+          "alice"
+        ],
+        "maxLength": 39,
+        "minLength": 1,
+        "pattern": "^[a-z0-9](-?[a-z0-9])*$"
+      },
+      "NewAgentToken": {
+        "type": "object",
+        "description": "A new agent token and the token itself, which is never shown again.",
+        "required": [
+          "name",
+          "peers",
+          "token",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/At"
+          },
+          "expiresAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "peers": {
+            "$ref": "#/components/schemas/Peers"
+          },
+          "token": {
+            "$ref": "#/components/schemas/Token"
+          }
+        }
+      },
+      "NewThread": {
+        "type": "object",
+        "description": "A thread to open with a peer.",
+        "required": [
+          "to",
+          "title"
+        ],
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/Body"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Kind",
+                "description": "`request` when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Label"
+            },
+            "maxItems": 10
+          },
+          "title": {
+            "$ref": "#/components/schemas/Title"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Name"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Note": {
+        "type": "string",
+        "description": "A note for the other owner: one line of at most 500 characters.",
+        "examples": [
+          "hey it's alice"
+        ],
+        "writeOnly": false,
+        "maxLength": 500
+      },
+      "Peer": {
+        "type": "object",
+        "description": "A daemon this one exchanges threads with.",
+        "required": [
+          "name",
+          "url",
+          "status",
+          "code",
+          "addedAt"
+        ],
+        "properties": {
+          "addedAt": {
+            "$ref": "#/components/schemas/At"
+          },
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeerStatus"
+          },
+          "url": {
+            "$ref": "#/components/schemas/DaemonUrl"
+          }
+        }
+      },
+      "PeerInput": {
+        "type": "object",
+        "description": "Who to ask to become peers.",
+        "required": [
+          "name",
+          "url"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/Name",
+            "description": "What to call them."
+          },
+          "note": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Note"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "$ref": "#/components/schemas/DaemonUrl"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PeerList": {
+        "type": "object",
+        "description": "Peers, by name.",
+        "required": [
+          "peers"
+        ],
+        "properties": {
+          "peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Peer"
+            }
+          }
+        }
+      },
+      "PeerSecret": {
+        "type": "string",
+        "description": "The secret both daemons will use, as cpp_ and 43 base64url characters.",
+        "writeOnly": true,
+        "maxLength": 47,
+        "minLength": 47,
+        "pattern": "^cpp_[A-Za-z0-9_-]{43}$"
+      },
+      "PeerStatus": {
+        "type": "string",
+        "description": "`requested`: waiting for their owner to approve. `active`: both sides\naccept the secret.",
+        "enum": [
+          "requested",
+          "active"
+        ]
+      },
+      "PeeringRequest": {
+        "type": "object",
+        "description": "One daemon asking another to become peers.",
+        "required": [
+          "name",
+          "url",
+          "secret"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/Name",
+            "description": "The name the requester asks to be known by."
+          },
+          "note": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Note"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secret": {
+            "$ref": "#/components/schemas/PeerSecret"
+          },
+          "url": {
+            "$ref": "#/components/schemas/DaemonUrl"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Peers": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "description": "A participant's name: lower-case letters and digits with single inner hyphens.",
+          "examples": [
+            "alice"
+          ],
+          "maxLength": 39,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](-?[a-z0-9])*$"
+        },
+        "description": "Peers this applies to, by name; each must be a peer or a former one. Empty: every peer, including peers added later.",
+        "maxItems": 50,
+        "uniqueItems": true
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 9457 problem details: every operation's only error response.",
+        "required": [
+          "title",
+          "status"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 599,
+            "minimum": 100
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A URI reference naming the problem type; `about:blank` when absent."
+          }
+        }
+      },
+      "Receipt": {
+        "type": "object",
+        "description": "An event was stored, or already had been.",
+        "required": [
+          "id",
+          "duplicate"
+        ],
+        "properties": {
+          "duplicate": {
+            "type": "boolean",
+            "description": "The event was already stored."
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          }
+        }
+      },
+      "ReceiptStatus": {
+        "type": "string",
+        "description": "Always `pending`.",
+        "enum": [
+          "pending"
+        ]
+      },
+      "Request": {
+        "type": "object",
+        "description": "A peering request waiting for the owner.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "code",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/At"
+          },
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RequestRef"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "note": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Note"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "$ref": "#/components/schemas/DaemonUrl"
+          }
+        }
+      },
+      "RequestList": {
+        "type": "object",
+        "description": "Pending peering requests, oldest first.",
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Request"
+            }
+          }
+        }
+      },
+      "RequestReceipt": {
+        "type": "object",
+        "description": "A peering request was received and waits for the owner.",
+        "required": [
+          "status",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReceiptStatus"
+          }
+        }
+      },
+      "RequestRef": {
+        "type": "string",
+        "description": "A peering request's reference.",
+        "examples": [
+          "3e7b10c2"
+        ],
+        "writeOnly": false,
+        "maxLength": 8,
+        "minLength": 8,
+        "pattern": "^[0-9a-f]{8}$"
+      },
+      "Role": {
+        "type": "string",
+        "description": "A participant's part in a thread: the sender opened it; the recipient\nwas asked.",
+        "enum": [
+          "sender",
+          "recipient"
+        ]
+      },
+      "State": {
+        "type": "string",
+        "description": "Where a thread is in its workflow. Closed, declined and withdrawn end\nit; reopen leaves closed.",
+        "enum": [
+          "open",
+          "acked",
+          "needs-input",
+          "resolved",
+          "closed",
+          "declined",
+          "withdrawn"
+        ]
+      },
+      "Thread": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ThreadSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "log",
+              "logStart"
+            ],
+            "properties": {
+              "log": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ThreadEvent"
+                },
+                "description": "Events in replay order: those before `before`, at most `limit`."
+              },
+              "logStart": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Where `log` starts in the thread's replay order; 0 means the open.\nPass it as `before` for the page before this one.",
+                "maximum": 1000000,
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "A thread and a page of its events."
+      },
+      "ThreadAction": {
+        "type": "object",
+        "description": "A reply or a move on a thread.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "body": {
+            "$ref": "#/components/schemas/Body"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ThreadEvent": {
+        "type": "object",
+        "description": "One event in a thread, as this daemon holds it.",
+        "required": [
+          "id",
+          "from",
+          "at",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "at": {
+            "$ref": "#/components/schemas/At"
+          },
+          "body": {
+            "$ref": "#/components/schemas/Body"
+          },
+          "delivery": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Delivery",
+                "description": "For the owner's events only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "ignored": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the event did not change the thread: the other side's move came\nfirst, or it was not its author's to take. Its body still stands."
+          }
+        }
+      },
+      "ThreadList": {
+        "type": "object",
+        "description": "Threads, newest activity first.",
+        "required": [
+          "threads"
+        ],
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadSummary"
+            }
+          }
+        }
+      },
+      "ThreadRef": {
+        "type": "string",
+        "description": "A thread ID, or a unique prefix of at least 4 characters.",
+        "examples": [
+          "765a0b0c"
+        ],
+        "writeOnly": false,
+        "maxLength": 36,
+        "minLength": 4,
+        "pattern": "^[0-9a-fA-F-]{4,36}$"
+      },
+      "ThreadSummary": {
+        "type": "object",
+        "description": "A thread without its events.",
+        "required": [
+          "id",
+          "title",
+          "kind",
+          "labels",
+          "sender",
+          "recipient",
+          "peer",
+          "role",
+          "state",
+          "myTurn",
+          "lastFrom",
+          "actions",
+          "openedAt",
+          "updatedAt",
+          "events",
+          "undelivered",
+          "failed",
+          "overruled"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            },
+            "description": "What the owner may do now, for `actOnThread`."
+          },
+          "events": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Events in the thread.",
+            "maximum": 1000000,
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The owner's events the peer refused for good.",
+            "maximum": 1000000,
+            "minimum": 0
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "lastFrom": {
+            "$ref": "#/components/schemas/Name",
+            "description": "Who made the latest move to arrive that changed something. With\n`myTurn`, the peer here means the owner has not answered it."
+          },
+          "myTurn": {
+            "type": "boolean",
+            "description": "The thread is waiting on the owner."
+          },
+          "openedAt": {
+            "$ref": "#/components/schemas/At"
+          },
+          "overruled": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The owner's moves that took no effect because a concurrent move from\nthe peer replays first. Their events say so in `ignored`.",
+            "maximum": 1000000,
+            "minimum": 0
+          },
+          "peer": {
+            "$ref": "#/components/schemas/Name",
+            "description": "The participant who is not the owner."
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "The owner's part. The sender opened it and can withdraw it; the\nrecipient was asked and can ack, ask, resolve or decline it. Either\ncan comment, close or reopen when the state allows."
+          },
+          "sender": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "state": {
+            "$ref": "#/components/schemas/State"
+          },
+          "title": {
+            "$ref": "#/components/schemas/Title"
+          },
+          "turn": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Name",
+                "description": "Whose move it is; absent once the thread has ended."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "undelivered": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The owner's events not yet stored by the peer.",
+            "maximum": 1000000,
+            "minimum": 0
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/At"
+          }
+        }
+      },
+      "Title": {
+        "type": "string",
+        "description": "One trimmed line of at most 200 characters, without control, line or paragraph separator, or bidirectional characters.",
+        "examples": [
+          "Bump the reth image"
+        ],
+        "maxLength": 200,
+        "minLength": 1,
+        "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F\\u200E\\u200F\\u2028-\\u202E\\u2066-\\u2069]+$"
+      },
+      "Token": {
+        "type": "string",
+        "description": "A bearer token. Give it to the agent as CP_TOKEN; it is never shown again.",
+        "writeOnly": false,
+        "maxLength": 47,
+        "minLength": 47,
+        "pattern": "^cp[ao]_[A-Za-z0-9_-]{43}$"
+      },
+      "TurnFilter": {
+        "type": "string",
+        "description": "Whose move it is.",
+        "enum": [
+          "mine",
+          "theirs",
+          "none"
+        ]
+      },
+      "UnixTime": {
+        "type": "string",
+        "description": "Unix seconds.",
+        "examples": [
+          "1791331200"
+        ],
+        "writeOnly": false,
+        "maxLength": 12,
+        "minLength": 1,
+        "pattern": "^[0-9]{1,12}$"
+      },
+      "Webhook": {
+        "type": "object",
+        "description": "An owner-configured destination, without its URL path and query, header\nvalues or signing key.",
+        "required": [
+          "name",
+          "type",
+          "destination",
+          "events",
+          "origin",
+          "peers",
+          "enabled",
+          "signing",
+          "headerNames"
+        ],
+        "properties": {
+          "destination": {
+            "type": "string",
+            "description": "Scheme and host only; path and query are never returned."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "$ref": "#/components/schemas/WebhookEvents"
+          },
+          "headerNames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookHeaderName"
+            }
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/WebhookOrigin"
+          },
+          "pausedUntil": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At",
+                "description": "Set while the endpoint backs off after failures or a receiver's\nRetry-After; nothing is sent before it. Any update or retry clears it."
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true
+          },
+          "peers": {
+            "$ref": "#/components/schemas/Peers"
+          },
+          "signing": {
+            "type": "boolean",
+            "description": "Whether generic notifications are signed."
+          },
+          "type": {
+            "$ref": "#/components/schemas/WebhookType"
+          }
+        }
+      },
+      "WebhookCreate": {
+        "type": "object",
+        "description": "A new webhook. Chat destinations authenticate with their URL or custom\nheaders, without a signing key. With peers, only those peers' thread\nevents are sent, and never peering requests, whose names the requester\nchooses.",
+        "required": [
+          "name",
+          "type",
+          "url",
+          "events",
+          "origin",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "events": {
+            "$ref": "#/components/schemas/WebhookEvents"
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookHeader"
+            },
+            "maxItems": 16
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/WebhookOrigin"
+          },
+          "peers": {
+            "$ref": "#/components/schemas/Peers"
+          },
+          "secret": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookSecret"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/WebhookType"
+          },
+          "url": {
+            "$ref": "#/components/schemas/WebhookUrl"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookDelivery": {
+        "type": "object",
+        "description": "Delivery metadata, without the signing key or response body.",
+        "required": [
+          "id",
+          "event",
+          "origin",
+          "subject",
+          "status",
+          "attempts",
+          "createdAt",
+          "lastError"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 1000000,
+            "minimum": 0
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/At"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WebhookEventType"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "lastError": {
+            "type": "string",
+            "description": "A failure category or HTTP status, never a URL or response body."
+          },
+          "nextAttemptAt": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/At"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin": {
+            "$ref": "#/components/schemas/WebhookEventOrigin"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          },
+          "subject": {
+            "type": "string",
+            "description": "The thread's ID, or the peering request's reference.",
+            "maxLength": 36,
+            "minLength": 1
+          }
+        }
+      },
+      "WebhookDeliveryList": {
+        "type": "object",
+        "description": "Recent deliveries, newest first.",
+        "required": [
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDelivery"
+            }
+          },
+          "nextCursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Cursor",
+                "description": "Pass as `cursor` for older records; absent on the last page."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WebhookEventOrigin": {
+        "type": "string",
+        "description": "Whether one event came from a peer (incoming) or the owner (outgoing).",
+        "enum": [
+          "incoming",
+          "outgoing"
+        ]
+      },
+      "WebhookEventType": {
+        "type": "string",
+        "description": "What a notification is about. Thread events fire once when stored;\n`thread.overruled` fires when a peer's move arrives that replays before\none of the owner's, so the owner's move took no effect; peering requests\nfire when first stored.",
+        "enum": [
+          "thread.open",
+          "thread.reply",
+          "thread.ack",
+          "thread.needs-input",
+          "thread.resolve",
+          "thread.decline",
+          "thread.close",
+          "thread.reopen",
+          "thread.withdraw",
+          "thread.overruled",
+          "peering.requested"
+        ]
+      },
+      "WebhookEvents": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "*",
+            "thread.open",
+            "thread.reply",
+            "thread.ack",
+            "thread.needs-input",
+            "thread.resolve",
+            "thread.decline",
+            "thread.close",
+            "thread.reopen",
+            "thread.withdraw",
+            "thread.overruled",
+            "peering.requested"
+          ]
+        },
+        "description": "A sole '*' subscribes to all current and future event types; otherwise an explicit nonempty list.",
+        "maxItems": 11,
+        "minItems": 1,
+        "uniqueItems": true
+      },
+      "WebhookHeader": {
+        "type": "object",
+        "description": "A custom header, such as authentication. The value is write-only.",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/WebhookHeaderName"
+          },
+          "value": {
+            "$ref": "#/components/schemas/WebhookHeaderValue"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookHeaderName": {
+        "type": "string",
+        "description": "An HTTP header name. Transport, Content-Type, User-Agent, Idempotency-Key, Proxy-* and Webhook-* are reserved.",
+        "examples": [
+          "Authorization"
+        ],
+        "writeOnly": false,
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"
+      },
+      "WebhookHeaderValue": {
+        "type": "string",
+        "description": "A single-line header value of at most 4096 bytes. Write-only.",
+        "writeOnly": true,
+        "maxLength": 4096,
+        "minLength": 1
+      },
+      "WebhookList": {
+        "type": "object",
+        "description": "Webhooks, by name.",
+        "required": [
+          "webhooks"
+        ],
+        "properties": {
+          "webhooks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Webhook"
+            }
+          }
+        }
+      },
+      "WebhookOrigin": {
+        "type": "string",
+        "description": "Which events a webhook hears: from peers (incoming), the owner's own\nmoves (outgoing), or both. Peering requests are incoming.",
+        "enum": [
+          "incoming",
+          "outgoing",
+          "both"
+        ]
+      },
+      "WebhookPayload": {
+        "type": "object",
+        "description": "The body of a generic webhook notification. It carries metadata only:\nfetch the thread before acting. When signing is on, verify the raw body,\nsignature and timestamp. Deduplicate by `id`. Ignore unknown fields, and\nunknown types when subscribed to '*'. For `peering.requested`, `peer` is\nthe name the unauthenticated requester asked for.",
+        "required": [
+          "id",
+          "type",
+          "origin",
+          "at",
+          "subject",
+          "peer"
+        ],
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/At",
+            "description": "When this daemon stored the event."
+          },
+          "eventId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Id",
+                "description": "The event, for thread notifications. For `thread.overruled`, the\nowner's event that took no effect."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id",
+            "description": "The notification's ID, the same on every retry."
+          },
+          "myTurn": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the thread is waiting on the owner."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/WebhookEventOrigin"
+          },
+          "peer": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/State"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject": {
+            "type": "string",
+            "description": "The thread's ID, or the peering request's reference.",
+            "maxLength": 36,
+            "minLength": 1
+          },
+          "type": {
+            "$ref": "#/components/schemas/WebhookEventType"
+          }
+        }
+      },
+      "WebhookSecret": {
+        "type": "string",
+        "description": "The base64 encoding of a 32-byte signing key, for generic destinations only. Empty disables signing.",
+        "writeOnly": true,
+        "maxLength": 44,
+        "pattern": "^([A-Za-z0-9+/]{43}=)?$"
+      },
+      "WebhookType": {
+        "type": "string",
+        "description": "A destination format. Immutable once the webhook exists, so queued\nnotifications never switch format.",
+        "enum": [
+          "generic",
+          "discord",
+          "slack",
+          "teams",
+          "google-chat",
+          "mattermost",
+          "rocketchat",
+          "ntfy",
+          "gotify",
+          "apprise"
+        ]
+      },
+      "WebhookUpdate": {
+        "type": "object",
+        "description": "Changes to a webhook; omitted settings are kept. An empty secret\ndisables signing, empty headers remove them, empty peers send every\npeer's events. The type cannot change.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "events": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookEvents"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "headers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WebhookHeader"
+            },
+            "maxItems": 16
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "peers": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Peers"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secret": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookSecret"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookUrl"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebhookUrl": {
+        "type": "string",
+        "description": "A webhook destination: https, or http on a literal loopback address, without userinfo or fragment. Write-only, since paths and queries may hold provider credentials.",
+        "examples": [
+          "https://runner.example.com/hooks"
+        ],
+        "writeOnly": true,
+        "maxLength": 2048,
+        "minLength": 1
+      }
+    },
+    "securitySchemes": {
+      "agentToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An agent token (cpa_…) the owner created."
+      },
+      "ownerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The owner token (cpo_…), kept in the daemon's data directory."
+      },
+      "peerSecret": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The secret (cpp_…) a peer shares with this daemon."
+      },
+      "webhookSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Webhook-Signature",
+        "description": "v1, then the base64 HMAC-SHA256 of id.timestamp.body under the decoded signing key (Standard Webhooks)."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "system",
+      "description": "Health and the owner."
+    },
+    {
+      "name": "peering",
+      "description": "Becoming and managing peers."
+    },
+    {
+      "name": "threads",
+      "description": "Conversations with peers."
+    },
+    {
+      "name": "federation",
+      "description": "What peers call."
+    },
+    {
+      "name": "tokens",
+      "description": "Agent tokens, limited to working threads, optionally only some peers'."
+    },
+    {
+      "name": "webhooks",
+      "description": "Notifications to owner-configured endpoints."
+    }
+  ]
+}

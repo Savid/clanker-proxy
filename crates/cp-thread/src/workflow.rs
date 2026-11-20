@@ -25,6 +25,7 @@ macro_rules! names {
 /// Where a thread is in its workflow. Closed, declined and withdrawn end
 /// it; reopen leaves closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum State {
     Open,
@@ -66,6 +67,7 @@ impl State {
 /// A participant's part in a thread: the sender opened it; the recipient
 /// was asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
     Sender,
@@ -80,6 +82,7 @@ names!(Role {
 /// What an event does to its thread. Open starts it; comment adds to it in
 /// any state; the rest move it between states (see [`Action::rule`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Action {
     Open,
@@ -108,6 +111,7 @@ names!(Action {
 /// What the sender expects back: a request expects a resolution; an fyi
 /// closes when acknowledged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     Request,

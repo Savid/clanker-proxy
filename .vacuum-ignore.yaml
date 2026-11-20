@@ -1,0 +1,5 @@
+# Findings vacuum reports that are intended, by rule and JSON path.
+owasp-no-additionalProperties:
+  # The daemon sends this body to receivers, which must accept fields added
+  # later; closing it would make a strict receiver reject a new field.
+  - $.components.schemas['WebhookPayload']

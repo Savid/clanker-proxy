@@ -12,6 +12,11 @@ publish.workspace = true
 jiff.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+utoipa = { workspace = true, optional = true }
+
+[features]
+# OpenAPI schemas for the types the API carries.
+schema = ["dep:utoipa"]
 
 [dev-dependencies]
 proptest.workspace = true
