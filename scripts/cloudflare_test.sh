@@ -73,10 +73,13 @@ grep -q 'not logged in to Cloudflare' "$work/out" || fail "login message"
 run --worker cp-test && fail "ran without --name and no terminal"
 grep -q 'pass --name' "$work/out" || fail "missing --name message"
 run --name Bad_Name --worker cp-test && fail "accepted an invalid name"
+run --name tester --worker cp-test --agent maybe && fail "accepted an unknown --agent"
+grep -q -- '--agent takes amp, local or none' "$work/out" || fail "--agent message"
 
 : >"$work/calls"
 run --name tester --worker cp-test --url "http://127.0.0.1:$port" || fail "first setup failed"
 grep -q 'running at http://127.0.0.1:18519, owner tester' "$work/out" || fail "summary"
+grep -q 'cpctl peer add tester http://127.0.0.1:18519' "$work/out" || fail "no share line"
 if grep -q 'cpo_' "$work/out"; then fail "the owner token reached the output"; fi
 [ -n "$(find "$token_file" -perm 0600)" ] || fail "token file is not private"
 grep -Eq '^cpo_[A-Za-z0-9_-]{43}$' "$token_file" || fail "malformed owner token"
@@ -91,8 +94,9 @@ process.exit(ok ? 0 : 1);
 ' "$work/secrets.json" || fail "settings file does not match"
 
 before=$(cat "$token_file")
-(export FAKE_EXISTING=1; run --worker cp-test) || fail "update failed"
+(export FAKE_EXISTING=1; run --worker cp-test --url "http://127.0.0.1:$port") || fail "update failed"
 grep -q 'Updating cp-test; its settings stay as they are' "$work/out" || fail "update message"
+grep -q 'cpctl peer add tester http://127.0.0.1:18519' "$work/out" || fail "no share line after an update"
 [ "$(cat "$token_file")" = "$before" ] || fail "the update changed the owner token"
 
 echo "cloudflare setup tests passed"
