@@ -1016,9 +1016,9 @@ async function loadState(): Promise<State> {
 	}
 	const s = JSON.parse(raw)
 	const complete =
-		Array.isArray(s.seen) && Array.isArray(s.wakes) && Array.isArray(s.known) && typeof s.lastPeeringNotice === 'number' && s.conversations && s.heldNotices
+		Array.isArray(s.seen) && Array.isArray(s.wakes) && Array.isArray(s.known) && typeof s.lastPeeringNotice === 'number' && s.conversations && s.hubs && s.heldNotices
 	if (!complete) throw new Error('state file is incomplete')
-	return { hubs: {}, ...s } as State
+	return s as State
 }
 
 async function saveState(state: State): Promise<void> {
