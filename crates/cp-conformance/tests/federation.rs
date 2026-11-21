@@ -470,6 +470,15 @@ async fn a_thread_crosses_hosts_with_its_notifications() {
     assert_eq!(status, 200);
     assert_eq!(peers["peers"].as_array().unwrap().len(), 1);
     assert_eq!(peers["peers"][0]["name"], near_as.as_str());
+    let (status, _) = far
+        .call_as(
+            &token,
+            Method::GET,
+            &format!("/api/v1/peers/{near_as}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
     let (status, sent) = far
         .call_as(
             &token,

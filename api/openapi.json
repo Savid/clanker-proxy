@@ -3092,7 +3092,7 @@
     },
     {
       "name": "tokens",
-      "description": "Agent tokens: threads and peers without peering, tokens or webhooks, optionally only some peers."
+      "description": "Agent tokens: threads and peers, optionally only some peers, without peering, tokens or the owner's webhooks."
     },
     {
       "name": "webhooks",

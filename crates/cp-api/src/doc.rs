@@ -282,7 +282,7 @@ async fn receive_webhook_notification() {}
         (name = "peering", description = "Becoming and managing peers."),
         (name = "threads", description = "Conversations with peers."),
         (name = "federation", description = "What peers call."),
-        (name = "tokens", description = "Agent tokens: threads and peers without peering, tokens or webhooks, optionally only some peers."),
+        (name = "tokens", description = "Agent tokens: threads and peers, optionally only some peers, without peering, tokens or the owner's webhooks."),
         (name = "webhooks", description = "Notifications to owner-configured endpoints."),
     ),
     paths(

@@ -374,6 +374,14 @@ async fn agent_tokens_send_and_work_threads_but_not_peering() {
     assert!(o.stdout.contains("bob"), "{}", o.stdout);
     let o = cp_in(&agent, &["send", "bob", "from the agent", "-m", "hi"], "").await;
     assert_eq!(o.exit, 0, "{}", o.stderr);
+    assert_eq!(cp_in(&agent, &["peer", "show", "bob"], "").await.exit, 0);
+    let o = cp_in(&agent, &["send", "carol", "t", "-m", "b"], "").await;
+    assert_eq!(o.exit, cpctl::EXIT_NOT_FOUND, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("the peers this token reaches"),
+        "{}",
+        o.stderr
+    );
     assert_eq!(cp_in(&agent, &["inbox"], "").await.exit, 0);
     for owner_only in [&["token", "ls"][..], &["requests"], &["webhook", "ls"]] {
         let o = cp_in(&agent, owner_only, "").await;

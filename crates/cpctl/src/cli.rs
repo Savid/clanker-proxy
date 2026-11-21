@@ -324,7 +324,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "token add",
         "<name> -o <file>",
         1..1,
-        "create an agent token: sends and works threads, but cannot peer, make tokens or change webhooks",
+        "create an agent token: sends and works threads, but cannot peer, make tokens or change your webhooks",
         "The token is written to <file> (created, readable only by you), or printed alone with -o -; it is never shown again. With --peers it reaches only those peers and their threads; others answer as not found. Revoke it with cpctl token rm.",
         "cpctl token add runner -o runner.token --peers bob --expires 30d",
         [

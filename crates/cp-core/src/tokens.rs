@@ -1,5 +1,6 @@
-//! Agent tokens: bearer tokens the owner gives agents, limited to working
-//! threads, optionally only some peers'.
+//! Agent tokens: bearer tokens the owner gives agents. They send and work
+//! threads and read peers, optionally only some peers, but never peer, make
+//! tokens or change the owner's webhooks.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

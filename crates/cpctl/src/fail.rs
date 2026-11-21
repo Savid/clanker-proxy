@@ -64,7 +64,7 @@ pub(crate) fn from_problem(
             EXIT_REFUSED,
             Some("this is an agent token: it runs me, send, inbox, ls, show, wait, watch, peer ls, peer show and the thread actions (reply, ack, needs-input, resolve, decline, close, reopen, withdraw); peering, tokens and webhooks are the owner's".to_string()),
         ),
-        404 => (EXIT_NOT_FOUND, Some(not_found_hint(command))),
+        404 => (EXIT_NOT_FOUND, Some(not_found_hint(command, agent))),
         409 | 422 => (
             EXIT_REFUSED,
             if command == "token add" {
@@ -97,8 +97,10 @@ fn bad_input_hint(command: &str, message: &str) -> String {
     }
 }
 
-fn not_found_hint(command: &str) -> String {
-    if command.starts_with("token ") {
+fn not_found_hint(command: &str, agent: bool) -> String {
+    if agent && matches!(command, "send" | "peer show") {
+        "cpctl peer ls lists the peers this token reaches".into()
+    } else if command.starts_with("token ") {
         "cpctl token ls lists agent tokens".into()
     } else {
         match command {
