@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="t d">
 <title id="t">An Amp orb working your inbox</title>
-<desc id="d">A peer's daemon delivers a thread event to your cpd. cpd sends a signed webhook, carrying metadata only, to the inbox thread in an Amp orb, where the cp-inbox plugin routes it to one conversation per cpd thread. The conversation's agent reads the thread with cpctl show and answers with cpctl, using an agent token; cpd delivers the answer to the peer.</desc>
+<desc id="d">A peer's daemon delivers a thread event to your cpd. cpd sends a signed webhook, carrying metadata only, to the inbox thread in an Amp orb, where the cp-inbox plugin routes it to one conversation per cpd thread, under that peer's thread. The conversation's agent reads the thread with cpctl show and answers with cpctl, using an agent token; cpd delivers the answer to the peer.</desc>
 <defs>
   <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28"/></pattern>
   <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -58,8 +58,8 @@
 <rect x="590" y="184" width="300" height="80" rx="12" class="box" stroke="#e2e8f0" stroke-opacity=".7" stroke-width="1.4"/>
 <rect x="590" y="184" width="300" height="80" rx="12" fill="none" stroke="#e2e8f0" stroke-width="2.5" filter="url(#glow)" class="an flash" style="animation-name:g2;opacity:0"/>
 <text x="608" y="212" class="h">conversation</text>
-<text x="608" y="234" class="s">one per cpd thread, own worktree</text>
-<text x="608" y="252" class="s">reads, codes, answers</text>
+<text x="608" y="234" class="s">per cpd thread, under bob's thread</text>
+<text x="608" y="252" class="s">own worktree; reads, codes, answers</text>
 <path d="M588 224H395V148" fill="none" stroke="#22d3ee" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mc)"/>
 <text x="410" y="246" class="e c">cpctl show · reply</text>
 <text x="410" y="262" class="s">agent token</text>

@@ -77,7 +77,7 @@ async fn approve_request() {}
 
 #[utoipa::path(get, path = "/api/v1/peers", operation_id = "listPeers", tag = "peering",
     summary = "List peers",
-    description = "Every peer, requested or active.",
+    description = "Every peer, requested or active. An agent token limited to peers lists only those.",
     responses((status = 200, description = "Peers, by name.", body = PeerList),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn list_peers() {}
@@ -92,7 +92,7 @@ async fn add_peer() {}
 
 #[utoipa::path(get, path = "/api/v1/peers/{name}", operation_id = "getPeer", tag = "peering",
     summary = "Read a peer",
-    description = "One peer, with the short code both owners compared.",
+    description = "One peer, with the short code both owners compared. For an agent token limited to peers, any other answers 404 as if it did not exist.",
     params(("name" = Name, Path, description = "The peer's name.")),
     responses((status = 200, description = "The peer.", body = Peer),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -116,7 +116,7 @@ async fn list_threads() {}
 
 #[utoipa::path(post, path = "/api/v1/threads", operation_id = "openThread", tag = "threads",
     summary = "Open a thread with a peer",
-    description = "The thread is stored and queued for delivery to the peer.",
+    description = "The thread is stored and queued for delivery to the peer. An agent token limited to peers opens threads only with those; any other answers 404 as if it were not a peer.",
     request_body(content = NewThread, description = "The thread to open."),
     responses((status = 201, description = "The new thread, without its events.", body = ThreadSummary),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -170,7 +170,7 @@ async fn list_agent_tokens() {}
 
 #[utoipa::path(post, path = "/api/v1/agent-tokens", operation_id = "createAgentToken", tag = "tokens",
     summary = "Create an agent token",
-    description = "A token that can list, read, stream and act on threads, optionally only some peers', and nothing else. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
+    description = "A token that can send, list, read, stream and act on threads and read peers, optionally only some peers, but cannot peer, make tokens or change the owner's webhooks. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
     request_body(content = AgentTokenInput, description = "The new token's name, peers and expiry."),
     responses((status = 201, description = "The token.", body = NewAgentToken),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -273,7 +273,7 @@ async fn receive_webhook_notification() {}
     version = "3.2.0",
     info(
         title = "clanker-proxy API",
-        description = "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it lists, reads, streams and acts on threads (optionally only some peers'), reads the owner's name, and nothing else. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
+        description = "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it sends, lists, reads, streams and acts on threads, reads peers and the owner's name, and registers its own webhook, optionally only for some peers. Peering, agent tokens and the owner's webhooks stay with the owner. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
         license(name = "MIT", identifier = "MIT"),
     ),
     servers((url = "/", description = "The daemon")),
@@ -282,7 +282,7 @@ async fn receive_webhook_notification() {}
         (name = "peering", description = "Becoming and managing peers."),
         (name = "threads", description = "Conversations with peers."),
         (name = "federation", description = "What peers call."),
-        (name = "tokens", description = "Agent tokens, limited to working threads, optionally only some peers'."),
+        (name = "tokens", description = "Agent tokens: threads and peers without peering, tokens or webhooks, optionally only some peers."),
         (name = "webhooks", description = "Notifications to owner-configured endpoints."),
     ),
     paths(

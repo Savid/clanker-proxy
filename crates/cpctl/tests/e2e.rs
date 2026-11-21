@@ -322,7 +322,7 @@ async fn exit_codes_say_what_happened() {
 }
 
 #[tokio::test]
-async fn agent_tokens_work_threads_only() {
+async fn agent_tokens_send_and_work_threads_but_not_peering() {
     let (alice, bob) = peered().await;
     let file = alice.dir.0.join("runner.token");
     let path = file.to_string_lossy().to_string();
@@ -365,13 +365,26 @@ async fn agent_tokens_work_threads_only() {
     };
     let me = cp_in(&agent, &["me"], "").await;
     assert!(
-        me.stdout.contains("agent token: threads with bob"),
+        me.stdout.contains("agent token: reaches bob"),
         "{}",
         me.stdout
     );
     let o = cp_in(&agent, &["peer", "ls"], "").await;
-    assert_eq!(o.exit, cpctl::EXIT_REFUSED, "{}", o.stderr);
+    assert_eq!(o.exit, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("bob"), "{}", o.stdout);
+    let o = cp_in(&agent, &["send", "bob", "from the agent", "-m", "hi"], "").await;
+    assert_eq!(o.exit, 0, "{}", o.stderr);
     assert_eq!(cp_in(&agent, &["inbox"], "").await.exit, 0);
+    for owner_only in [&["token", "ls"][..], &["requests"], &["webhook", "ls"]] {
+        let o = cp_in(&agent, owner_only, "").await;
+        assert_eq!(o.exit, cpctl::EXIT_REFUSED, "{owner_only:?}: {}", o.stderr);
+        assert!(
+            o.stderr
+                .contains("peering, tokens and webhooks are the owner's"),
+            "{}",
+            o.stderr
+        );
+    }
 
     ok(&alice, &["token", "rm", "runner"]).await;
     let o = cp_in(&agent, &["inbox"], "").await;

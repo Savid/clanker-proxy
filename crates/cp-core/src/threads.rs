@@ -307,9 +307,13 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         }
     }
 
-    /// Opens a thread with a peer and queues it for delivery.
-    pub fn open_thread(&mut self, n: NewThread) -> Result<ThreadSummary, Error> {
-        if !self.peer_exists(&n.to)? {
+    /// Opens a thread with a peer in `scope` and queues it for delivery.
+    pub fn open_thread(
+        &mut self,
+        n: NewThread,
+        scope: Option<&Peers>,
+    ) -> Result<ThreadSummary, Error> {
+        if !scope.is_none_or(|s| s.reaches(&n.to)) || !self.peer_exists(&n.to)? {
             return Err(Error::new(
                 ErrorKind::NotFound,
                 format!("{} is not a peer", n.to),

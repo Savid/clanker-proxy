@@ -2,12 +2,12 @@
   "openapi": "3.2.0",
   "info": {
     "title": "clanker-proxy API",
-    "description": "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it lists, reads, streams and acts on threads (optionally only some peers'), reads the owner's name, and nothing else. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
+    "description": "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it sends, lists, reads, streams and acts on threads, reads peers and the owner's name, and registers its own webhook, optionally only for some peers. Peering, agent tokens and the owner's webhooks stay with the owner. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "servers": [
     {
@@ -57,7 +57,7 @@
           "tokens"
         ],
         "summary": "Create an agent token",
-        "description": "A token that can list, read, stream and act on threads, optionally only some peers', and nothing else. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
+        "description": "A token that can send, list, read, stream and act on threads and read peers, optionally only some peers, but cannot peer, make tokens or change the owner's webhooks. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
         "operationId": "createAgentToken",
         "requestBody": {
           "description": "The new token's name, peers and expiry.",
@@ -552,7 +552,7 @@
           "peering"
         ],
         "summary": "List peers",
-        "description": "Every peer, requested or active.",
+        "description": "Every peer, requested or active. An agent token limited to peers lists only those.",
         "operationId": "listPeers",
         "responses": {
           "200": {
@@ -579,6 +579,9 @@
         "security": [
           {
             "ownerToken": []
+          },
+          {
+            "agentToken": []
           }
         ]
       },
@@ -635,7 +638,7 @@
           "peering"
         ],
         "summary": "Read a peer",
-        "description": "One peer, with the short code both owners compared.",
+        "description": "One peer, with the short code both owners compared. For an agent token limited to peers, any other answers 404 as if it did not exist.",
         "operationId": "getPeer",
         "parameters": [
           {
@@ -673,6 +676,9 @@
         "security": [
           {
             "ownerToken": []
+          },
+          {
+            "agentToken": []
           }
         ]
       },
@@ -850,7 +856,7 @@
           "threads"
         ],
         "summary": "Open a thread with a peer",
-        "description": "The thread is stored and queued for delivery to the peer.",
+        "description": "The thread is stored and queued for delivery to the peer. An agent token limited to peers opens threads only with those; any other answers 404 as if it were not a peer.",
         "operationId": "openThread",
         "requestBody": {
           "description": "The thread to open.",
@@ -888,6 +894,9 @@
         "security": [
           {
             "ownerToken": []
+          },
+          {
+            "agentToken": []
           }
         ]
       }
@@ -1470,7 +1479,7 @@
       },
       "AgentTokenInput": {
         "type": "object",
-        "description": "A new agent token. With peers, it reaches only threads with those\npeers: it lists and streams only theirs, and others answer 404.",
+        "description": "A new agent token. With peers, it reaches only those peers and their\nthreads: it lists, streams and sends only to them, and others answer 404.",
         "required": [
           "name"
         ],
@@ -3083,7 +3092,7 @@
     },
     {
       "name": "tokens",
-      "description": "Agent tokens, limited to working threads, optionally only some peers'."
+      "description": "Agent tokens: threads and peers without peering, tokens or webhooks, optionally only some peers."
     },
     {
       "name": "webhooks",

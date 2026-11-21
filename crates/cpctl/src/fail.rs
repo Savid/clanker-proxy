@@ -62,7 +62,7 @@ pub(crate) fn from_problem(
         ),
         403 => (
             EXIT_REFUSED,
-            Some("this is an agent token: it runs me, inbox, ls, show, wait, watch and the thread actions (reply, ack, needs-input, resolve, decline, close, reopen, withdraw); ask the owner for anything else".to_string()),
+            Some("this is an agent token: it runs me, send, inbox, ls, show, wait, watch, peer ls, peer show and the thread actions (reply, ack, needs-input, resolve, decline, close, reopen, withdraw); peering, tokens and webhooks are the owner's".to_string()),
         ),
         404 => (EXIT_NOT_FOUND, Some(not_found_hint(command))),
         409 | 422 => (

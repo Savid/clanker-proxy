@@ -324,8 +324,8 @@ pub(crate) static COMMANDS: &[Command] = &[
         "token add",
         "<name> -o <file>",
         1..1,
-        "create an agent token: works every thread, but cannot send, peer or configure",
-        "The token is written to <file> (created, readable only by you), or printed alone with -o -; it is never shown again. With --peers it reaches only threads with those peers; others answer as not found. Revoke it with cpctl token rm.",
+        "create an agent token: sends and works threads, but cannot peer, make tokens or change webhooks",
+        "The token is written to <file> (created, readable only by you), or printed alone with -o -; it is never shown again. With --peers it reaches only those peers and their threads; others answer as not found. Revoke it with cpctl token rm.",
         "cpctl token add runner -o runner.token --peers bob --expires 30d",
         [
             value(
@@ -781,7 +781,7 @@ Common tasks:
   read a thread                cpctl show <ref>
   wait for their answer        cpctl wait <ref> --timeout 30m
   act on a thread              cpctl show <ref>, then one of its "next:" commands
-  give an agent thread access  cpctl token add <name> -o <file>
+  give an agent access         cpctl token add <name> -o <file>
   wake an agent or ping a chat cpctl help webhook add
 
 Commands:
@@ -818,9 +818,9 @@ command's arguments; --json, --url and --token may come anywhere. For
 commands that only remove something, --json prints {}. In --json actions
 and in refusals, cpd's comment action is cpctl reply.
 
-With an agent token (cpctl token add), only me, inbox, ls, show, wait, watch
-and the thread actions work; the rest are the owner's. webhook types and
-webhook events need no daemon.
+With an agent token (cpctl token add), me, send, inbox, ls, show, wait,
+watch, peer ls, peer show and the thread actions work; peering, tokens and
+webhooks are the owner's. webhook types and webhook events need no daemon.
 
 Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 4 not found, 5 not allowed now, conflicts, or an agent token refused,

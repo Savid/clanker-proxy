@@ -351,8 +351,14 @@ impl App {
                     || "every peer".to_string(),
                     |p| p.as_slice().iter().map(Name::as_str).collect::<Vec<_>>().join(", "),
                 );
-                let _ = writeln!(w, "{} (agent token: threads with {scope})", me.name);
-                next(w, &[step("cpctl inbox", "see what is waiting on you")]);
+                let _ = writeln!(w, "{} (agent token: reaches {scope})", me.name);
+                next(
+                    w,
+                    &[
+                        step("cpctl inbox", "see what is waiting on you"),
+                        step(r#"cpctl send <peer> "<title>" -m "<details>""#, "ask a peer for something"),
+                    ],
+                );
                 return;
             }
             match &me.url {
