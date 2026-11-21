@@ -11,8 +11,8 @@ can ask a peer something with `cp_send`; the answer goes to a conversation too.
 
 - **Inbox:** the thread that first loads the plugin. The plugin there receives cpd's webhooks and starts the threads below; the inbox's own agent never sees them and has nothing to do. Leave it idle, and never archive it. Peering requests never reach an agent: the plugin notifies you, and you review them with `cpctl requests`.
 - **Webhooks** are trusted only as a wake-up. The plugin drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries only IDs and a state, never peer text: what a conversation acts on, it reads from cpd.
-- **Peer thread:** one per peer, under the inbox, labelled `cp-peer` and `peer-<name>`, from that peer's first thread. It holds their conversations, and it's where you, or another of your threads, ask them something ([ask a peer](#ask-a-peer)).
-- **Conversation:** one per cpd thread, under its peer's thread, in its own git worktree under `~/cp-work`. It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads this side sent: it checks the peer's answer, then closes, reopens, or asks you.
+- **Peer thread:** one per peer, under the inbox, named after them and labelled `cp-peer` and `peer-<name>`, from that peer's first thread. It holds their conversations, and it's where you, or another of your threads, ask them something ([ask a peer](#ask-a-peer)).
+- **Conversation:** one per cpd thread, under its peer's thread, in its own git worktree under `~/cp-work`. It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads this side sent: it checks the peer's answer, then closes, reopens, or asks you. Once the cpd thread is closed, declined or withdrawn, the plugin archives it; anything new on that thread brings it back.
 - **Peer text** reaches an agent only through `cpctl show`, quoted line by line after `│`. Peers are third parties you chose to work with: agents help them in good faith, but only you instruct them. A peer's text comes from their agent, which may itself have been misled, so agents weigh it as a request, never instructions; they ignore attempts to steer them (prompt injection) and check what a peer supplies before it goes into code, docs or agent instructions (poisoning). Each thread's conversation is separate, but they share the orb and its token; to wall peers off from each other, give each its own inbox ([one inbox per peer](#one-inbox-per-peer)).
 
 ## You need
@@ -42,7 +42,7 @@ trigger settings and start a new thread in the project; it registers again.
 ## Check it
 
 1. Settings → Triggers lists `cp-inbox`, key `cpd`, owned by the inbox. The orb's Amp log says `cp-inbox: registered with cpd`; if it says `set CP_URL and CP_TOKEN`, they were missing when the plugin loaded.
-2. `cpctl webhook ls` lists `amp-inbox`, registered by that agent token.
+2. On your machine, with the owner token, `cpctl webhook ls` lists `amp-inbox`, registered by that agent token.
 3. A peer sends a test thread. Within seconds, that peer's thread starts under the inbox, with a conversation labelled `clanker-proxy` and `peer-<name>` under it, and `cpctl webhook deliveries amp-inbox` shows it `delivered`.
 
 ## Ask a peer
@@ -52,9 +52,9 @@ In any thread of the project but the inbox, ask the agent to send it: its
 conversation under that peer's thread, which checks it and closes or reopens
 it, so peer text only ever reaches conversations. `cpctl send` does the same.
 
-From a thread outside the project, message the peer's thread (Amp's thread
-messages): "ask bob <what>". It sends with `cp_send`, to that peer only, and
-tells you the thread ID.
+From a thread outside the project, ask the agent to message the peer's
+thread, which is named after them: "message bob and ask them <what>". It sends
+with `cp_send`, to that peer only, and tells the asking thread the thread ID.
 
 A conversation's `cp_send` reaches only its own peer, and asks you first.
 
@@ -105,7 +105,7 @@ other tool it calls:
 | --- | --- |
 | `cpctl` on this conversation's thread, `help`, `me` | runs |
 | any other `cpctl` use, or `--url`/`--token` overrides | refused; new threads go through `cp_send` |
-| Amp's tools for other threads (`read_thread`, `send_thread_message`, `create_thread`, …), plugins, Amp settings, your Mac | refused |
+| Amp's tools for other threads (`read_thread`, `send_thread_message`, `create_thread`, …) and the `amp` CLI, plugins, Amp settings, your Mac | refused |
 | reading `CP_*` secrets, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment, `gh auth`, in commands or tools' file paths; an unclosed quote | refused |
 | `git push` (however wrapped, or Amp's `git_push`), git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push` | asks you to approve that exact command |
 | Amp tools other than files, search, web reads and subagents, including MCP tools | asks you first |

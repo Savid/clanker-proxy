@@ -20,7 +20,8 @@ async function fixture(t) {
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
 	const cpctl = join(dir, 'cpctl')
-	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_URL: 'https://cpd.test/', CP_TOKEN: token }
+	const ampCLI = join(dir, 'amp')
+	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_INBOX_AMP: ampCLI, CP_URL: 'https://cpd.test/', CP_TOKEN: token }
 	const realFetch = globalThis.fetch
 	globalThis.fetch = async (url, init) => {
 		registrations.push({ url, init })
@@ -70,6 +71,12 @@ if (args[1] === 'ls') {
     process.exit(2)
 }
 `, { mode: 0o700 })
+	// The amp CLI records each call, one JSON line per call.
+	await writeFile(ampCLI, `#!/usr/bin/env node
+require('node:fs').appendFileSync(require('node:path').join(__dirname, 'amp.log'), JSON.stringify(process.argv.slice(2)) + '\\n')
+`, { mode: 0o700 })
+	const ampCalls = async () => (await readFile(join(dir, 'amp.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l))
+	let threadState = 'running'
 	// Every message and the thread it went to; messages holds the texts.
 	const messages = []
 	const posted = []
@@ -80,10 +87,12 @@ if (args[1] === 'ls') {
 	let confirmAnswer = true
 	let handler
 	let guard
+	let agentEnd
 	const tools = {}
 	const handle = (id) => ({
 		id,
-		state: { get: async () => 'running' },
+		state: { get: async () => threadState },
+		waitForResponse: async () => undefined,
 		labels: async () => [],
 		addLabels: async () => undefined,
 		appendUserMessage: async ({ content }) => {
@@ -111,6 +120,7 @@ if (args[1] === 'ls') {
 		helpers: { shellCommandFromToolCall: (e) => (e.tool === 'shell_command' ? { command: e.input.cmd } : null) },
 		on(name, fn) {
 			if (name === 'tool.call') guard = fn
+			if (name === 'agent.end') agentEnd = fn
 		},
 		registerTool(tool) {
 			tools[tool.name] = tool
@@ -133,7 +143,9 @@ if (args[1] === 'ls') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		messages, posted, logs, created, confirms, another,
+		messages, posted, logs, created, confirms, another, ampCalls,
+		idle: () => { threadState = 'idle' },
+		end: (thread) => agentEnd({ thread: { id: thread } }),
 		answerConfirm: (answer) => { confirmAnswer = answer },
 		lastSent: async () => JSON.parse(await readFile(join(dir, 'sent.json'), 'utf8')),
 		send: (thread, input) => tools.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }),
@@ -302,7 +314,37 @@ test("a conversation cannot reach other threads, Amp's settings or your machine"
 		assert.match(f.confirms.at(-1).message, new RegExp(tool))
 	}
 	assert.deepEqual(await f.check('conversation', 'edit_file', { path: 'src/main.rs' }), { action: 'allow' })
+	assert.match((await f.check('conversation', 'shell_command', { cmd: 'amp threads markdown T-1' })).message, /amp CLI reaches your other threads/)
 	const send = await f.check('conversation', 'shell_command', { cmd: 'cpctl send bob "x" -m y' })
 	assert.match(send.message, /only with the cp_send tool/)
 	assert.deepEqual(await f.check('owner-thread', 'send_thread_message', {}), { action: 'allow' })
+})
+
+test("a peer's thread is named after the peer once it has answered", async (t) => {
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000031'))
+	for (let i = 0; i < 100 && !(await f.ampCalls()).length; i++) await new Promise((resolve) => setTimeout(resolve, 20))
+	assert.deepEqual(await f.ampCalls(), [['threads', 'rename', 'thread-1', 'alice']])
+})
+
+test('a conversation is archived when its thread ends, and comes back with it', async (t) => {
+	const f = await fixture(t)
+	f.idle()
+	await f.respond({ state: 'closed' })
+	await f.deliver(f.event('thread.close', 'closed'))
+	assert.deepEqual(await f.ampCalls(), [['threads', 'archive', 'conversation']], 'ended by the peer while idle')
+	assert.equal(f.messages.length, 0)
+
+	await f.respond({ state: 'acked' })
+	await f.deliver(f.event('thread.reopen', 'acked', true))
+	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'archive', '--unarchive', 'conversation'])
+	assert.equal(f.messages.length, 1, 'unarchived before the message')
+
+	assert.deepEqual(await f.end('conversation'), { action: 'done' })
+	assert.equal((await f.ampCalls()).length, 2, 'not archived while the thread is live')
+	await f.respond({ state: 'closed' })
+	await f.end('conversation')
+	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'archive', 'conversation'], 'ended by this side')
+	await f.end('owner-thread')
+	assert.equal((await f.ampCalls()).length, 3, 'other threads are never archived')
 })

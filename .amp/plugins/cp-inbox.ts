@@ -1,11 +1,12 @@
 // cp-inbox: an Amp plugin that lets an agent work your clanker-proxy inbox.
 //
 // The thread that first loads it becomes the inbox: it owns the webhook cpd
-// notifies. Under it, each peer gets a thread, and under that, each cpd
-// thread a conversation, in the same orb. Later events for that cpd thread go
-// to the same conversation, so peer text only ever reaches conversations.
-// cp_send lets a thread here open a cpd thread; its answers go to a
-// conversation too. See docs/amp.md.
+// notifies. Under it, each peer gets a thread named after them, and under
+// that, each cpd thread a conversation, in the same orb. Later events for that
+// cpd thread go to the same conversation, so peer text only ever reaches
+// conversations. A conversation is archived when its cpd thread ends, and
+// comes back with it. cp_send lets a thread here open a cpd thread; its
+// answers go to a conversation too. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
 import { createHmac, timingSafeEqual } from 'node:crypto'
@@ -21,6 +22,9 @@ export const description =
 
 const run = promisify(execFile)
 const cpctl = process.env.CP_INBOX_CPCTL || 'cpctl'
+// Plugins cannot rename or archive threads; the orb's amp CLI, signed in as
+// the owner, can.
+const ampCLI = process.env.CP_INBOX_AMP || 'amp'
 
 // State outside the repository, readable only by the owner: it records which
 // conversation handles which cpd thread, which the tool guard relies on.
@@ -153,6 +157,15 @@ export default async function (amp: PluginAPI) {
 		return s === 'running' || s === 'awaiting-approval'
 	}
 
+	const threads = (args: string[]): Promise<boolean> =>
+		run(ampCLI, ['threads', ...args], { timeout: 30_000 }).then(
+			() => true,
+			() => false,
+		)
+	const archive = async (id: ThreadID) => {
+		if (!(await threads(['archive', id]))) amp.logger.log('cp-inbox: could not archive an ended conversation')
+	}
+
 	const inbox = {
 		// deliver sends a message to the conversation for a cpd thread,
 		// starting one, with the standing instructions, if there is none or
@@ -173,6 +186,10 @@ export default async function (amp: PluginAPI) {
 			}
 			if (c?.briefed) {
 				try {
+					// It was archived if its cpd thread ended, and anything new
+					// brings it back. Unarchiving a thread that is not archived
+					// does nothing.
+					await threads(['archive', '--unarchive', c.amp])
 					await amp.threads.get(c.amp).appendUserMessage({ type: 'user-message', content: message }, { steer: true })
 					inbox.woke(c, now)
 					return true
@@ -224,6 +241,14 @@ export default async function (amp: PluginAPI) {
 				// Recorded once briefed, so a failed briefing gets a new thread.
 				state.hubs[peer] = hub.id
 				await saveState(state)
+				// Amp titles a thread from its first exchange and cannot rename
+				// an empty one, so the peer's name goes on once it has answered.
+				// It lets other threads find it: "message bob".
+				void hub
+					.waitForResponse({ timeoutMs: 5 * 60_000 })
+					.catch(() => undefined)
+					.then(() => threads(['rename', hub.id, peer]))
+					.then((ok) => ok || amp.logger.log(`cp-inbox: could not name ${peer}'s thread`))
 				return hub.id
 			} catch (err) {
 				ctx.logger.log(`cp-inbox: no thread for ${peer}, so its conversation starts under the inbox:`, err instanceof Error ? err.message : err)
@@ -293,8 +318,11 @@ export default async function (amp: PluginAPI) {
 					return
 				}
 				c.ended = now
+				// A busy conversation is archived when it stops (agent.end).
 				if (await busy(c)) {
 					await inbox.deliver(ctx, n.subject, n.peer, `${n.peer} sent ${n.type}. Run \`cpctl show ${n.subject}\` to check its current state. Stop work only if it is still closed, declined or withdrawn; otherwise follow its current state and next: commands.`)
+				} else {
+					await archive(c.amp)
 				}
 				return
 			}
@@ -482,6 +510,19 @@ export default async function (amp: PluginAPI) {
 		} catch {
 			return { action: 'reject-and-continue', message: `Needs the owner's approval to ${verdict.why}. Call cp_ask_owner, explain why, and end your turn.` }
 		}
+	})
+
+	// A conversation is archived once it stops with its cpd thread ended,
+	// whichever side ended it: this daemon's moves send the inbox no event.
+	amp.on('agent.end', async (event) => {
+		try {
+			const subject = await conversationFor(event.thread.id)
+			const c = subject ? state.conversations[subject] : undefined
+			if (subject && c && endedStates.has(await currentState(subject, c.peer, AbortSignal.timeout(15_000)))) await archive(c.amp)
+		} catch {
+			// Unreadable state leaves it as it is.
+		}
+		return { action: 'done' }
 	})
 
 	const { url } = await amp.createWebhook({
@@ -864,6 +905,8 @@ function checkWords(all: string[], subject: string, depth: number): Verdict {
 		case 'ruby':
 		case 'perl':
 			return /environ|process\.env|\bENV\b|getenv|Deno\.env/.test(args.join(' ')) ? forbid('the environment holds owner credentials') : allow
+		case 'amp':
+			return forbid("the amp CLI reaches your other threads and Amp's settings")
 		case 'cpctl':
 			return checkCpctl(args, subject)
 		case 'git':
