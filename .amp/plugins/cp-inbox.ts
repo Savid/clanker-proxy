@@ -3,7 +3,7 @@
 // The thread that first loads it becomes the inbox: it owns the webhook cpd
 // notifies. Under it, each peer gets a thread named after them, and under
 // that, each cpd thread a conversation, in the same orb. Later events for that
-// cpd thread go to the same conversation, so peer text only ever reaches
+// cpd thread go to the same conversation, so peer text arrives only in
 // conversations. A conversation is archived when its cpd thread ends, and
 // comes back with it. cp_send lets a thread here open a cpd thread; its
 // answers go to a conversation too. See docs/amp.md.
@@ -177,9 +177,11 @@ export default async function (amp: PluginAPI) {
 	const inbox = {
 		// deliver sends a message to the conversation for a cpd thread,
 		// starting one, with the standing instructions, if there is none or
-		// its Amp thread is gone. It returns false when a limit held the
-		// message back, and throws when delivery failed, so Amp retries.
-		async deliver(ctx: WebhookHandlerContext, subject: string, peer: string, message: string): Promise<boolean> {
+		// its Amp thread is gone, unless the cpd thread has ended: then there
+		// is nothing for a new one to do. It returns false when a limit held
+		// the message back or nobody needs it, and throws when delivery
+		// failed, so Amp retries.
+		async deliver(ctx: WebhookHandlerContext, subject: string, peer: string, message: string, ended = false): Promise<boolean> {
 			const now = Date.now()
 			state.wakes = state.wakes.filter((t) => now - t < day)
 			let c: Conversation | undefined = state.conversations[subject]
@@ -202,12 +204,15 @@ export default async function (amp: PluginAPI) {
 					inbox.woke(c, now)
 					return true
 				} catch {
-					// The conversation thread was deleted or archived: start over.
+					// The conversation thread is gone, or was archived as it
+					// stopped. Only a live cpd thread needs a new one.
+					if (ended) return false
 					delete state.conversations[subject]
 					c = undefined
 				}
 			}
 			if (!c) {
+				if (ended) return false
 				const started = Object.values(state.conversations).filter((x) => x.peer === peer && now - x.created < day).length
 				if (started >= conversationsPerPeer) return inbox.hold(ctx, subject, peer, undefined, `${peer} started ${conversationsPerPeer} conversations today`)
 				const thread = await (await ctx.thread.agent()).createThread({ parentThreadID: await inbox.hub(ctx, peer) })
@@ -328,7 +333,7 @@ export default async function (amp: PluginAPI) {
 				c.ended = now
 				// A busy conversation is archived when it stops (agent.end).
 				if (await busy(c)) {
-					await inbox.deliver(ctx, n.subject, n.peer, `${n.peer} sent ${n.type}. Run \`cpctl show ${n.subject}\` to check its current state. Stop work only if it is still closed, declined or withdrawn; otherwise follow its current state and next: commands.`)
+					await inbox.deliver(ctx, n.subject, n.peer, `${n.peer} sent ${n.type}. Run \`cpctl show ${n.subject}\` to check its current state. Stop work only if it is still closed, declined or withdrawn; otherwise follow its current state and next: commands.`, true)
 				} else {
 					await archive(c.amp)
 				}
@@ -342,7 +347,7 @@ export default async function (amp: PluginAPI) {
 				const message = n.myTurn
 					? `${n.peer} replied (state: ${n.state}, your turn). Run \`cpctl show ${n.subject}\` and continue.`
 					: `${n.peer} replied, but it is their turn (state: ${n.state}). Run \`cpctl show ${n.subject}\`. If they asked something you can answer, answer with one reply. Otherwise do nothing. Do not change the thread's state.`
-				if (await inbox.deliver(ctx, n.subject, n.peer, message)) {
+				if (await inbox.deliver(ctx, n.subject, n.peer, message, endedStates.has(n.state ?? ''))) {
 					const updated = state.conversations[n.subject]!
 					updated.replies++
 					updated.lastReply = now
@@ -380,7 +385,7 @@ export default async function (amp: PluginAPI) {
 				await thread
 					.labels()
 					.then((l) => thread.setLabels(l.filter((x) => x !== label)))
-					.then(() => thread.appendUserMessage({ type: 'user-message', content: `clanker-proxy: ${n.peer} ${what} the thread you asked for, ${n.subject.slice(0, 8)}${where}. Their words stay there.` }))
+					.then(() => thread.appendUserMessage({ type: 'user-message', content: `clanker-proxy: ${n.peer} ${what} the thread you asked for, ${n.subject.slice(0, 8)}${where}.` }))
 					.catch(() => undefined)
 			}
 		},
