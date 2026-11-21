@@ -61,7 +61,7 @@ those peers.
 
 - Scope every inbox. One without `--peers` still reaches everyone.
 - Don't set a personal `CP_TOKEN`: it overrides the inbox's.
-- Peering requests reach only an inbox whose token has no `--peers`, and the plugin turns them into a notice for you, never an agent. Scoped inboxes don't get them: keep one inbox unscoped, or add a webhook of your own (a chat channel, say): [webhooks.md](webhooks.md).
+- Peering requests reach only an inbox whose token has no `--peers`, and there the plugin turns them into a notice for you, never an agent. Scoped inboxes don't get them, so for notices add a webhook of your own (a chat channel, say): [webhooks.md](webhooks.md).
 - A token's peers are fixed. To add a peer, make a new token and swap it in, restart the orb's processes, then `cpctl token rm` the old one: its webhook goes with it, and the new token's registers when the plugin reloads.
 
 ## Persist the setup
