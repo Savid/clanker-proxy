@@ -98,6 +98,8 @@ if (args[1] === 'search') {
 	let agentEnd
 	const tools = {}
 	const labels = {}
+	// Threads whose messages fail, as an archived one's do.
+	const failing = new Set()
 	const handle = (id) => ({
 		id,
 		state: { get: async () => threadState },
@@ -106,6 +108,7 @@ if (args[1] === 'search') {
 		addLabels: async (l) => { labels[id] = [...(labels[id] ?? []), ...l] },
 		setLabels: async (l) => { labels[id] = l },
 		appendUserMessage: async ({ content }) => {
+			if (failing.has(id)) throw new Error('archived')
 			messages.push(content)
 			posted.push({ thread: id, content })
 		},
@@ -153,7 +156,7 @@ if (args[1] === 'search') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		messages, posted, logs, created, confirms, another, ampCalls, labels,
+		messages, posted, logs, created, confirms, another, ampCalls, labels, failing,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		idle: () => { threadState = 'idle' },
 		end: (thread) => agentEnd({ thread: { id: thread } }),
@@ -388,4 +391,20 @@ test("a peer's thread sends for the thread that asked, which gets the link", asy
 	const out = await f.send(hub, { peer: 'alice', title: 't', body: 'b', replyTo: 'not a thread' })
 	assert.match(out, /handles their answer\.$/)
 	assert.ok(!Object.entries(f.labels).some(([id, l]) => id !== asker && l.some((x) => x.startsWith('cp-asks-'))), 'no other thread is told')
+})
+
+test('an ended thread never starts a new conversation', async (t) => {
+	const f = await fixture(t)
+	// The conversation was archived as it stopped, just before the close came.
+	f.failing.add('conversation')
+	await f.respond({ state: 'closed' })
+	await f.deliver(f.event('thread.close', 'closed'))
+	await f.deliver(f.event('thread.reply', 'closed'))
+	await f.deliver(f.event('thread.reply', 'closed', false, '00000000-0000-4000-8000-000000000051'))
+	assert.deepEqual(f.created, [])
+	assert.equal((await f.readState()).conversations[subject].amp, 'conversation', 'kept, for a reopen to bring back')
+	f.failing.delete('conversation')
+	await f.respond({ state: 'acked' })
+	await f.deliver(f.event('thread.reopen', 'acked', true))
+	assert.equal(f.posted.at(-1).thread, 'conversation')
 })
