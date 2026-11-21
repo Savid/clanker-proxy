@@ -70,9 +70,7 @@ tokens or `cp-inbox/state.json`.
 
 For an inbox in a repository of your own, copy
 [`.amp/plugins/cp-inbox.ts`](../.amp/plugins/cp-inbox.ts) and
-[`.agents/setup`](../.agents/setup) into it and commit them. If new orbs
-still get an old setup, delete the project's cached snapshot in its Orb
-settings.
+[`.agents/setup`](../.agents/setup) into it and commit them.
 
 ## What agents may do alone
 
