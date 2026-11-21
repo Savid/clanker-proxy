@@ -104,13 +104,16 @@ impl Daemon {
 
     pub fn send(&mut self, to: &str, title: &str) -> ThreadSummary {
         self.call(|c| {
-            c.open_thread(NewThread {
-                to: name(to),
-                title: Title::try_from(title).unwrap(),
-                kind: None,
-                labels: Vec::new(),
-                body: Body::try_from("details").unwrap(),
-            })
+            c.open_thread(
+                NewThread {
+                    to: name(to),
+                    title: Title::try_from(title).unwrap(),
+                    kind: None,
+                    labels: Vec::new(),
+                    body: Body::try_from("details").unwrap(),
+                },
+                None,
+            )
         })
         .unwrap()
     }

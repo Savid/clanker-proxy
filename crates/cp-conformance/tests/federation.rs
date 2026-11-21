@@ -437,8 +437,9 @@ async fn a_thread_crosses_hosts_with_its_notifications() {
         "{far_version}"
     );
 
-    // An agent token scoped to the near peer works its threads until it is
-    // revoked, and never reaches owner operations.
+    // An agent token scoped to the near peer sees that peer, sends to it and
+    // works its threads until it is revoked, and never reaches owner
+    // operations.
     let agent_name = format!("agent{}", near_as.trim_start_matches("near"));
     let agent = far
         .post(
@@ -463,8 +464,41 @@ async fn a_thread_crosses_hosts_with_its_notifications() {
             .iter()
             .any(|t| t["id"] == id.as_str())
     );
-    let (status, _) = far
+    let (status, peers) = far
         .call_as(&token, Method::GET, "/api/v1/peers", None)
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(peers["peers"].as_array().unwrap().len(), 1);
+    assert_eq!(peers["peers"][0]["name"], near_as.as_str());
+    let (status, _) = far
+        .call_as(
+            &token,
+            Method::GET,
+            &format!("/api/v1/peers/{near_as}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    let (status, sent) = far
+        .call_as(
+            &token,
+            Method::POST,
+            "/api/v1/threads",
+            Some(json!({"to": near_as, "title": "from an agent", "body": "hello"})),
+        )
+        .await;
+    assert_eq!(status, 201, "{sent}");
+    let (status, _) = far
+        .call_as(
+            &token,
+            Method::POST,
+            "/api/v1/threads",
+            Some(json!({"to": "nobody", "title": "t", "body": "b"})),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (status, _) = far
+        .call_as(&token, Method::GET, "/api/v1/agent-tokens", None)
         .await;
     assert_eq!(status, 403);
     far.ok(

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 const subject = '00000000-0000-4000-8000-000000000001'
+const sent = '00000000-0000-4000-8000-000000000002'
 const peer = 'alice'
 const token = 'cpa_' + 'T'.repeat(43)
 const hookURL = 'https://example.invalid/webhook'
@@ -50,6 +51,14 @@ const args = process.argv.slice(2)
 if (args[0] !== '--json') process.exit(2)
 if (args[1] === 'ls') {
     process.stdout.write('{"threads":[]}')
+} else if (args[1] === 'send') {
+    const body = fs.readFileSync(0, 'utf8')
+    fs.writeFileSync(path.join(__dirname, 'sent.json'), JSON.stringify({ args: args.slice(2), body }))
+    if (args[args.indexOf('--') + 1] === 'nobody') {
+        process.stderr.write('{"error":{"message":"nobody is not a peer","exit":4,"status":404,"hint":"cpctl peer ls lists peers"}}')
+        process.exit(4)
+    }
+    process.stdout.write(JSON.stringify({ id: ${JSON.stringify(sent)} }))
 } else if (args[1] === 'show' && args[2] === ${JSON.stringify(subject)}) {
     const response = JSON.parse(fs.readFileSync(path.join(__dirname, 'response.json'), 'utf8'))
     if (response.error) {
@@ -61,17 +70,52 @@ if (args[1] === 'ls') {
     process.exit(2)
 }
 `, { mode: 0o700 })
+	// Every message and the thread it went to; messages holds the texts.
 	const messages = []
+	const posted = []
 	const logs = []
+	// Threads the plugin started, with their parents.
+	const created = []
+	const confirms = []
+	let confirmAnswer = true
 	let handler
-	const conversation = {
+	let guard
+	const tools = {}
+	const handle = (id) => ({
+		id,
 		state: { get: async () => 'running' },
-		appendUserMessage: async ({ content }) => messages.push(content),
+		labels: async () => [],
+		addLabels: async () => undefined,
+		appendUserMessage: async ({ content }) => {
+			messages.push(content)
+			posted.push({ thread: id, content })
+		},
+	})
+	const ui = {
+		notify: async () => undefined,
+		confirm: async (c) => {
+			confirms.push(c)
+			return confirmAnswer
+		},
+	}
+	const agent = {
+		createThread: async ({ parentThreadID }) => {
+			const id = `thread-${created.length + 1}`
+			created.push({ id, parent: parentThreadID })
+			return handle(id)
+		},
 	}
 	const amp = {
 		logger: { log: (...args) => logs.push(args) },
-		threads: { get: () => conversation },
-		on() {}, registerTool() {}, registerCommand() {},
+		threads: { get: handle },
+		helpers: { shellCommandFromToolCall: (e) => (e.tool === 'shell_command' ? { command: e.input.cmd } : null) },
+		on(name, fn) {
+			if (name === 'tool.call') guard = fn
+		},
+		registerTool(tool) {
+			tools[tool.name] = tool
+		},
+		registerCommand() {},
 		createWebhook: async (registration) => {
 			handler = registration.handler
 			return { url: hookURL }
@@ -80,15 +124,26 @@ if (args[1] === 'ls') {
 	const plugin = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
 	await plugin.default(amp)
 	assert.equal(typeof handler, 'function')
-	const ctx = { signal: new AbortController().signal, logger: amp.logger }
+	// Another thread's plugin instance, sharing the orb's state file.
+	const another = async () => {
+		const own = {}
+		const instance = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
+		await instance.default({ ...amp, on() {}, registerTool: (tool) => { own[tool.name] = tool } })
+		return { send: (thread, input) => own.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }) }
+	}
+	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		messages, logs,
+		messages, posted, logs, created, confirms, another,
+		answerConfirm: (answer) => { confirmAnswer = answer },
+		lastSent: async () => JSON.parse(await readFile(join(dir, 'sent.json'), 'utf8')),
+		send: (thread, input) => tools.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }),
+		check: (thread, tool, input) => guard({ thread: { id: thread }, tool, input }, { ui }),
 		readState: async () => JSON.parse(await readFile(stateFile, 'utf8')),
 		respond: async (response) => writeFile(responseFile, JSON.stringify({ id: subject, peer, ...response })),
-		event(type, state, myTurn = false, about = subject) {
+		event(type, state, myTurn = false, about = subject, from = peer) {
 			const id = randomUUID()
 			const timestamp = String(Math.floor(Date.now() / 1000))
-			const body = Buffer.from(JSON.stringify({ id, type, state, myTurn, subject: about, peer, origin: 'incoming' }))
+			const body = Buffer.from(JSON.stringify({ id, type, state, myTurn, subject: about, peer: from, origin: 'incoming' }))
 			const signature = createHmac('sha256', key).update(`${id}.${timestamp}.`).update(body).digest('base64')
 			return { id, body, receivedAt: new Date().toISOString(), headers: {
 				'webhook-id': id, 'webhook-timestamp': timestamp, 'webhook-signature': `v1,${signature}`,
@@ -180,4 +235,74 @@ test('the inbox registers itself with cpd, signed with a key both sides derive',
 	await f.respond({ state: 'acked' })
 	await f.deliver(f.event('thread.reopen', 'acked', true))
 	assert.equal(f.messages.length, 1)
+})
+
+test('each peer gets a thread under the inbox, and each of its cpd threads a conversation under that', async (t) => {
+	const f = await fixture(t)
+	const thread = (n) => `00000000-0000-4000-8000-00000000001${n}`
+	await f.deliver(f.event('thread.open', 'open', true, thread(1)))
+	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }, { id: 'thread-2', parent: 'thread-1' }])
+	assert.equal(f.posted[0].thread, 'thread-1')
+	assert.match(f.posted[0].content, /my clanker-proxy thread for alice/)
+	assert.equal(f.posted[1].thread, 'thread-2')
+	assert.match(f.posted[1].content, new RegExp(`You handle clanker-proxy thread ${thread(1)} with alice`))
+	await f.deliver(f.event('thread.open', 'open', true, thread(2)))
+	assert.deepEqual(f.created.at(-1), { id: 'thread-3', parent: 'thread-1' }, "the peer's thread is reused")
+	await f.deliver(f.event('thread.open', 'open', true, thread(3), 'bob'))
+	assert.deepEqual(f.created.slice(-2), [{ id: 'thread-4', parent: 'inbox' }, { id: 'thread-5', parent: 'thread-4' }])
+	assert.deepEqual((await f.readState()).hubs, { alice: 'thread-1', bob: 'thread-4' })
+})
+
+test("cp_send from one of your threads sends, and a conversation under the peer's thread takes the answer", async (t) => {
+	const f = await fixture(t)
+	const out = await f.send('owner-thread', { peer: 'alice', title: '-h Review PR 31', body: 'please' })
+	assert.equal(out, `Sent to alice as thread ${sent}. A conversation under alice's thread handles their answer.`)
+	assert.deepEqual(await f.lastSent(), { args: ['-m', '-', '--', 'alice', '-h Review PR 31'], body: 'please' }, 'a title cannot pass for a flag')
+	assert.equal(f.confirms.length, 0, 'your own threads send without a prompt')
+	await f.deliver(f.event('thread.resolve', 'resolved', true, sent))
+	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }, { id: 'thread-2', parent: 'thread-1' }])
+	assert.match(f.posted.at(-1).content, /If this side sent it, it is a request from me, or one of my threads, to alice; it asks them, not you/)
+	assert.ok(!f.posted.some((p) => p.thread === 'owner-thread'), 'peer text never wakes the thread that sent')
+	assert.equal(await f.send('owner-thread', { peer: 'nobody', title: 't', body: 'b' }), 'cp_send failed: nobody is not a peer (cpctl peer ls lists peers)')
+	assert.match(await f.send('owner-thread', { peer: 'Not A Name', title: 't', body: 'b' }), /peer must be a peer name/)
+})
+
+test("a peer's thread sends only to its peer, in any thread's plugin instance", async (t) => {
+	const f = await fixture(t)
+	// Loaded before the peer's thread existed, so it rereads the saved state.
+	const other = await f.another()
+	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000021'))
+	const hub = f.created[0].id
+	assert.match(await other.send(hub, { peer: 'bob', title: 't', body: 'b' }), /only to its own peer, alice/)
+	assert.match(await other.send(hub, { peer: 'alice', title: 't', body: 'b' }), /^Sent to alice/)
+	assert.equal(f.confirms.length, 0)
+})
+
+test('a conversation sends only to its own peer, and only with your approval', async (t) => {
+	const f = await fixture(t)
+	assert.match(await f.send('conversation', { peer: 'bob', title: 't', body: 'b' }), /only to its own peer, alice/)
+	f.answerConfirm(false)
+	assert.match(await f.send('conversation', { peer: 'alice', title: 't', body: 'b ``` hidden' }), /declined/)
+	assert.equal(f.confirms.length, 1)
+	assert.equal(f.confirms[0].requireHuman, true)
+	assert.match(f.confirms[0].message, /^````\nTo alice: t\n\nb ``` hidden\n````$/, 'the text cannot end its fence')
+	f.answerConfirm(true)
+	assert.match(await f.send('conversation', { peer: 'alice', title: 'Another', body: 'b', fyi: true }), /carry on with this one/)
+	assert.deepEqual((await f.lastSent()).args, ['-m', '-', '--fyi', '--', 'alice', 'Another'])
+})
+
+test("a conversation cannot reach other threads, Amp's settings or your machine", async (t) => {
+	const f = await fixture(t)
+	for (const tool of ['send_thread_message', 'create_thread', 'read_thread', 'find_thread', 'reply_in_message_thread', 'load_plugin', 'manage_amp', 'mac_shell']) {
+		assert.equal((await f.check('conversation', tool, {})).action, 'reject-and-continue', tool)
+	}
+	f.answerConfirm(false)
+	for (const tool of ['git_push', 'slack_write', 'mcp__github__create_pull_request']) {
+		assert.equal((await f.check('conversation', tool, { remote: 'origin' })).action, 'reject-and-continue', tool)
+		assert.match(f.confirms.at(-1).message, new RegExp(tool))
+	}
+	assert.deepEqual(await f.check('conversation', 'edit_file', { path: 'src/main.rs' }), { action: 'allow' })
+	const send = await f.check('conversation', 'shell_command', { cmd: 'cpctl send bob "x" -m y' })
+	assert.match(send.message, /only with the cp_send tool/)
+	assert.deepEqual(await f.check('owner-thread', 'send_thread_message', {}), { action: 'allow' })
 })

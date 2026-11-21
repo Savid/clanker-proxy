@@ -431,8 +431,8 @@ pub struct Receipt {
 
 // ---- agent tokens ----
 
-/// A new agent token. With peers, it reaches only threads with those
-/// peers: it lists and streams only theirs, and others answer 404.
+/// A new agent token. With peers, it reaches only those peers and their
+/// threads: it lists, streams and sends only to them, and others answer 404.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentTokenInput {

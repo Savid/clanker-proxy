@@ -8,12 +8,12 @@
 
 use cp_api::{
     Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
-    PeeringRequest, PublicKey, ReceiptStatus, Request, RequestList, RequestReceipt, RequestRef,
-    Version,
+    PeeringRequest, Peers, PublicKey, ReceiptStatus, Request, RequestList, RequestReceipt,
+    RequestRef, Version,
 };
 use cp_thread::Name;
 
-use crate::core::Core;
+use crate::core::{Core, scope_json};
 use crate::runtime::{Millis, Runtime};
 use crate::secrets;
 use crate::signing::{MAX_SKEW_SECS, SignedCall, code};
@@ -109,11 +109,14 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         )?)
     }
 
-    /// Every peer, by name.
-    pub fn peers(&self) -> Result<PeerList, Error> {
+    /// Every peer in `scope`, by name.
+    pub fn peers(&self, scope: Option<&Peers>) -> Result<PeerList, Error> {
         let rows = self.sql.query(
-            &format!("SELECT {PEER_COLUMNS} FROM peers ORDER BY name"),
-            &[],
+            &format!(
+                "SELECT {PEER_COLUMNS} FROM peers \
+                 WHERE ?1 IS NULL OR name IN (SELECT value FROM json_each(?1)) ORDER BY name"
+            ),
+            &[scope_json(scope)],
         )?;
         let peers = rows
             .iter()
@@ -122,9 +125,12 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(PeerList { peers })
     }
 
-    pub fn peer(&self, name: &Name) -> Result<Peer, Error> {
+    /// The peer `name`, if it is in `scope`; any other answers as if it did
+    /// not exist.
+    pub fn peer(&self, name: &Name, scope: Option<&Peers>) -> Result<Peer, Error> {
         let p = self
             .load_peer(name)?
+            .filter(|_| scope.is_none_or(|s| s.reaches(name)))
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
         self.peer_view(&p)
     }
@@ -277,7 +283,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 self.now().0.into(),
             ],
         )?;
-        self.peer(name)
+        self.peer(name, None)
     }
 
     /// Stores a peering request from another daemon for the owner to
@@ -466,7 +472,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             .execute("DELETE FROM requests WHERE url = ?", &[text(url.as_str())])?;
         self.sql.execute("DELETE FROM peering_op", &[])?;
         self.reschedule(&name)?;
-        self.peer(&name)
+        self.peer(&name, None)
     }
 
     /// Ends an approval the requester's daemon did not confirm. The request
