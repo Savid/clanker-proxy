@@ -4,8 +4,9 @@
 [Amp](https://ampcode.com) plugin. Add this repository as an Amp project and it
 loads by itself, only in that project's threads. Your daemon wakes an orb with a signed
 webhook, and the orb gives each peer a thread, and each cpd thread a
-conversation under it, which works it with `cpctl`. Any thread in the project
-can ask a peer something with `cp_send`; the answer goes to a conversation too.
+conversation under it, which works it with `cpctl`. Any of your threads can
+ask a peer something; the answer goes to a conversation too, and the thread
+that asked gets a link to it.
 
 <p align="center"><img src="img/amp.svg" width="100%" alt="A peer's daemon reaches your cpd; cpd wakes the Amp orb's inbox thread with a signed webhook; the inbox routes the event to one conversation per cpd thread, under that peer's thread, which answers through cpctl."></p>
 
@@ -36,6 +37,14 @@ can ask a peer something with `cp_send`; the answer goes to a conversation too.
 
 4. **Never archive the inbox.** Archived, it answers `404`, a final failure. Restore it, then `cpctl webhook retry amp-inbox <delivery-id>`. Remove any guidance that archives finished threads.
 
+5. **Ask from any thread:** add [`cp-peers`](../.amp/personal/cp-peers/index.ts) to your personal plugins, which Amp loads in all your threads. Run it again to update it.
+
+   ```bash
+   amp clone user-plugins ~/user-plugins && mkdir -p ~/user-plugins/cp-peers
+   curl -fsSL https://raw.githubusercontent.com/Savid/clanker-proxy/master/.amp/personal/cp-peers/index.ts -o ~/user-plugins/cp-peers/index.ts
+   cd ~/user-plugins && git add cp-peers && git commit -m "cp-peers: ask clanker-proxy peers from any thread" && git push
+   ```
+
 Wrong thread became the inbox? Delete the `cp-inbox` trigger in Amp's
 trigger settings and start a new thread in the project; it registers again.
 
@@ -46,16 +55,16 @@ trigger settings and start a new thread in the project; it registers again.
 
 ## Ask a peer
 
-In any thread of the project but the inbox, ask the agent to send it: its
-`cp_send` tool opens the cpd thread and returns its ID. The answer goes to a
-conversation under that peer's thread, which checks it and closes or reopens
-it, so peer text only ever reaches conversations. `cpctl send` does the same.
+From any thread, ask: "ask bob <what>". In the project, `cp_send` sends it.
+Elsewhere, [`cp-peers`](#setup)'s `ask_peer` hands it to bob's thread, which
+sends it with `cp_send`, to bob only. Bob's answer goes to a conversation under
+bob's thread, which checks it and closes or reopens it, and the thread that
+asked gets a link to that conversation: peer text only ever reaches
+conversations. `cpctl send` does the same from your machine.
 
-From a thread outside the project, ask the agent to message the peer's
-thread, which is named after them: "message bob and ask them <what>". It sends
-with `cp_send`, to that peer only, and tells the asking thread the thread ID.
-
-A conversation's `cp_send` reaches only its own peer, and asks you first.
+A peer's thread starts with the first thread between you; before that, ask
+from a thread in the project. A conversation's `cp_send` reaches only its own
+peer, and asks you first.
 
 ## One inbox per peer
 

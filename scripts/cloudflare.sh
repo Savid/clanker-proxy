@@ -397,7 +397,7 @@ if [ "$agent" = amp ]; then
     say "In Amp, create a new thread and paste this in:"
     say ""
     say "     Add the project ${repo#https://github.com/}. Then prompt me for"
-    say "     the Amp secrets CP_URL and CP_TOKEN, then follow steps 2-4 and"
+    say "     the Amp secrets CP_URL and CP_TOKEN, then follow steps 2-5 and"
     say "     \"Persist the setup\" in $repo/blob/master/docs/amp.md"
     say ""
     say "When it asks, enter these (CP_TOKEN is an agent token for Amp, not"
