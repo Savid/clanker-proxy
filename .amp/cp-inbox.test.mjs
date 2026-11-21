@@ -73,8 +73,16 @@ if (args[1] === 'ls') {
 `, { mode: 0o700 })
 	// The amp CLI records each call, one JSON line per call.
 	await writeFile(ampCLI, `#!/usr/bin/env node
-require('node:fs').appendFileSync(require('node:path').join(__dirname, 'amp.log'), JSON.stringify(process.argv.slice(2)) + '\\n')
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+fs.appendFileSync(path.join(__dirname, 'amp.log'), JSON.stringify(args) + '\\n')
+if (args[1] === 'search') {
+    const found = JSON.parse(fs.readFileSync(path.join(__dirname, 'search.json'), 'utf8').toString() || '{}')
+    process.stdout.write(JSON.stringify(found[args[2]] ?? []))
+}
 `, { mode: 0o700 })
+	await writeFile(join(dir, 'search.json'), '{}')
 	const ampCalls = async () => (await readFile(join(dir, 'amp.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l))
 	let threadState = 'running'
 	// Every message and the thread it went to; messages holds the texts.
@@ -89,12 +97,14 @@ require('node:fs').appendFileSync(require('node:path').join(__dirname, 'amp.log'
 	let guard
 	let agentEnd
 	const tools = {}
+	const labels = {}
 	const handle = (id) => ({
 		id,
 		state: { get: async () => threadState },
 		waitForResponse: async () => undefined,
-		labels: async () => [],
-		addLabels: async () => undefined,
+		labels: async () => labels[id] ?? [],
+		addLabels: async (l) => { labels[id] = [...(labels[id] ?? []), ...l] },
+		setLabels: async (l) => { labels[id] = l },
 		appendUserMessage: async ({ content }) => {
 			messages.push(content)
 			posted.push({ thread: id, content })
@@ -143,7 +153,8 @@ require('node:fs').appendFileSync(require('node:path').join(__dirname, 'amp.log'
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		messages, posted, logs, created, confirms, another, ampCalls,
+		messages, posted, logs, created, confirms, another, ampCalls, labels,
+		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		idle: () => { threadState = 'idle' },
 		end: (thread) => agentEnd({ thread: { id: thread } }),
 		answerConfirm: (answer) => { confirmAnswer = answer },
@@ -268,7 +279,8 @@ test('each peer gets a thread under the inbox, and each of its cpd threads a con
 test("cp_send from one of your threads sends, and a conversation under the peer's thread takes the answer", async (t) => {
 	const f = await fixture(t)
 	const out = await f.send('owner-thread', { peer: 'alice', title: '-h Review PR 31', body: 'please' })
-	assert.equal(out, `Sent to alice as thread ${sent}. A conversation under alice's thread handles their answer.`)
+	assert.equal(out, `Sent to alice as thread ${sent}. A conversation under alice's thread handles their answer, and this thread gets a link to it.`)
+	assert.deepEqual(f.labels['owner-thread'], ['cp-asks-00000000'], 'the inbox finds the asking thread by this label')
 	assert.deepEqual(await f.lastSent(), { args: ['-m', '-', '--', 'alice', '-h Review PR 31'], body: 'please' }, 'a title cannot pass for a flag')
 	assert.equal(f.confirms.length, 0, 'your own threads send without a prompt')
 	await f.deliver(f.event('thread.resolve', 'resolved', true, sent))
@@ -329,6 +341,8 @@ test("a peer's thread is named after the peer once it has answered", async (t) =
 
 test('a conversation is archived when its thread ends, and comes back with it', async (t) => {
 	const f = await fixture(t)
+	const ampCalls = f.ampCalls
+	f.ampCalls = async () => (await ampCalls()).filter((c) => c[1] !== 'search')
 	f.idle()
 	await f.respond({ state: 'closed' })
 	await f.deliver(f.event('thread.close', 'closed'))
@@ -347,4 +361,31 @@ test('a conversation is archived when its thread ends, and comes back with it', 
 	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'archive', 'conversation'], 'ended by this side')
 	await f.end('owner-thread')
 	assert.equal((await f.ampCalls()).length, 3, 'other threads are never archived')
+})
+
+test('the thread that asked gets a link to the conversation once the peer answers, never their words', async (t) => {
+	const f = await fixture(t)
+	const asker = 'T-00000000-0000-4000-8000-0000000000aa'
+	await f.searches({ 'label:cp-asks-00000000': [{ id: asker }] })
+	f.labels[asker] = ['cp-asks-00000000', 'mine']
+	await f.deliver(f.event('thread.ack', 'acked', false, sent))
+	assert.ok(!f.posted.some((p) => p.thread === asker), 'an ack is not an answer')
+	await f.deliver(f.event('thread.resolve', 'resolved', true, sent))
+	const told = f.posted.filter((p) => p.thread === asker)
+	assert.equal(told.length, 1)
+	const conversation = f.created.at(-1).id
+	assert.equal(told[0].content, `clanker-proxy: alice answered the thread you asked for, 00000000, in the conversation that handles it: https://ampcode.com/threads/${conversation}. Their words stay there.`)
+	assert.deepEqual(f.labels[asker], ['mine'], 'told once: the label goes')
+})
+
+test("a peer's thread sends for the thread that asked, which gets the link", async (t) => {
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000041'))
+	const hub = f.created[0].id
+	const asker = 'T-00000000-0000-4000-8000-0000000000bb'
+	assert.match(await f.send(hub, { peer: 'alice', title: 't', body: 'b', replyTo: asker }), new RegExp(`thread ${asker} gets a link to it\\.$`))
+	assert.deepEqual(f.labels[asker], ['cp-asks-00000000'])
+	const out = await f.send(hub, { peer: 'alice', title: 't', body: 'b', replyTo: 'not a thread' })
+	assert.match(out, /handles their answer\.$/)
+	assert.ok(!Object.entries(f.labels).some(([id, l]) => id !== asker && l.some((x) => x.startsWith('cp-asks-'))), 'no other thread is told')
 })

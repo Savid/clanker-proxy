@@ -63,7 +63,7 @@ test-setup: ## Offline tests of the Cloudflare setup script (needs Node and pyth
 
 .PHONY: test-amp
 test-amp: ## Node tests for the Amp plugin
-	node --test .amp/cp-inbox.test.mjs
+	node --test .amp/*.test.mjs
 
 .PHONY: image
 image: ## Build the clanker-proxy:local container image for this machine (needs Docker and musl-tools)
