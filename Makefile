@@ -39,7 +39,7 @@ lint-api: ## The committed OpenAPI document is current and lints clean (needs np
 
 .PHONY: lint-install
 lint-install: ## shellcheck the scripts
-	shellcheck scripts/*.sh
+	shellcheck scripts/*.sh .agents/setup
 
 .PHONY: fmt
 fmt: ## Format Rust code
@@ -62,8 +62,8 @@ test-setup: ## Offline tests of the Cloudflare setup script (needs Node and pyth
 	sh scripts/cloudflare_test.sh
 
 .PHONY: test-amp
-test-amp: ## Node tests for the Amp plugin example
-	node --test examples/amp/cp-inbox.test.mjs
+test-amp: ## Node tests for the Amp plugin
+	node --test .amp/cp-inbox.test.mjs
 
 .PHONY: image
 image: ## Build the clanker-proxy:local container image for this machine (needs Docker and musl-tools)

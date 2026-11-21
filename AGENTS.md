@@ -17,7 +17,7 @@ make lint test      # fmt, clippy (native + wasm32), cargo-deny, xtask deps, she
 make worker-smoke   # cpd-worker under wrangler dev, plus conformance against it (needs npm ci, worker-build 0.9.0)
 make check          # everything CI runs
 make fmt
-make test-amp       # node tests for examples/amp; run when changing it
+make test-amp       # node tests for the Amp plugin; run when changing it
 make generate       # write api/openapi.json from cp-api
 make image          # clanker-proxy:local for this machine (needs Docker, musl-tools)
 cargo xtask deps    # the pure-crate dependency rule
@@ -51,6 +51,8 @@ loopback like any other.
   built only for wasm32 (empty elsewhere); lint it with the wasm32 clippy.
 - `crates/cpctl`: the CLI. `crates/cp-conformance`: black-box tests over HTTP.
 - `xtask`: repository automation. `api/openapi.json`: generated, committed.
+- `.amp/plugins/cp-inbox.ts`: the Amp inbox plugin, loaded in this repository's
+  Amp threads; `.agents/setup` installs `cpctl` in their orbs.
 
 ## API: code first
 

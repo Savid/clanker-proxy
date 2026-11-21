@@ -1,7 +1,8 @@
 # Amp orbs work your inbox
 
-[`examples/amp/cp-inbox.ts`](../examples/amp/cp-inbox.ts) is an
-[Amp](https://ampcode.com) plugin. Your daemon wakes an orb with a signed
+[`.amp/plugins/cp-inbox.ts`](../.amp/plugins/cp-inbox.ts) is an
+[Amp](https://ampcode.com) plugin. Add this repository as an Amp project and it
+loads by itself, only in that project's threads. Your daemon wakes an orb with a signed
 webhook, and the orb gives each cpd thread its own conversation, which works
 it with `cpctl`.
 
@@ -16,7 +17,7 @@ it with `cpctl`.
 
 - **A daemon peers can reach**, outside the orb: native `cpd` with a public URL, or [the Worker](cloudflare.md). The orb sleeps; cpd doesn't.
 - **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can clone your repositories.
-- **One release** for daemon, `cpctl` and plugin. Read this file at that release's tag.
+- **A current daemon.** Orbs take the plugin from this repository's master, and [`.agents/setup`](../.agents/setup) installs the `cpctl` your daemon runs. Rerun `cloudflare.sh` (or `install.sh`) to update the daemon.
 - **An agent token, never the owner token.** Anything in the orb can read `CP_TOKEN`, including code an agent runs for a peer. An agent token can only work threads, and `cpctl token rm` revokes it and ends its streams.
 
 ## Setup
@@ -27,18 +28,14 @@ it with `cpctl`.
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
    ```
 
-2. **Amp secrets:** `CP_URL` and `CP_TOKEN` (the token). Add them in Settings, or have the inbox thread ask you for them: Amp takes each value in a private dialog that keeps it out of the thread, and saves it as a secret. A secret is an environment variable in the orb too; Amp just hides its value in output. A running orb picks up changes after `amp orb restart-processes`.
+2. **The project and its secrets.** Add `Savid/clanker-proxy` as an Amp project. Save `CP_URL` and `CP_TOKEN` (the token) as secrets of that project, so only its threads see them: in its settings, or have a thread ask you, and Amp takes each value in a private dialog that keeps it out of the thread. A running orb picks up changes after `amp orb restart-processes`.
 
-3. **Start the inbox:** make a new Amp space (e.g. `clanker-proxy`) and paste in the prompt `cloudflare.sh` printed. It must:
-   - install `cpctl` with the [setup script](#persist-the-setup), on `PATH` for shell and plugins (or set `CP_INBOX_CPCTL`);
-   - copy the plugin to `.amp/plugins/cp-inbox.ts` and run `plugins: reload`.
-
-   The plugin registers its webhook with your daemon by itself, signed with a key derived from `CP_TOKEN`. It hears only the peers' moves, and only for the token's peers. Whichever thread loads the plugin first owns the webhook for good.
+3. **Start the inbox:** a new thread in that project. Its orb runs `.agents/setup`, which installs `cpctl`, and loads the plugin, which registers its webhook with your daemon, signed with a key derived from `CP_TOKEN`. It hears only the peers' moves, and only for the token's peers. The first thread to load the plugin with the secrets set owns the webhook for good.
 
 4. **Never archive the inbox.** Archived, it answers `404`, a final failure. Restore it, then `cpctl webhook retry amp-inbox <delivery-id>`. Remove any guidance that archives finished threads.
 
-Wrong thread became the inbox? Delete the `cp-inbox` trigger (Settings →
-Triggers) and reload the plugin in the right thread; it registers again.
+Wrong thread became the inbox? Delete the `cp-inbox` trigger in Amp's
+trigger settings and start a new thread in the project; it registers again.
 
 ## Check it
 
@@ -50,11 +47,12 @@ Triggers) and reload the plugin in the right thread; it registers again.
 
 Every conversation shares the inbox's token, so a peer who talks an agent past
 the plugin's guard could reach your other peers' threads. To keep peers
-apart, give each its own space and token. cpd enforces a token's peers,
+apart, give each its own project (a repository of your own, see
+[Persist the setup](#persist-the-setup)) and token. cpd enforces a token's peers,
 answers every other thread as not found, and the token's webhook hears only
 those peers.
 
-| Space | Token |
+| Project | Token |
 | --- | --- |
 | inbox-bob | `cpctl token add amp-bob -o amp-bob.token --peers bob` |
 | inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` |
@@ -66,35 +64,15 @@ those peers.
 
 ## Persist the setup
 
-Commit `.amp/plugins/cp-inbox.ts` and an executable `.agents/setup` so
-future orbs get both; Amp snapshots the result. The script installs the
-`cpctl` matching the release your daemon runs, so it follows the daemon when
-you update it, or the latest release if it cannot ask the daemon:
+Nothing to do in `Savid/clanker-proxy`: the repository has the plugin and
+`.agents/setup`, so every new orb of the project gets both. Never commit
+tokens or `cp-inbox/state.json`.
 
-```sh
-#!/bin/sh
-set -eu
-bin="$HOME/.local/bin"
-# The daemon's release, read with the agent token; the latest release when
-# the settings are not set here or the daemon cannot be reached.
-version=$(curl -fsS -H "Authorization: Bearer ${CP_TOKEN:-}" "${CP_URL:-}/api/v1/me" 2>/dev/null |
-    sed -n 's/.*"version":"\(v[0-9][^"]*\)".*/\1/p')
-[ -n "$version" ] || version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-    https://github.com/Savid/clanker-proxy/releases/latest | sed 's|.*/tag/||')
-if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $version" ]; then
-    installer=$(mktemp)
-    trap 'rm -f "$installer"' EXIT
-    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$version/install.sh" -o "$installer"
-    CP_VERSION="$version" CP_INSTALL_DIR="$bin" sh "$installer"
-fi
-"$bin/cpctl" --version
-```
-
-After you update the daemon, new orbs install the matching `cpctl`; in a
-running orb, run `.agents/setup` again. Take the plugin file from the same
-release, reload it, and commit. If new orbs still get the old setup, delete
-the project's cached snapshot in its Orb settings. Never commit tokens or
-`cp-inbox/state.json`.
+For an inbox in a repository of your own, copy
+[`.amp/plugins/cp-inbox.ts`](../.amp/plugins/cp-inbox.ts) and
+[`.agents/setup`](../.agents/setup) into it and commit them. If new orbs
+still get an old setup, delete the project's cached snapshot in its Orb
+settings.
 
 ## What agents may do alone
 

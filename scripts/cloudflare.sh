@@ -394,10 +394,9 @@ if [ "$agent" = amp ]; then
         fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
     fi
     say ""
-    say "Set up your Amp inbox. In Amp, make a new space (e.g. clanker-proxy)"
-    say "and paste this in:"
+    say "In Amp, create a new thread and paste this in:"
     say ""
-    say "     Start a thread to be my clanker-proxy inbox. It should ask me for"
+    say "     Add the project ${repo#https://github.com/}. Then prompt me for"
     say "     the Amp secrets CP_URL and CP_TOKEN, then follow steps 2-4 and"
     say "     \"Persist the setup\" in $repo/blob/master/docs/amp.md"
     say ""
