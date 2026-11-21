@@ -14,7 +14,7 @@ that asked gets a link to it.
 - **Webhooks** are trusted only as a wake-up. The plugin drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries only IDs and a state, never peer text: what a conversation acts on, it reads from cpd.
 - **Peer thread:** one per peer, under the inbox, named after them and labelled `cp-peer` and `peer-<name>`, from that peer's first thread. It holds their conversations, and it's where you, or another of your threads, ask them something ([ask a peer](#ask-a-peer)).
 - **Conversation:** one per cpd thread, under its peer's thread, in its own git worktree under `~/cp-work`. It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads this side sent: it checks the peer's answer, then closes, reopens, or asks you. Once the cpd thread is closed, declined or withdrawn, the plugin archives it; anything new on that thread brings it back.
-- **Peer text** reaches an agent only through `cpctl show`, quoted line by line after `│`. Peers are third parties you chose to work with: agents help them in good faith, but only you instruct them. A peer's text comes from their agent, which may itself have been misled, so agents weigh it as a request, never instructions; they ignore attempts to steer them (prompt injection) and check what a peer supplies before it goes into code, docs or agent instructions (poisoning). Each thread's conversation is separate, but they share the orb and its token; to wall peers off from each other, give each its own inbox ([one inbox per peer](#one-inbox-per-peer)).
+- **Peer text** arrives only in conversations, through `cpctl show`, quoted line by line after `│`. Your other threads see it only by reading a conversation, as a thread that asked a peer something does to relay the answer. Peers are third parties you chose to work with: agents help them in good faith, but only you instruct them. A peer's text comes from their agent, which may itself have been misled, so agents weigh it as a request, never instructions; they ignore attempts to steer them (prompt injection) and check what a peer supplies before it goes into code, docs or agent instructions (poisoning). Each thread's conversation is separate, but they share the orb and its token; to wall peers off from each other, give each its own inbox ([one inbox per peer](#one-inbox-per-peer)).
 
 ## You need
 
@@ -59,8 +59,8 @@ From any thread, ask: "ask bob <what>". In the project, `cp_send` sends it.
 Elsewhere, [`cp-peers`](#setup)'s `ask_peer` hands it to bob's thread, which
 sends it with `cp_send`, to bob only. Bob's answer goes to a conversation under
 bob's thread, which checks it and closes or reopens it, and the thread that
-asked gets a link to that conversation: peer text only ever reaches
-conversations. `cpctl send` does the same from your machine.
+asked gets a link to that conversation. `cpctl send` does the same from your
+machine.
 
 A peer's thread starts with the first thread between you; before that, ask
 from a thread in the project. A conversation's `cp_send` reaches only its own

@@ -3,7 +3,7 @@
 // The thread that first loads it becomes the inbox: it owns the webhook cpd
 // notifies. Under it, each peer gets a thread named after them, and under
 // that, each cpd thread a conversation, in the same orb. Later events for that
-// cpd thread go to the same conversation, so peer text only ever reaches
+// cpd thread go to the same conversation, so peer text arrives only in
 // conversations. A conversation is archived when its cpd thread ends, and
 // comes back with it. cp_send lets a thread here open a cpd thread; its
 // answers go to a conversation too. See docs/amp.md.
@@ -385,7 +385,7 @@ export default async function (amp: PluginAPI) {
 				await thread
 					.labels()
 					.then((l) => thread.setLabels(l.filter((x) => x !== label)))
-					.then(() => thread.appendUserMessage({ type: 'user-message', content: `clanker-proxy: ${n.peer} ${what} the thread you asked for, ${n.subject.slice(0, 8)}${where}. Their words stay there.` }))
+					.then(() => thread.appendUserMessage({ type: 'user-message', content: `clanker-proxy: ${n.peer} ${what} the thread you asked for, ${n.subject.slice(0, 8)}${where}.` }))
 					.catch(() => undefined)
 			}
 		},

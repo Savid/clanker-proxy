@@ -377,7 +377,7 @@ test('the thread that asked gets a link to the conversation once the peer answer
 	const told = f.posted.filter((p) => p.thread === asker)
 	assert.equal(told.length, 1)
 	const conversation = f.created.at(-1).id
-	assert.equal(told[0].content, `clanker-proxy: alice answered the thread you asked for, 00000000, in the conversation that handles it: https://ampcode.com/threads/${conversation}. Their words stay there.`)
+	assert.equal(told[0].content, `clanker-proxy: alice answered the thread you asked for, 00000000, in the conversation that handles it: https://ampcode.com/threads/${conversation}.`)
 	assert.deepEqual(f.labels[asker], ['mine'], 'told once: the label goes')
 })
 
