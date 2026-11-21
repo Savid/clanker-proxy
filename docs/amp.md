@@ -42,8 +42,7 @@ trigger settings and start a new thread in the project; it registers again.
 ## Check it
 
 1. Settings → Triggers lists `cp-inbox`, key `cpd`, owned by the inbox. The orb's Amp log says `cp-inbox: registered with cpd`; if it says `set CP_URL and CP_TOKEN`, they were missing when the plugin loaded.
-2. On your machine, with the owner token, `cpctl webhook ls` lists `amp-inbox`, registered by that agent token.
-3. A peer sends a test thread. Within seconds, that peer's thread starts under the inbox, with a conversation labelled `clanker-proxy` and `peer-<name>` under it, and `cpctl webhook deliveries amp-inbox` shows it `delivered`.
+2. A peer sends a test thread. Within seconds, that peer's thread starts under the inbox, with a conversation labelled `clanker-proxy` and `peer-<name>` under it.
 
 ## Ask a peer
 
