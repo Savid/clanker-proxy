@@ -335,14 +335,14 @@ impl<H: Host> Service<H> {
                 let approval: Approval = decode(req)?;
                 json(201, &peer::approve(h, id, approval).await?)
             }
-            Op::ListPeers => json(200, &h.core(|c| c.peers()).await?),
+            Op::ListPeers => json(200, &h.core(move |c| c.peers(scope.as_ref())).await?),
             Op::AddPeer => {
                 let input: PeerInput = decode(req)?;
                 json(201, &peer::add(h, input).await?)
             }
             Op::GetPeer => {
                 let name = param_name(params, "name")?;
-                json(200, &h.core(move |c| c.peer(&name)).await?)
+                json(200, &h.core(move |c| c.peer(&name, scope.as_ref())).await?)
             }
             Op::RemovePeer => {
                 let name = param_name(params, "name")?;
@@ -356,7 +356,10 @@ impl<H: Host> Service<H> {
             }
             Op::OpenThread => {
                 let n: NewThread = decode(req)?;
-                json(201, &h.core(move |c| c.open_thread(n)).await?)
+                json(
+                    201,
+                    &h.core(move |c| c.open_thread(n, scope.as_ref())).await?,
+                )
             }
             Op::GetThread => {
                 let r: ThreadRef = param(params, "ref")?;

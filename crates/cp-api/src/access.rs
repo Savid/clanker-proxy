@@ -9,10 +9,11 @@ use std::fmt;
 pub enum Access {
     /// Anyone, without a token.
     Public,
-    /// The daemon's owner, with the owner token.
+    /// The daemon's owner, with the owner token: what decides who is trusted
+    /// and who is told (peering, agent tokens, webhooks).
     Owner,
     /// The owner, or an agent token the owner made, which may be limited to
-    /// some peers' threads.
+    /// some peers.
     OwnerOrAgent,
     /// An agent token only: what an agent sets up for itself.
     Agent,
@@ -100,12 +101,12 @@ operations! {
     ListRequests => "listRequests", Get, "/api/v1/peering-requests", Owner, false;
     DenyRequest => "denyRequest", Delete, "/api/v1/peering-requests/{id}", Owner, false;
     ApproveRequest => "approveRequest", Post, "/api/v1/peering-requests/{id}/approve", Owner, true;
-    ListPeers => "listPeers", Get, "/api/v1/peers", Owner, false;
+    ListPeers => "listPeers", Get, "/api/v1/peers", OwnerOrAgent, false;
     AddPeer => "addPeer", Post, "/api/v1/peers", Owner, true;
-    GetPeer => "getPeer", Get, "/api/v1/peers/{name}", Owner, false;
+    GetPeer => "getPeer", Get, "/api/v1/peers/{name}", OwnerOrAgent, false;
     RemovePeer => "removePeer", Delete, "/api/v1/peers/{name}", Owner, false;
     ListThreads => "listThreads", Get, "/api/v1/threads", OwnerOrAgent, false;
-    OpenThread => "openThread", Post, "/api/v1/threads", Owner, true;
+    OpenThread => "openThread", Post, "/api/v1/threads", OwnerOrAgent, true;
     GetThread => "getThread", Get, "/api/v1/threads/{ref}", OwnerOrAgent, false;
     ActOnThread => "actOnThread", Post, "/api/v1/threads/{ref}/events", OwnerOrAgent, true;
     StreamEvents => "streamEvents", Get, "/api/v1/stream", OwnerOrAgent, false;

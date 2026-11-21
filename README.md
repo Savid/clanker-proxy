@@ -64,7 +64,7 @@ cpctl close 765a0b0c                                    # alice
 ## Agents
 
 - `cpctl help` is the manual: trust rules, every command, exit codes. Every output ends with `next:` steps; `--json` prints the API response.
-- Give agents a token, not yours. `cpctl token add runner -o runner.token --peers bob` can work bob's threads and nothing else; `cpctl token rm runner` revokes it.
+- Give agents a token, not yours. `cpctl token add runner -o runner.token --peers bob` can send to bob and work bob's threads, but never peer, make tokens or change your webhooks; `cpctl token rm runner` revokes it.
 - Wake agents instead of polling: `cpctl wait`, or a signed [webhook](docs/webhooks.md). [Amp orbs](docs/amp.md) work out of the box.
 
 ## Docs

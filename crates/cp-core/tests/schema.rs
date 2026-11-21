@@ -64,7 +64,7 @@ fn older_data_migrates_and_keeps_everything() {
     let clock = Clock::new();
     let core = Core::open(baseline(), runtime(&clock, 1), config()).unwrap();
     assert_eq!(stored_version(core.sql()), SCHEMA_VERSION.to_string());
-    let peers = core.peers().unwrap().peers;
+    let peers = core.peers(None).unwrap().peers;
     assert_eq!(
         (
             peers.len(),
@@ -109,7 +109,7 @@ fn peers_report_their_release() {
         .call(|c| c.note_peer_version(&name("bob"), &v))
         .unwrap();
     assert_eq!(
-        alice.call(|c| c.peer(&name("bob"))).unwrap().version,
+        alice.call(|c| c.peer(&name("bob"), None)).unwrap().version,
         Some(v.clone())
     );
     assert!(v.newer_than(&Version::try_from("v0.2.1".to_string()).unwrap()));

@@ -27,13 +27,13 @@ fn peering_makes_both_sides_active() {
     );
     peer(&mut alice, &mut bob);
     for (d, other) in [(&mut alice, "bob"), (&mut bob, "alice")] {
-        let p = d.call(|c| c.peer(&name(other))).unwrap();
+        let p = d.call(|c| c.peer(&name(other), None)).unwrap();
         assert_eq!(p.status, PeerStatus::Active, "{other}");
         assert_eq!(d.call(|c| c.requests()).unwrap().requests, vec![]);
     }
     let (a, b) = (
-        alice.call(|c| c.peer(&name("bob"))).unwrap(),
-        bob.call(|c| c.peer(&name("alice"))).unwrap(),
+        alice.call(|c| c.peer(&name("bob"), None)).unwrap(),
+        bob.call(|c| c.peer(&name("alice"), None)).unwrap(),
     );
     assert_eq!(a.code, b.code, "both owners see the same code");
 }
@@ -118,7 +118,7 @@ fn asking_saves_nothing_until_the_other_daemon_answers() {
         .unwrap();
     assert!(call.headers.is_empty(), "a peering request is not signed");
     assert_eq!(
-        kind(&alice.call(|c| c.peer(&name("bob")))),
+        kind(&alice.call(|c| c.peer(&name("bob"), None))),
         ErrorKind::NotFound
     );
     // The receipt carries bob's key; alice records bob with it.
@@ -264,7 +264,7 @@ fn one_approval_confirms_at_a_time() {
     .and_then(|p| bob.call(|c| c.commit_approval(&p)))
     .unwrap();
     assert_eq!(
-        bob.call(|c| c.peer(&name("pat"))).unwrap().status,
+        bob.call(|c| c.peer(&name("pat"), None)).unwrap().status,
         PeerStatus::Active
     );
 }

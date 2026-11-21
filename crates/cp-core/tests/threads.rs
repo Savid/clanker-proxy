@@ -4,9 +4,11 @@
 mod common;
 
 use common::{Clock, Daemon, deliver, kind, name, peer, scope, settle};
-use cp_api::{ErrorKind, GetThreadQuery, ListThreadsQuery, ThreadRef, TurnFilter, WireEvent};
+use cp_api::{
+    ErrorKind, GetThreadQuery, ListThreadsQuery, NewThread, ThreadRef, TurnFilter, WireEvent,
+};
 use cp_core::Millis;
-use cp_thread::{Action, State};
+use cp_thread::{Action, Body, State, Title};
 
 fn pair() -> (Clock, Daemon, Daemon) {
     let clock = Clock::new();
@@ -91,7 +93,7 @@ fn refusals_say_what_is_allowed() {
 }
 
 #[test]
-fn an_agent_scope_hides_other_peers_threads() {
+fn an_agent_scope_hides_other_peers_and_their_threads() {
     let clock = Clock::new();
     let (mut alice, mut bob, mut carol) = (
         Daemon::new("alice", &clock, 1),
@@ -128,6 +130,41 @@ fn an_agent_scope_hides_other_peers_threads() {
         })
         .unwrap();
     assert_eq!(all.len(), 2);
+
+    // It reads, and sends to, only its peers; the rest look like no peer.
+    let peers = alice.call(|c| c.peers(Some(&only_bob))).unwrap().peers;
+    assert_eq!(
+        peers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        ["bob"]
+    );
+    assert_eq!(alice.call(|c| c.peers(None)).unwrap().peers.len(), 2);
+    assert!(
+        alice
+            .call(|c| c.peer(&name("bob"), Some(&only_bob)))
+            .is_ok()
+    );
+    assert_eq!(
+        kind(&alice.call(|c| c.peer(&name("carol"), Some(&only_bob)))),
+        ErrorKind::NotFound
+    );
+    let open = |to: &str| NewThread {
+        to: name(to),
+        title: Title::try_from("from the agent").unwrap(),
+        kind: None,
+        labels: Vec::new(),
+        body: Body::try_from("details").unwrap(),
+    };
+    let sent = alice
+        .call(|c| c.open_thread(open("bob"), Some(&only_bob)))
+        .unwrap();
+    assert_eq!(sent.peer.as_str(), "bob");
+    let refused = alice.call(|c| c.open_thread(open("carol"), Some(&only_bob)));
+    assert_eq!(kind(&refused), ErrorKind::NotFound);
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        "carol is not a peer",
+        "an out-of-scope peer answers like no peer"
+    );
 }
 
 #[test]
