@@ -77,7 +77,7 @@ if (args[1] === 'ls') {
 			return { url: hookURL }
 		},
 	}
-	const plugin = await import(`./cp-inbox.ts?fixture=${randomUUID()}`)
+	const plugin = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
 	await plugin.default(amp)
 	assert.equal(typeof handler, 'function')
 	const ctx = { signal: new AbortController().signal, logger: amp.logger }

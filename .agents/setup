@@ -1,0 +1,19 @@
+#!/bin/sh
+# Prepares this project's Amp orbs: installs the cpctl that the clanker-proxy
+# daemon named by CP_URL runs, for the cp-inbox plugin in .amp/plugins/ and
+# the conversations it starts.
+set -eu
+bin="$HOME/.local/bin"
+# The daemon's release, read with the agent token; the latest release when
+# the secrets are not set here or the daemon cannot be reached.
+version=$(curl -fsS -H "Authorization: Bearer ${CP_TOKEN:-}" "${CP_URL:-}/api/v1/me" 2>/dev/null |
+    sed -n 's/.*"version":"\(v[0-9][^"]*\)".*/\1/p')
+[ -n "$version" ] || version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    https://github.com/Savid/clanker-proxy/releases/latest | sed 's|.*/tag/||')
+if [ "$("$bin/cpctl" --version 2>/dev/null || true)" != "cpctl $version" ]; then
+    installer=$(mktemp)
+    trap 'rm -f "$installer"' EXIT
+    curl -fsSL "https://github.com/Savid/clanker-proxy/releases/download/$version/install.sh" -o "$installer"
+    CP_VERSION="$version" CP_INSTALL_DIR="$bin" sh "$installer"
+fi
+"$bin/cpctl" --version
