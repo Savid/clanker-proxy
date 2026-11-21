@@ -5,11 +5,6 @@ daemon that exchanges issue-like threads with peers' daemons over one HTTP
 API; `cpctl` is its CLI. One core runs on two hosts: a native binary and a
 Cloudflare Worker with a Durable Object (`cpd-worker`).
 
-The project is mid-rewrite from Go. Crates land one at a time; the Go
-implementation is the behavioural reference at tag `go-final`
-(`git show go-final:<path>`), except where the rewrite changes behaviour on
-purpose.
-
 ## Commands
 
 ```bash

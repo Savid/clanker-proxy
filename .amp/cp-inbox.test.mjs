@@ -39,7 +39,7 @@ async function fixture(t) {
 	})
 	await mkdir(join(dir, 'cp-inbox'))
 	await writeFile(stateFile, JSON.stringify({
-		seen: [], wakes: [], known: ['conversation'], lastPeeringNotice: 0, heldNotices: {},
+		seen: [], wakes: [], known: ['conversation'], lastPeeringNotice: 0, heldNotices: {}, hubs: {},
 		conversations: { [subject]: {
 			amp: 'conversation', peer, created: Date.now(), briefed: true,
 			wakes: [], replies: 0, lastReply: 0, held: false, ended: 0,
