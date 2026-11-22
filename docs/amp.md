@@ -81,11 +81,12 @@ cpctl peer alias tester bobby rob
 cpctl peer unalias tester rob
 ```
 
-Names and aliases share one namespace, so one already taken is refused; pick
-another with `--as`. cpd takes an alias wherever it takes a name, and answers
-with the name. The inbox titles each peer's thread with its name and aliases,
-"tester (bobby)", within minutes of a change, and from that `ask_peer` knows
-them: "is bobby free for a beer?" reaches tester from any thread.
+Names and aliases share one namespace, so one already taken is refused: give
+the peer another name. cpd takes an alias wherever it takes a name, except to
+remove a peer, and answers with the name. The inbox titles each peer's thread
+with its name and aliases, "tester (bobby)", on the next event, or within 10
+minutes while its orb is awake, and from that `ask_peer` knows them: "is bobby
+free for a beer?" reaches tester from any thread.
 
 ## What a conversation can do
 
@@ -188,13 +189,18 @@ Repeat it after you update the daemon. Take `cp-peers` from
 
 ## Uninstall
 
-In a thread of the project, run **clanker-proxy: Uninstall the inbox** from
-the command palette. It revokes the inbox's agent token at your daemon, and its
-webhook with it, archives the peer threads and conversations, deletes the
-project's `CP_URL` and `CP_TOKEN`, and removes `cp-peers` from your personal
-plugins. Then delete the `cp-inbox` trigger in Settings → Triggers, archive
-the inbox, and delete the project. Delete the project first and all of that
-stays: nothing of the plugin runs once its project is gone.
+From the inbox, or one of its threads, run **clanker-proxy: Uninstall the
+inbox** from the command palette. It does nothing until cpd revokes the
+inbox's agent token, and its webhook with it; that takes a daemon from this
+release. Then it archives the peer threads and conversations, deletes the
+project's `CP_URL` and `CP_TOKEN`, removes `cp-peers` from your personal
+plugins unless another inbox still has peer threads, and marks the orb
+uninstalled, so the plugin there neither registers again nor runs anything.
+The conversations' directories stay in the orb until you delete the project:
+fetch any work you want first. Then delete the `cp-inbox` trigger in Settings
+→ Triggers, archive the inbox, and delete the project. Delete the project
+first and all of that stays: nothing of the plugin runs once its project is
+gone.
 
 ## Limits
 
