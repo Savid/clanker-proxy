@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -30,10 +30,17 @@ async function fixture(t, base) {
 	const checkout = join(home, 'workspace', 'repo')
 	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_INBOX_AMP: ampCLI, CP_URL: 'https://cpd.test/', CP_TOKEN: token, CP_INBOX_HOME: home, AMP_WORKING_DIRECTORY: checkout }
 	const realFetch = globalThis.fetch
-	// What the broker passed on to cpd.
+	// What the broker passed on to cpd, the peers cpd lists, and self-revocations.
 	const forwarded = []
-	globalThis.fetch = async (url, init) => {
+	let peerList = []
+	const revoked = []
+	globalThis.fetch = async (url, init = {}) => {
 		if (String(url).endsWith('/api/v1/me/webhook')) registrations.push({ url, init })
+		else if (String(url).endsWith('/api/v1/peers')) return Response.json({ peers: peerList })
+		else if (String(url).endsWith('/api/v1/me') && init.method === 'DELETE') {
+			revoked.push(init.headers.authorization)
+			return new Response(null, { status: 204 })
+		}
 		else forwarded.push({ method: init.method, url: String(url), authorization: init.headers.authorization, body: init.body && Buffer.from(init.body).toString() })
 		return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
 	}
@@ -91,6 +98,23 @@ fs.appendFileSync(path.join(__dirname, 'amp.log'), JSON.stringify(args) + '\\n')
 if (args[1] === 'search') {
     const found = JSON.parse(fs.readFileSync(path.join(__dirname, 'search.json'), 'utf8').toString() || '{}')
     process.stdout.write(JSON.stringify(found[args[2]] ?? []))
+}
+// Your personal plugins: a repository with cp-peers in it.
+if (args[0] === 'clone' && args[1] === 'user-plugins') {
+    const { execFileSync } = require('node:child_process')
+    const remote = path.join(__dirname, 'user-plugins.git')
+    const git = (...a) => execFileSync('git', a, { stdio: 'ignore' })
+    if (!fs.existsSync(remote)) {
+        git('init', '-q', '--bare', remote)
+        const seed = path.join(__dirname, 'seed')
+        git('clone', '-q', remote, seed)
+        fs.mkdirSync(path.join(seed, 'cp-peers'))
+        fs.writeFileSync(path.join(seed, 'cp-peers', 'index.ts'), 'x')
+        git('-C', seed, 'add', '.')
+        git('-C', seed, 'commit', '-q', '-m', 'cp-peers')
+        git('-C', seed, 'push', '-q', 'origin', 'HEAD')
+    }
+    git('clone', '-q', remote, args[2])
 }
 `, { mode: 0o700 })
 	await writeFile(join(dir, 'search.json'), '{}')
@@ -186,7 +210,8 @@ if (args[1] === 'search') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		home, checkout, own: join(home, 'cp-work', subject), forwarded, httpFetch: realFetch,
+		home, checkout, own: join(home, 'cp-work', subject), forwarded, httpFetch: realFetch, revoked, dir, stateFile,
+		setPeers: (list) => { peerList = list },
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
@@ -555,7 +580,52 @@ test("a peer's thread is named after the peer once it has answered", async (t) =
 	const f = await fixture(t)
 	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000031'))
 	for (let i = 0; i < 100 && !(await f.ampCalls()).length; i++) await new Promise((resolve) => setTimeout(resolve, 20))
-	assert.deepEqual(await f.ampCalls(), [['threads', 'rename', 'thread-1', 'alice']])
+	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'rename', 'thread-1', 'alice'])
+})
+
+test("a peer's thread is titled with its aliases, which follow cpd, and cp_send takes them", async (t) => {
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000032'))
+	const hub = f.created[0].id
+	f.setPeers([{ name: 'alice', aliases: ['ally', 'al'] }])
+	await f.deliver(f.event('thread.reply', 'open', true, '00000000-0000-4000-8000-000000000032'))
+	assert.ok((await f.ampCalls()).some((c) => c.join(' ') === `threads rename ${hub} alice (ally, al)`), 'renamed with its aliases')
+	const renames = (await f.ampCalls()).length
+	await f.deliver(f.event('thread.ack', 'acked', false, '00000000-0000-4000-8000-000000000032'))
+	assert.equal((await f.ampCalls()).length, renames, 'not renamed again while they are the same')
+	assert.match(await f.send('owner-thread', { peer: 'ally', title: 'Beer?', body: 'Free tonight?' }), /Sent to alice as thread/)
+	assert.deepEqual((await f.lastSent()).args.slice(-2), ['alice', 'Beer?'])
+	assert.match(await f.send(hub, { peer: 'al', title: 'Beer?', body: 'Free tonight?' }), /Sent to alice/)
+})
+
+test('uninstalling revokes the token, archives the threads, deletes the secrets and removes cp-peers', async (t) => {
+	const vars = { AMP_PROJECT_ID: 'project-1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' }
+	const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+	Object.assign(process.env, vars)
+	t.after(() => {
+		for (const [k, v] of Object.entries(previous)) {
+			if (v === undefined) delete process.env[k]
+			else process.env[k] = v
+		}
+	})
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, sent))
+	const [hub, conversation] = f.created.map((c) => c.id)
+	f.answerConfirm(true)
+	await f.command('cp-uninstall', 'inbox')
+	assert.deepEqual(f.revoked, [`Bearer ${token}`])
+	const calls = (await f.ampCalls()).map((c) => c.join(' '))
+	for (const id of [hub, conversation, 'conversation']) assert.ok(calls.includes(`threads archive ${id}`), id)
+	assert.match(f.confirms.at(-1).message, /Archived its peer threads and conversations: 3 of 3/)
+	assert.ok(calls.includes('secrets delete --project project-1 --yes CP_URL'))
+	assert.ok(calls.includes('secrets delete --project project-1 --yes CP_TOKEN'))
+	const left = execFileSync('git', ['--git-dir', join(f.dir, 'user-plugins.git'), 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' })
+	assert.equal(left, '', 'cp-peers is gone from your personal plugins')
+	await assert.rejects(stat(f.stateFile))
+	const report = f.confirms.at(-1)
+	assert.equal(report.title, 'The inbox is uninstalled')
+	assert.doesNotMatch(report.message, /failed/)
+	assert.match(report.message, /delete the `cp-inbox` trigger/)
 })
 
 test('a conversation is archived when its thread ends, and comes back with it', async (t) => {

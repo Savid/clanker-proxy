@@ -41,16 +41,19 @@ process.stdout.write(JSON.stringify(found[process.argv[4]] ?? []))
 	return { tools, posted, ask }
 }
 
-test("ask_peer names your peers and hands the question to the peer's thread", async (t) => {
+test("ask_peer knows your peers by name and alias, and hands the question to the peer's thread", async (t) => {
 	const f = await load(t, {
-		'label:cp-peer archived:false': [{ id: hub, title: 'alice' }, { id: 'T-bad', title: 'bob' }],
-		'label:cp-peer archived:false label:peer-alice': [{ id: hub, title: 'alice' }],
+		'label:cp-peer archived:false': [
+			{ id: hub, title: 'alice (ally, al)' },
+			{ id: 'T-bad', title: 'bob' },
+			{ id: 'T-00000000-0000-4000-8000-0000000000a2', title: 'Clanker-proxy carol thread' },
+		],
 	})
-	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice\)/)
-	assert.equal(await f.ask({ peer: 'alice', message: 'Up for a beer?' }), `Passed to alice's thread, https://ampcode.com/threads/${hub}, which sends it. When alice answers, this thread gets a link to the conversation that handles it.`)
+	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
+	assert.equal(await f.ask({ peer: 'ally', message: 'Up for a beer?' }), `Passed to alice's thread, https://ampcode.com/threads/${hub}, which sends it. When alice answers, this thread gets a link to the conversation that handles it.`)
 	assert.deepEqual(f.posted, [{ thread: hub, content: 'My thread T-asker asks you to send alice this, with replyTo T-asker:\n\nUp for a beer?' }])
 	assert.match(await f.ask({ peer: 'carol', message: 'hi' }), /carol has no thread in your clanker-proxy inbox yet/)
-	assert.match(await f.ask({ peer: 'Not A Name', message: 'hi' }), /peer must be a peer name/)
+	assert.match(await f.ask({ peer: 'Not A Name', message: 'hi' }), /peer must be a peer name or alias/)
 	assert.equal(f.posted.length, 1)
 })
 
