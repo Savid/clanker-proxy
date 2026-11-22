@@ -52,7 +52,8 @@ export default async function (amp: PluginAPI) {
 			if (typeof message !== 'string' || !message.trim()) return 'ask_peer: give a message.'
 			let hub: string | undefined
 			try {
-				hub = (await peerThreads(`label:peer-${peer}`))[0]?.id
+				// cp-inbox's labels are cut to Amp's 32 characters.
+				hub = (await peerThreads(`label:${`peer-${peer}`.slice(0, 32).replace(/-+$/, '')}`))[0]?.id
 			} catch {
 				return 'ask_peer: cannot search your threads.'
 			}
