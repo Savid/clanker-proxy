@@ -115,8 +115,9 @@ and `CP_TOKEN` in the environment, and with no other process in sight. Every
 filesystem is read-only, and your home is empty but for the checkout and the
 `bin` directories on `PATH`, read-only, and the conversation's own directory,
 its only writable place and its `/tmp`. Your credentials, Amp's and `gh`'s,
-your Amp secrets, the `amp` CLI, the inbox's state and other conversations'
-work are out of reach. It needs passwordless `sudo`, `unshare` and `setpriv`,
+your Amp secrets, the `amp` CLI, Amp's settings, the inbox's state and other
+conversations' work are out of reach, and the checkout's plugins and guidance
+can't change. It needs passwordless `sudo`, `unshare` and `setpriv`,
 which orbs have. The sandbox shares the orb's network.
 
 A command you approve runs outside the sandbox, since it may need your
@@ -130,7 +131,7 @@ that and the checkout. The plugin also checks every command and tool call:
 | --- | --- |
 | `cpctl` on this conversation's thread, `help`, `me` | runs |
 | any other `cpctl` use, or `--url`/`--token` overrides | refused; new threads go through `cp_send` |
-| the `amp` CLI; Amp's plugins, skills and settings (`.amp/plugins`, `~/.config/amp`, your plugins repository) | refused |
+| the `amp` CLI | refused |
 | credentials: `CP_TOKEN`, Amp's (`~/.local/share/amp`, `AMP_*` tokens), `gh`'s, `~/.env`, `~/.ssh`, `~/.kube`, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment; an unclosed quote | refused |
 | the edit tools outside its directory; the others in your home outside the checkout and its directory | refused |
 | `git push` (however wrapped, or Amp's `git_push`), git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push` | asks you to approve that exact command |

@@ -845,9 +845,6 @@ const secretPath =
 	/owner\.token|\/environ\b|cp-inbox\/|\.local\/state|XDG_STATE_HOME|\.local\/share\/amp|\.config\/(amp|gh)\b|\.git-credentials|\.netrc\b|\.kube\/|(~|\$\{?HOME\}?|\/home\/[^/\s'"]+|\/root)\/\.(amp|env|ssh|docker)\b/
 // Amp's credentials in the environment, which its git helper uses.
 const ampSecret = /\bAMP_\w*(TOKEN|AUTH|KEY|SECRET)/
-// Plugins, skills and settings shape every thread in the orb, the guard
-// included.
-const ampConfig = /\.amp\/(plugins|skills|settings)|\.agents\/skills|ampcode\.com\/git\b/
 
 // The only tools a conversation gets. Code mode (code_exec, tool_search) and
 // subagents run tools this guard never sees; the rest reach other threads,
@@ -991,7 +988,6 @@ function checkPaths(input: unknown, key = ''): Verdict {
 function checkShell(command: string, subject: string, depth = 0): Verdict {
 	const plain = command.replace(/\\(.)/g, '$1')
 	if (/CP_TOKEN/.test(plain) || secretPath.test(plain) || ampSecret.test(plain)) return forbid('owner credentials stay with the owner')
-	if (ampConfig.test(plain)) return forbid("Amp's plugins, skills and settings are not a conversation's")
 	if (/CP_(URL|DIR)/.test(plain)) return forbid('cpctl must reach your daemon with your settings')
 	if (plain.includes('${!')) return forbid('indirect variable reads can expose credentials')
 	if (depth > 3) return forbid('the command nests too deeply to check')

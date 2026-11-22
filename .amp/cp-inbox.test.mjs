@@ -412,12 +412,12 @@ test('a conversation runs commands without your secrets, and never reads credent
 		'cat /home/user/.env',
 		'ls ~/.kube/',
 		'echo $AMP_THREAD_IDENTITY_AUTH',
-		'cp x.ts .amp/plugins/',
-		'git clone https://ampcode.com/git/@me/-/plugins',
 	]) {
 		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'reject-and-continue', cmd)
 	}
 	assert.equal((await f.check('conversation', 'Read', { path: '/home/user/.config/amp/settings.json' })).action, 'reject-and-continue')
+	// The sandbox keeps the checkout's plugins read-only, so its own clone's are fair game.
+	assert.equal((await f.check('conversation', 'shell_command', { cmd: 'wc -l repo/.amp/plugins/cp-inbox.ts' })).action, 'modify')
 	assert.deepEqual(await f.check('owner-thread', 'shell_command', { cmd: 'echo hi' }), { action: 'allow' })
 })
 
