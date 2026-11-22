@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -15,13 +16,16 @@ const key = createHmac('sha256', token).update(`cp-inbox webhook\n${hookURL}`).d
 // What the plugin sent cpd, by fixture.
 const registrations = []
 
-async function fixture(t) {
+// fixture loads the plugin; base is where its home goes, by default with the rest.
+async function fixture(t, base) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-inbox-test-'))
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
 	const cpctl = join(dir, 'cpctl')
 	const ampCLI = join(dir, 'amp')
-	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_INBOX_AMP: ampCLI, CP_URL: 'https://cpd.test/', CP_TOKEN: token }
+	const home = join(base ?? dir, 'home')
+	const checkout = join(home, 'workspace', 'repo')
+	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_INBOX_AMP: ampCLI, CP_URL: 'https://cpd.test/', CP_TOKEN: token, CP_INBOX_HOME: home, AMP_WORKING_DIRECTORY: checkout }
 	const realFetch = globalThis.fetch
 	globalThis.fetch = async (url, init) => {
 		registrations.push({ url, init })
@@ -38,6 +42,7 @@ async function fixture(t) {
 		await rm(dir, { recursive: true, force: true })
 	})
 	await mkdir(join(dir, 'cp-inbox'))
+	await mkdir(checkout, { recursive: true })
 	await writeFile(stateFile, JSON.stringify({
 		seen: [], wakes: [], known: ['conversation'], lastPeeringNotice: 0, heldNotices: {}, hubs: {},
 		conversations: { [subject]: {
@@ -174,6 +179,7 @@ if (args[1] === 'search') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
+		home, checkout, own: join(home, 'cp-work', subject.slice(0, 8)),
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
@@ -352,14 +358,14 @@ test("a conversation cannot reach other threads, Amp's settings or your machine"
 	assert.match(send.message, /only with the cp_send tool/)
 	assert.deepEqual(await f.check('owner-thread', 'send_thread_message', {}), { action: 'allow' })
 	for (const cmd of ['cpctl --version 2>&1', `cpctl show ${subject.slice(0, 8)} 2>/dev/null | head -5`, `cpctl show ${subject} &>/tmp/x`, 'cat <<EOF\nhi\nEOF']) {
-		assert.deepEqual(await f.check('conversation', 'shell_command', { cmd }), { action: 'allow' }, cmd)
+		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'modify', cmd)
 	}
 	for (const cmd of ['diff <(env) x', 'cpctl show 99999999 >/dev/null', 'echo 1 > x; printenv']) {
 		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'reject-and-continue', cmd)
 	}
 })
 
-test('a conversation runs with only its own tools, writing only in its worktree', async (t) => {
+test('a conversation runs with only its own tools, writing only in its own directory', async (t) => {
 	const f = await fixture(t)
 	await f.deliver(f.event('thread.open', 'open', true, sent))
 	assert.deepEqual(f.agents.map((a) => a.model), ['anthropic/claude-opus-5-5'])
@@ -369,11 +375,17 @@ test('a conversation runs with only its own tools, writing only in its worktree'
 	for (const tool of ['code_exec', 'Task', 'find_thread', 'send_thread_message']) assert.ok(!include.includes(tool), tool)
 	assert.equal(f.tools.cp_ask_owner.defer, false)
 	assert.equal(f.tools.cp_send.defer, false)
+	assert.match(f.messages.at(-1), new RegExp(`write only in your own directory, ${join(f.home, 'cp-work', sent.slice(0, 8))}`))
 
-	const worktree = join(homedir(), 'cp-work', '00000000-repo', 'src', 'main.rs')
-	assert.deepEqual(await f.check('conversation', 'edit_file', { path: worktree }), { action: 'allow' })
-	for (const input of [{ path: 'src/main.rs' }, { path: join(process.cwd(), 'AGENTS.md') }, { patch: '*** Begin Patch\n*** Add File: .amp/plugins/x.ts\n+x\n*** End Patch' }]) {
-		assert.match((await f.check('conversation', 'apply_patch', input)).message, /only in its own worktree/, JSON.stringify(input))
+	const mine = join(f.own, 'repo', 'src', 'main.rs')
+	assert.deepEqual(await f.check('conversation', 'edit_file', { path: mine }), { action: 'allow' })
+	assert.deepEqual(await f.check('conversation', 'Read', { path: join(f.checkout, 'README.md') }), { action: 'allow' })
+	assert.deepEqual(await f.check('conversation', 'Grep', { pattern: 'x' }), { action: 'allow' })
+	for (const input of [{ path: 'src/main.rs' }, { path: join(f.checkout, 'AGENTS.md') }, { path: '/tmp/x' }, { patch: '*** Begin Patch\n*** Add File: .amp/plugins/x.ts\n+x\n*** End Patch' }]) {
+		assert.match((await f.check('conversation', 'apply_patch', input)).message, /writes only in its own directory/, JSON.stringify(input))
+	}
+	for (const path of [join(f.home, '.bash_history'), join(f.home, 'cp-work', 'ffffffff', 'secret.txt'), '/proc/1/environ']) {
+		assert.match((await f.check('conversation', 'Read', { path })).message, /reads only the checkout and its own directory/, path)
 	}
 })
 
@@ -385,10 +397,13 @@ test('a conversation runs commands without your secrets, and never reads credent
 		else process.env.AMP_SECRET_ENV_NAMES = previous
 	})
 	const f = await fixture(t)
-	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: `cpctl show ${subject}`, cwd: '/w' }), {
-		action: 'modify',
-		input: { cmd: `unset SOPS_AGE_KEY\ncpctl show ${subject}`, cwd: '/w' },
-	})
+	const run = await f.check('conversation', 'shell_command', { cmd: `cpctl show ${subject}`, cwd: '/w' })
+	assert.equal(run.action, 'modify')
+	assert.equal(run.input.cwd, '/w')
+	assert.match(run.input.cmd, /^sudo -n --preserve-env=CP_URL,CP_TOKEN unshare --mount --pid --fork --kill-child --mount-proc --propagation private \/bin\/sh -c '/)
+	assert.ok(run.input.cmd.endsWith(` '${f.home}' '${f.own}' '${f.checkout}' '${process.getuid()}' '${process.getgid()}' '${process.env.PATH}' 'cpctl show ${subject}' "$PWD"`))
+	assert.doesNotMatch(run.input.cmd, /SOPS_AGE_KEY/)
+	for (const d of ['home', 'tmp']) assert.ok((await stat(join(f.own, d))).isDirectory(), d)
 	f.answerConfirm(true)
 	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: 'git push' }), { action: 'modify', input: { cmd: 'unset SOPS_AGE_KEY\ngit push' } })
 	for (const cmd of [
@@ -425,6 +440,56 @@ test('a conversation has a button that shows you its cpd thread, its text fenced
 	await f.command('cp-thread', 'owner-thread')
 	assert.equal(f.confirms.length, 1)
 	assert.match(f.notices.at(-1), /not a conversation/)
+})
+
+// The sandbox itself, run for real where sudo needs no password, as in CI
+// and Amp's orbs.
+const sandboxable = spawnSync('sudo', ['-n', 'true']).status === 0 && spawnSync('sh', ['-c', 'command -v unshare && command -v setpriv']).status === 0
+test('a sandboxed command sees only the checkout and its own directory, as you, without secrets or sudo', { skip: !sandboxable && 'needs passwordless sudo, unshare and setpriv' }, async (t) => {
+	// Not under /tmp, which the sandbox replaces.
+	const base = await mkdtemp(join(homedir(), '.cp-inbox-test-'))
+	t.after(() => rm(base, { recursive: true, force: true }))
+	const f = await fixture(t, base)
+	const { home, checkout, own } = f
+	const bin = join(home, '.local', 'bin')
+	for (const d of [bin, join(home, '.amp', 'bin'), join(home, '.local', 'share', 'amp'), join(home, 'cp-work', 'ffffffff'), own]) await mkdir(d, { recursive: true })
+	await writeFile(join(home, '.local', 'share', 'amp', 'secrets.json'), 'amp-secret')
+	await writeFile(join(home, 'cp-work', 'ffffffff', 'other.txt'), 'other conversation')
+	await writeFile(join(home, '.gitconfig'), '[user]\n\tname = Owner\n')
+	await writeFile(join(checkout, 'AGENTS.md'), 'guidance')
+	await writeFile(join(bin, 'tool'), '#!/bin/sh\necho tool-ran\n', { mode: 0o755 })
+	// The agent's script: what the sandbox shows it.
+	await writeFile(join(own, 'probe.sh'), `
+see() { if [ -e "$1" ]; then echo "$2=seen"; else echo "$2=hidden"; fi; }
+can() { if (echo x >> "$1") 2>/dev/null; then echo "$2=writable"; else echo "$2=read-only"; fi; }
+echo "uid=$(id -u) groups=$(id -G)"
+see ${home}/.local/share/amp/secrets.json amp
+see ${home}/cp-work/ffffffff/other.txt other
+see ${home}/.amp/bin amp-bin
+cat ${checkout}/AGENTS.md; echo
+can ${checkout}/AGENTS.md checkout
+can ${own}/probe.out own
+can /tmp/probe.out tmp
+echo "home=$HOME"
+tool
+echo "secret=\${SOPS_AGE_KEY:-none} url=$CP_URL"
+if sudo -n true 2>/dev/null; then echo sudo=yes; else echo sudo=no; fi
+n=$(ls /proc | grep -c '^[0-9][0-9]*$'); if [ "$n" -lt 10 ]; then echo procs=few; else echo "procs=$n"; fi
+git config --global user.name
+`)
+	const path = process.env.PATH
+	process.env.PATH = `${bin}:${join(home, '.amp', 'bin')}:${path}`
+	t.after(() => { process.env.PATH = path })
+	const run = await f.check('conversation', 'shell_command', { cmd: 'sh probe.sh' })
+	assert.equal(run.action, 'modify')
+	const out = execFileSync('bash', ['-c', run.input.cmd], { cwd: own, encoding: 'utf8', env: { ...process.env, SOPS_AGE_KEY: 'leaked' } })
+	const uid = process.getuid()
+	assert.equal(out, [
+		`uid=${uid} groups=${process.getgid()}`,
+		'amp=hidden', 'other=hidden', 'amp-bin=hidden',
+		'guidance', 'checkout=read-only', 'own=writable', 'tmp=writable',
+		`home=${join(own, 'home')}`, 'tool-ran', 'secret=none url=https://cpd.test/', 'sudo=no', 'procs=few', 'Owner', '',
+	].join('\n'))
 })
 
 test("a peer's thread is named after the peer once it has answered", async (t) => {
