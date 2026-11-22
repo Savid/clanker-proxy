@@ -289,15 +289,7 @@ impl App {
                 self.peer_alias(&arg(0), given, command == "peer alias")
                     .await
             }
-            "peer rm" => {
-                let n = name(&arg(0))?;
-                self.client.delete(&format!("/api/v1/peers/{n}")).await?;
-                self.done(
-                    &format!("removed {n}; threads with them are kept"),
-                    &[step("cpctl peer ls", "see the remaining peers")],
-                );
-                Ok(())
-            }
+            "peer rm" => self.peer_rm(&arg(0)).await,
             "requests" => self.requests().await,
             "approve" => self.approve(&arg(0), p).await,
             "deny" => {
@@ -479,6 +471,29 @@ impl App {
             }
             next(w, &steps);
         });
+        Ok(())
+    }
+
+    async fn peer_rm(&mut self, n: &str) -> Result<(), Failure> {
+        let n = name(n)?;
+        if let Err(mut f) = self.client.delete(&format!("/api/v1/peers/{n}")).await {
+            // cpd refuses an alias here; name the two commands it may have
+            // meant.
+            if f.status == Some(409)
+                && f.message.contains(" is an alias of ")
+                && let Ok((peer, _)) = self.client.get::<Peer>(&format!("/api/v1/peers/{n}")).await
+            {
+                let p = &peer.name;
+                f.hint = Some(format!(
+                    "cpctl peer unalias {p} {n} removes only the alias; cpctl peer rm {p} removes the peer"
+                ));
+            }
+            return Err(f);
+        }
+        self.done(
+            &format!("removed {n}; threads with them are kept"),
+            &[step("cpctl peer ls", "see the remaining peers")],
+        );
         Ok(())
     }
 

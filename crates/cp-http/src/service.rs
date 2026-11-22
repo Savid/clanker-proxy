@@ -236,9 +236,16 @@ impl<H: Host> Service<H> {
                 if token.starts_with(prefix::AGENT) =>
             {
                 let t = token.clone();
+                let revoking = op == Op::RevokeOwnToken;
                 let agent = self
                     .host
-                    .core(move |c| c.authenticate_agent(&t))
+                    .core(move |c| {
+                        if revoking {
+                            c.authenticate_agent_to_revoke(&t)
+                        } else {
+                            c.authenticate_agent(&t)
+                        }
+                    })
                     .await
                     .map_err(|e| {
                         if e.kind == ErrorKind::Internal {

@@ -149,4 +149,33 @@ fn a_token_revokes_itself_and_its_webhook() {
     alice
         .call(|c| c.authenticate_agent(new.token.expose()))
         .unwrap();
+
+    // An expired token may still revoke itself, and only that.
+    alice
+        .call(|c| c.delete_agent_token(&name("runner")))
+        .unwrap();
+    let lapsing = alice
+        .call(|c| {
+            c.create_agent_token(AgentTokenInput {
+                name: name("lapsing"),
+                peers: scope(&[]),
+                expires_at: Some(clock.now().plus(Millis::HOUR).at()),
+            })
+        })
+        .unwrap();
+    clock.advance(2 * Millis::HOUR);
+    let token = lapsing.token.expose();
+    assert_eq!(
+        kind(&alice.call(|c| c.authenticate_agent(token))),
+        ErrorKind::Unauthorized
+    );
+    alice
+        .call(|c| c.authenticate_agent_to_revoke(token))
+        .unwrap();
+    alice.call(|c| c.revoke_own_agent_token(token)).unwrap();
+    assert_eq!(
+        kind(&alice.call(|c| c.authenticate_agent_to_revoke(token))),
+        ErrorKind::Unauthorized,
+        "a revoked token is unknown"
+    );
 }

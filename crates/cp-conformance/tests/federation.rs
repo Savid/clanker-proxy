@@ -768,13 +768,26 @@ async fn aliases_name_peers_and_agent_tokens_revoke_themselves() {
             .any(|t| t["name"] == scoped_name.as_str())
     );
 
-    // Removing a peer, by an alias, removes its aliases.
-    far.ok(
-        Method::DELETE,
-        &format!("/api/v1/peers/{other_alias}"),
-        None,
-    )
-    .await;
+    // Removing a peer takes its name, never an alias, and removes its
+    // aliases.
+    let (status, p) = far
+        .call(
+            Method::DELETE,
+            &format!("/api/v1/peers/{other_alias}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, 409, "{p}");
+    assert!(
+        p["detail"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{other_alias} is an alias of {other_as}")),
+        "{p}"
+    );
+    far.get(&format!("/api/v1/peers/{other_as}")).await;
+    far.ok(Method::DELETE, &format!("/api/v1/peers/{other_as}"), None)
+        .await;
     for name in [&other_as, &other_alias] {
         let (status, _) = far
             .call(Method::GET, &format!("/api/v1/peers/{name}"), None)

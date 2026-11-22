@@ -100,15 +100,15 @@ async fn get_peer() {}
 
 #[utoipa::path(delete, path = "/api/v1/peers/{name}", operation_id = "removePeer", tag = "peering",
     summary = "Remove a peer",
-    description = "Their key stops working here, their aliases go, and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL.",
-    params(("name" = Name, Path, description = "The peer's name or an alias.")),
+    description = "Their key stops working here, their aliases go, and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL. Takes the peer's name only: an alias answers 409 and removes nothing.",
+    params(("name" = Name, Path, description = "The peer's name, not an alias.")),
     responses((status = 204, description = "The peer is gone."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn remove_peer() {}
 
 #[utoipa::path(put, path = "/api/v1/peers/{name}/aliases", operation_id = "setPeerAliases", tag = "peering",
     summary = "Set a peer's aliases",
-    description = "Replaces the peer's aliases: other names the owner calls them by here, which every operation that takes a peer's name accepts. Responses and threads keep the peer's name, and peers never see aliases. Peers' names and aliases share one namespace, so this fails with 409 when an alias is the owner's name, a peer's name, another peer's alias, or the name of a removed peer kept for their threads; adding or approving a peer under an alias fails the same way. At most 10.",
+    description = "Replaces the peer's aliases: other names the owner calls them by here, which every operation that takes a peer's name accepts, except removePeer. Responses and threads keep the peer's name, and peers never see aliases. Peers' names and aliases share one namespace, so this fails with 409 when an alias is the owner's name, a peer's name, another peer's alias, the name of a removed peer kept for their threads, or a name being approved; adding or approving a peer under an alias fails the same way. At most 10.",
     params(("name" = Name, Path, description = "The peer's name or an alias.")),
     request_body(content = PeerAliases, description = "Every alias the peer is to have."),
     responses((status = 200, description = "The peer.", body = Peer),
@@ -195,7 +195,7 @@ async fn delete_agent_token() {}
 
 #[utoipa::path(delete, path = "/api/v1/me", operation_id = "revokeOwnToken", tag = "tokens",
     summary = "Revoke the calling agent token",
-    description = "For agent tokens: revokes the token making the call, as deleteAgentToken would, so an integration can uninstall itself. It stops working at once, its webhook is deleted, and its open streams end.",
+    description = "For agent tokens: revokes the token making the call, as deleteAgentToken would, so an integration can uninstall itself; an expired token may still. It stops working at once, its webhook is deleted, and its open streams end.",
     responses((status = 204, description = "Revoked."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn revoke_own_token() {}

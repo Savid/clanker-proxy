@@ -340,6 +340,18 @@ async fn aliases_name_a_peer_everywhere() {
     let listed = json(&alice, &["ls", "--peer", "b"]).await;
     assert_eq!(listed["threads"][0]["id"], sent["id"]);
 
+    let rm = cp(&alice, &["peer", "rm", "bobby"]).await;
+    assert_eq!(rm.exit, cpctl::EXIT_REFUSED, "{}", rm.stderr);
+    assert!(
+        rm.stderr.contains("bobby is an alias of bob")
+            && rm
+                .stderr
+                .contains("cpctl peer unalias bob bobby removes only the alias"),
+        "{}",
+        rm.stderr
+    );
+    assert_eq!(json(&alice, &["peer", "show", "bob"]).await["name"], "bob");
+
     let taken = cp(&alice, &["peer", "alias", "bob", "alice"]).await;
     assert_eq!(taken.exit, cpctl::EXIT_REFUSED, "{}", taken.stderr);
     assert_eq!(
