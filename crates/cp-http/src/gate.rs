@@ -118,6 +118,28 @@ mod tests {
             status(g.check(&get, "/api/v1/peers", Some("Bearer cpa_x"), false, None)),
             200
         );
+        let put = http::Method::PUT;
+        let aliases = "/api/v1/peers/bob/aliases";
+        assert!(matches!(
+            g.check(&put, aliases, owner, false, Some(40)),
+            Ok(Op::SetPeerAliases)
+        ));
+        assert_eq!(status(g.check(&put, aliases, None, false, None)), 401);
+        assert_eq!(
+            status(g.check(&get, aliases, owner, false, None)),
+            405,
+            "only PUT"
+        );
+        let delete = http::Method::DELETE;
+        assert!(matches!(
+            g.check(&delete, "/api/v1/me", Some("Bearer cpa_x"), false, None),
+            Ok(Op::RevokeOwnToken)
+        ));
+        assert_eq!(
+            status(g.check(&delete, "/api/v1/me", owner, false, None)),
+            401,
+            "an agent token's own"
+        );
         let post = http::Method::POST;
         assert_eq!(
             status(g.check(&post, "/api/v1/threads", owner, false, Some(2 << 20))),

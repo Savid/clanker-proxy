@@ -307,13 +307,15 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         }
     }
 
-    /// Opens a thread with a peer in `scope` and queues it for delivery.
+    /// Opens a thread with a peer in `scope`, named by its name or an
+    /// alias, and queues it for delivery.
     pub fn open_thread(
         &mut self,
         n: NewThread,
         scope: Option<&Peers>,
     ) -> Result<ThreadSummary, Error> {
-        if !scope.is_none_or(|s| s.reaches(&n.to)) || !self.peer_exists(&n.to)? {
+        let to = self.resolve_peer(&n.to, scope)?;
+        if !scope.is_none_or(|s| s.reaches(&to)) || !self.peer_exists(&to)? {
             return Err(Error::new(
                 ErrorKind::NotFound,
                 format!("{} is not a peer", n.to),
@@ -326,7 +328,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             id: id.clone(),
             thread: id,
             from: self.me.clone(),
-            to: n.to.clone(),
+            to: to.clone(),
             at: self.now().at(),
             clock: 1,
             action: Action::Open,
@@ -346,7 +348,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             fold,
             title: n.title,
             labels,
-            peer: n.to,
+            peer: to,
             events: 1,
             last_from: self.me.clone(),
             undelivered: 1,
@@ -716,11 +718,17 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     }
 
     /// Threads, newest activity first, among threads with peers in `scope`.
+    /// The peer filter may be an alias.
     pub fn threads(
         &self,
         q: &ListThreadsQuery,
         scope: Option<&Peers>,
     ) -> Result<Vec<ThreadSummary>, Error> {
+        let peer = q
+            .peer
+            .as_ref()
+            .map(|p| self.resolve_peer(p, scope))
+            .transpose()?;
         let turn = q.turn.map(|t| match t {
             TurnFilter::Mine => "mine",
             TurnFilter::Theirs => "theirs",
@@ -741,7 +749,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             &[
                 scope_json(scope),
                 q.state.map(cp_thread::State::as_str).into(),
-                q.peer.as_ref().map(Name::as_str).into(),
+                peer.as_ref().map(Name::as_str).into(),
                 q.label.as_ref().map(|l| l.as_str().to_string()).into(),
                 turn.into(),
                 text(&self.me),

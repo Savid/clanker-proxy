@@ -67,10 +67,13 @@ pub(crate) fn from_problem(
         404 => (EXIT_NOT_FOUND, Some(not_found_hint(command, agent))),
         409 | 422 => (
             EXIT_REFUSED,
-            if command == "token add" {
-                Some("choose another name, or revoke the existing one with cpctl token rm <name>".to_string())
-            } else {
-                thread_ref.map(|r| format!("cpctl show {r} lists what you can do now, as commands"))
+            match command {
+                "token add" => Some("choose another name, or revoke the existing one with cpctl token rm <name>".to_string()),
+                // Only when the name is what was refused: taken by a peer,
+                // an alias, a removed peer or the owner.
+                "approve" if message.contains("another name") => Some("cpctl approve <id> --as <name> gives them another name".to_string()),
+                "peer alias" => Some("cpctl peer ls lists peers' names and aliases".to_string()),
+                _ => thread_ref.map(|r| format!("cpctl show {r} lists what you can do now, as commands")),
             },
         ),
         502 => (
@@ -105,10 +108,52 @@ fn not_found_hint(command: &str, agent: bool) -> String {
     } else {
         match command {
             "approve" | "deny" => "cpctl requests lists pending requests and their IDs".into(),
-            "send" | "peer show" | "peer rm" => {
+            "send" | "peer show" | "peer rm" | "peer alias" | "peer unalias" => {
                 "cpctl peer ls lists peers; cpctl peer add <name> <url> connects someone new".into()
             }
             _ => "cpctl ls lists threads; a <ref> is a thread ID or a unique prefix of it".into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cp_api::ErrorKind;
+
+    fn hint(status: u16, detail: &str) -> Option<String> {
+        let kind = ErrorKind::from_status(status).unwrap();
+        from_problem(
+            status,
+            &Problem::new(kind, Some(detail.into())),
+            "approve",
+            None,
+            false,
+        )
+        .hint
+    }
+
+    #[test]
+    fn approve_suggests_as_only_when_the_name_was_refused() {
+        for refused in [
+            "bobby is an alias of bob; give this one another name",
+            "another peer is called bob; approve with another name",
+            "bob was a peer at https://bob.test and threads with them are kept; give this one another name",
+            "alice is this daemon's owner; choose another name",
+        ] {
+            let status = if refused.contains("owner") { 422 } else { 409 };
+            assert!(
+                hint(status, refused).is_some_and(|h| h.contains("--as")),
+                "{refused}"
+            );
+        }
+        for other in [
+            "another peering approval is confirming; retry in a few seconds",
+            "the approval timed out; approve again",
+            "bob is already a peer at https://bob.test; use that name or remove them first",
+            "bob changed while approving; approve again",
+        ] {
+            assert_eq!(hint(409, other), None, "{other}");
         }
     }
 }

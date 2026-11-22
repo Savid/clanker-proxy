@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.6.5"
+    "version": "0.7.0"
   },
   "servers": [
     {
@@ -57,7 +57,7 @@
           "tokens"
         ],
         "summary": "Create an agent token",
-        "description": "A token that can send, list, read, stream and act on threads and read peers, optionally only some peers, but cannot peer, make tokens or change the owner's webhooks. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
+        "description": "A token that can send, list, read, stream and act on threads and read peers, optionally only some peers, but cannot peer, make tokens or change the owner's webhooks. Peers may be named by alias; the token keeps their names. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
         "operationId": "createAgentToken",
         "requestBody": {
           "description": "The new token's name, peers and expiry.",
@@ -105,7 +105,7 @@
           "tokens"
         ],
         "summary": "Revoke an agent token",
-        "description": "The token stops working at once, and its open streams end.",
+        "description": "The token stops working at once, its webhook is deleted, and its open streams end.",
         "operationId": "deleteAgentToken",
         "parameters": [
           {
@@ -285,6 +285,34 @@
           {
             "ownerToken": []
           },
+          {
+            "agentToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "tokens"
+        ],
+        "summary": "Revoke the calling agent token",
+        "description": "For agent tokens: revokes the token making the call, as deleteAgentToken would, so an integration can uninstall itself; an expired token may still. It stops working at once, its webhook is deleted, and its open streams end.",
+        "operationId": "revokeOwnToken",
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
           {
             "agentToken": []
           }
@@ -493,7 +521,7 @@
           "peering"
         ],
         "summary": "Approve a peering request",
-        "description": "First sends the requester's daemon, at the URL it gave, an acceptance signed for its key: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls signed with the requester's key answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
+        "description": "First sends the requester's daemon, at the URL it gave, an acceptance signed for its key: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 409 when that name is another peer's name or alias: give another. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls signed with the requester's key answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
         "operationId": "approveRequest",
         "parameters": [
           {
@@ -552,7 +580,7 @@
           "peering"
         ],
         "summary": "List peers",
-        "description": "Every peer, requested or active. An agent token limited to peers lists only those.",
+        "description": "Every peer, requested or active, with its aliases. An agent token limited to peers lists only those.",
         "operationId": "listPeers",
         "responses": {
           "200": {
@@ -590,7 +618,7 @@
           "peering"
         ],
         "summary": "Ask another daemon to become peers",
-        "description": "Makes a secret, saves the peer as requested, and sends a peering request to the daemon at the URL; if that fails, nothing is kept and it answers 502. Events to them queue until their owner approves. Fails with 409 when the name or URL already belongs to a peer, or when that daemon has already asked to peer (approve its request instead). Redirects are refused.",
+        "description": "Makes a secret, saves the peer as requested, and sends a peering request to the daemon at the URL; if that fails, nothing is kept and it answers 502. Events to them queue until their owner approves. Fails with 409 when the name is a peer's name or alias, the URL already belongs to a peer, or that daemon has already asked to peer (approve its request instead). Redirects are refused.",
         "operationId": "addPeer",
         "requestBody": {
           "description": "Who to ask, and where.",
@@ -644,7 +672,7 @@
           {
             "name": "name",
             "in": "path",
-            "description": "The peer's name.",
+            "description": "The peer's name or an alias.",
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/Name"
@@ -687,13 +715,13 @@
           "peering"
         ],
         "summary": "Remove a peer",
-        "description": "Their key stops working here and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL.",
+        "description": "Their key stops working here, their aliases go, and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL. Takes the peer's name only: an alias answers 409 and removes nothing.",
         "operationId": "removePeer",
         "parameters": [
           {
             "name": "name",
             "in": "path",
-            "description": "The peer's name.",
+            "description": "The peer's name, not an alias.",
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/Name"
@@ -703,6 +731,65 @@
         "responses": {
           "204": {
             "description": "The peer is gone."
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/peers/{name}/aliases": {
+      "put": {
+        "tags": [
+          "peering"
+        ],
+        "summary": "Set a peer's aliases",
+        "description": "Replaces the peer's aliases: other names the owner calls them by here, which every operation that takes a peer's name accepts, except removePeer. Responses and threads keep the peer's name, and peers never see aliases. Peers' names and aliases share one namespace, so this fails with 409 when an alias is the owner's name, a peer's name, another peer's alias, the name of a removed peer kept for their threads, or a name being approved; adding or approving a peer under an alias fails the same way. At most 10.",
+        "operationId": "setPeerAliases",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The peer's name or an alias.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Every alias the peer is to have.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerAliases"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The peer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Peer"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error.",
@@ -768,7 +855,7 @@
           "threads"
         ],
         "summary": "List threads",
-        "description": "Newest activity first. An agent token limited to peers lists only threads with those peers.",
+        "description": "Newest activity first. The peer filter takes a peer's name or an alias. An agent token limited to peers lists only threads with those peers.",
         "operationId": "listThreads",
         "parameters": [
           {
@@ -856,7 +943,7 @@
           "threads"
         ],
         "summary": "Open a thread with a peer",
-        "description": "The thread is stored and queued for delivery to the peer. An agent token limited to peers opens threads only with those; any other answers 404 as if it were not a peer.",
+        "description": "The thread is stored and queued for delivery to the peer, named by its name or an alias. An agent token limited to peers opens threads only with those; any other answers 404 as if it were not a peer.",
         "operationId": "openThread",
         "requestBody": {
           "description": "The thread to open.",
@@ -1560,6 +1647,21 @@
           }
         }
       },
+      "Aliases": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "description": "A participant's name: lower-case letters and digits with single inner hyphens.",
+          "examples": [
+            "alice"
+          ],
+          "maxLength": 39,
+          "minLength": 1,
+          "pattern": "^[a-z0-9](-?[a-z0-9])*$"
+        },
+        "description": "Other names for the peer, in the same namespace as peers' names; a repeated one counts once.",
+        "maxItems": 10
+      },
       "Approval": {
         "type": "object",
         "description": "How to approve a peering request.",
@@ -1964,6 +2066,7 @@
         "description": "A daemon this one exchanges threads with.",
         "required": [
           "name",
+          "aliases",
           "url",
           "status",
           "code",
@@ -1972,6 +2075,14 @@
         "properties": {
           "addedAt": {
             "$ref": "#/components/schemas/At"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Name"
+            },
+            "description": "Other names the owner calls them by here, sorted. Operations that\ntake a peer's name accept these too, except removePeer.",
+            "maxItems": 10
           },
           "code": {
             "$ref": "#/components/schemas/Code"
@@ -1997,6 +2108,20 @@
             ]
           }
         }
+      },
+      "PeerAliases": {
+        "type": "object",
+        "description": "A peer's aliases, replacing the ones it has.",
+        "required": [
+          "aliases"
+        ],
+        "properties": {
+          "aliases": {
+            "$ref": "#/components/schemas/Aliases",
+            "description": "Empty removes them all."
+          }
+        },
+        "additionalProperties": false
       },
       "PeerInput": {
         "type": "object",
@@ -2094,7 +2219,7 @@
           "minLength": 1,
           "pattern": "^[a-z0-9](-?[a-z0-9])*$"
         },
-        "description": "Peers this applies to, by name; each must be a peer or a former one. Empty: every peer, including peers added later.",
+        "description": "Peers this applies to, each a peer or a former one; an alias is kept as the peer's name. Empty: every peer, including peers added later.",
         "maxItems": 50,
         "uniqueItems": true
       },

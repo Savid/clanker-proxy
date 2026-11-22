@@ -11,10 +11,10 @@
 
 import { execFile } from 'node:child_process'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -33,6 +33,9 @@ const ampCLI = process.env.CP_INBOX_AMP || 'amp'
 // conversation handles which cpd thread, which the tool guard relies on.
 const stateDir = join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'cp-inbox')
 const stateFile = join(stateDir, 'state.json')
+// Left by an uninstall, so an orb that still has the settings neither
+// registers again nor runs anything in conversations.
+const tombstone = join(stateDir, 'uninstalled')
 // Conversations share the orb. Each one's commands run in a sandbox that
 // sees, besides the system, only the checkout and the PATH directories in
 // your home, read-only, and the conversation's own directory under workDir.
@@ -134,6 +137,11 @@ export default async function (amp: PluginAPI) {
 				? { action: 'reject-and-continue', message: `cp-inbox ${why}; nothing runs in clanker-proxy conversations until the owner repairs it.` }
 				: { action: 'allow' }
 		})
+	if (await lstat(tombstone).then(() => true, () => false)) {
+		amp.logger.log('cp-inbox: uninstalled here; delete the project')
+		refuse('is uninstalled')
+		return
+	}
 	const cpURL = process.env.CP_URL?.trim().replace(/\/+$/, '')
 	const cpToken = process.env.CP_TOKEN?.trim()
 	if (!cpURL || !cpToken) {
@@ -162,6 +170,7 @@ export default async function (amp: PluginAPI) {
 		return
 	}
 	let lastSweep = 0
+	let uninstalled = false
 	// Handlers can run concurrently; two events for a new cpd thread must not
 	// each start a conversation.
 	let queue = Promise.resolve()
@@ -189,6 +198,46 @@ export default async function (amp: PluginAPI) {
 		)
 	const archive = async (id: ThreadID) => {
 		if (!(await threads(['archive', id]))) amp.logger.log('cp-inbox: could not archive an ended conversation')
+	}
+
+	// readPeers is each peer's aliases, the other names you gave them in cpd,
+	// by name; undefined when cpd cannot say.
+	const readPeers = async (): Promise<Map<string, string[]> | undefined> => {
+		try {
+			const res = await fetch(`${cpURL}/api/v1/peers`, { headers: { authorization: `Bearer ${cpToken}` }, redirect: 'error', signal: AbortSignal.timeout(10_000) })
+			if (!res.ok) return undefined
+			const { peers } = (await res.json()) as { peers?: { name?: unknown; aliases?: unknown }[] }
+			const names = (v: unknown): v is string => typeof v === 'string' && peerName.test(v) && v.length <= 39
+			return new Map((peers ?? []).filter((p) => names(p.name)).map((p) => [p.name as string, Array.isArray(p.aliases) ? p.aliases.filter(names) : []]))
+		} catch {
+			return undefined
+		}
+	}
+	// A peer's thread is titled with its name and aliases, "bob (bobby, rob)",
+	// which is how cp-peers, in your other threads, knows them. One pass at a
+	// time, against the title the thread has now: Amp, you or another thread
+	// may have changed it. Without cpd's answer it names them only.
+	let naming: Promise<void> | undefined
+	const nameThreads = (): Promise<void> =>
+		(naming ??= (async () => {
+			const peers = await readPeers()
+			for (const [peer, hub] of Object.entries(state.hubs)) {
+				const current = await amp.threads
+					.get(hub)
+					.title.get()
+					.catch(() => null)
+				const title = peers ? peerTitle(peer, peers.get(peer) ?? []) : current?.split(' (')[0] === peer ? current : peer
+				if (current !== title && !(await threads(['rename', hub, title]))) amp.logger.log(`cp-inbox: could not name ${peer}'s thread`)
+			}
+		})()
+			.catch((err) => amp.logger.log('cp-inbox: could not name the peer threads:', err instanceof Error ? err.message : err))
+			.finally(() => {
+				naming = undefined
+			}))
+	// resolvePeer is the peer an alias names, or the name as given.
+	const resolvePeer = async (name: string): Promise<string> => {
+		for (const [peer, aliases] of (await readPeers()) ?? []) if (aliases.includes(name)) return peer
+		return name
 	}
 
 	// conversationAgent runs a conversation on the inbox's model with only
@@ -286,8 +335,7 @@ export default async function (amp: PluginAPI) {
 				void hub
 					.waitForResponse({ timeoutMs: 5 * 60_000 })
 					.catch(() => undefined)
-					.then(() => threads(['rename', hub.id, peer]))
-					.then((ok) => ok || amp.logger.log(`cp-inbox: could not name ${peer}'s thread`))
+					.then(() => nameThreads())
 				return hub.id
 			} catch (err) {
 				ctx.logger.log(`cp-inbox: no thread for ${peer}, so its conversation starts under the inbox:`, err instanceof Error ? err.message : err)
@@ -577,7 +625,7 @@ export default async function (amp: PluginAPI) {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				peer: { type: 'string', description: "The peer's name." },
+				peer: { type: 'string', description: "The peer's name, or one of its aliases." },
 				title: { type: 'string', description: 'What you ask or tell them, in one line.' },
 				body: { type: 'string', description: 'Everything they need, in markdown. There are no attachments.' },
 				fyi: { type: 'boolean', description: 'No answer expected.' },
@@ -586,8 +634,9 @@ export default async function (amp: PluginAPI) {
 			required: ['peer', 'title', 'body'],
 		},
 		async execute(input, ctx) {
-			const { peer, title, body, fyi, replyTo } = input as { peer?: unknown; title?: unknown; body?: unknown; fyi?: unknown; replyTo?: unknown }
-			if (typeof peer !== 'string' || !peerName.test(peer) || peer.length > 39) return 'cp_send: peer must be a peer name.'
+			const { peer: named, title, body, fyi, replyTo } = input as { peer?: unknown; title?: unknown; body?: unknown; fyi?: unknown; replyTo?: unknown }
+			if (typeof named !== 'string' || !peerName.test(named) || named.length > 39) return 'cp_send: peer must be a peer name or alias.'
+			const peer = await resolvePeer(named)
 			if (typeof title !== 'string' || typeof body !== 'string' || !title.trim() || !body.trim()) return 'cp_send: give a title and a body.'
 			const subject = await conversationFor(ctx.thread.id)
 			// A conversation reads its peer's words, and a peer's thread works
@@ -639,6 +688,7 @@ export default async function (amp: PluginAPI) {
 		try {
 			const subject = await conversationFor(event.thread.id)
 			if (subject === undefined) return { action: 'allow' }
+			if (uninstalled) return reject('the inbox is uninstalled.')
 			const command = amp.helpers.shellCommandFromToolCall(event)?.command
 			if (command === undefined) {
 				const verdict = checkTool(event.tool, event.input)
@@ -675,6 +725,108 @@ export default async function (amp: PluginAPI) {
 			return reject('the guard failed. Call cp_ask_owner and explain.')
 		}
 	})
+
+	// Uninstalling removes what the plugin set up and can reach, before you
+	// delete the project, which takes the plugin with it: nothing is left to
+	// clean up after.
+	amp.registerCommand(
+		'cp-uninstall',
+		{
+			title: 'Uninstall the inbox',
+			category: 'clanker-proxy',
+			description: "Revokes the inbox's agent token and webhook, archives its threads, deletes the project's CP_URL and CP_TOKEN, and removes cp-peers if no other inbox needs it.",
+		},
+		async (ctx) => {
+			// The state lives in the inbox's orb; elsewhere there is nothing to undo.
+			const saved = await loadState().catch(() => state)
+			const ids = [...new Set([...saved.known, ...state.known, ...Object.values(saved.hubs), ...Object.values(state.hubs)])]
+			if (!ids.length) {
+				await ctx.ui.notify('clanker-proxy: run Uninstall from the inbox or one of its threads; this orb has none of its threads.').catch(() => undefined)
+				return
+			}
+			const ok = await ctx.ui
+				.confirm({
+					title: 'Uninstall the clanker-proxy inbox?',
+					message: [
+						'This:',
+						"- revokes the inbox's agent token at your daemon, and its webhook with it, so cpd stops calling Amp;",
+						`- archives this inbox's ${ids.length} peer threads and conversations;`,
+						"- deletes this project's `CP_URL` and `CP_TOKEN` secrets;",
+						'- removes `cp-peers` from your personal plugins, unless another inbox still has peer threads.',
+						'',
+						"The conversations' directories stay in this orb, under `~/cp-work`, until you delete the project: fetch any work you want first.",
+					].join('\n'),
+					confirmButtonText: 'Uninstall',
+					requireHuman: true,
+				})
+				.catch(() => false)
+			if (!ok) return
+			const report: string[] = []
+			const step = async (what: string, act: () => Promise<string | void>) => {
+				try {
+					const note = await act()
+					report.push(`- ${what}${note ? `: ${note}` : ''}`)
+				} catch (err) {
+					// Only the first line: a command's error quotes its output.
+					report.push(`- ${what}: failed, ${(err instanceof Error ? err.message : String(err)).split('\n')[0]}`)
+				}
+			}
+			// Nothing else goes until cpd stops calling: without that, the
+			// inbox would bring back what this removes.
+			const res = await fetch(`${cpURL}/api/v1/me`, { method: 'DELETE', headers: { authorization: `Bearer ${cpToken}` }, redirect: 'error', signal: AbortSignal.timeout(15_000) }).catch(
+				() => undefined,
+			)
+			if (!res || (!res.ok && res.status !== 401)) {
+				await ctx.ui
+					.confirm({
+						title: 'Nothing was uninstalled',
+						message: `cpd did not revoke the inbox's agent token (${res ? `it answered ${res.status}` : 'it is unreachable'}). Update your daemon, or revoke the token yourself (\`cpctl token ls\`, then \`cpctl token rm <name>\`), then run this again.`,
+						confirmButtonText: 'Close',
+					})
+					.catch(() => undefined)
+				return
+			}
+			report.push(res.ok ? "- Revoked the inbox's agent token and webhook" : "- The inbox's agent token: cpd no longer accepts it")
+			uninstalled = true
+			await mkdir(stateDir, { recursive: true, mode: 0o700 })
+			await writeFile(tombstone, '')
+			await step('Archived its peer threads and conversations', async () => {
+				// The thread running this goes last.
+				const here = ctx.thread?.id
+				let archived = 0
+				for (const id of [...ids.filter((id) => id !== here), ...ids.filter((id) => id === here)]) if (await threads(['archive', id])) archived++
+				return `${archived} of ${ids.length}`
+			})
+			await step("Deleted this project's CP_URL and CP_TOKEN", async () => {
+				const project = process.env.AMP_PROJECT_ID
+				if (!project) throw new Error('this orb names no project')
+				for (const name of ['CP_URL', 'CP_TOKEN']) await run(ampCLI, ['secrets', 'delete', '--project', project, '--yes', name], { timeout: 30_000 })
+			})
+			await step('Removed cp-peers from your personal plugins', async () => {
+				const { stdout } = await run(ampCLI, ['threads', 'search', 'label:cp-peer archived:false', '--json'], { timeout: 30_000 })
+				const left: unknown = JSON.parse(stdout)
+				if (Array.isArray(left) && left.length) return `kept: another inbox has ${left.length} peer threads`
+				const dir = await mkdtemp(join(tmpdir(), 'cp-uninstall-'))
+				try {
+					await run(ampCLI, ['clone', 'user-plugins', dir], { timeout: 60_000 })
+					if (!(await lstat(join(dir, 'cp-peers')).then(() => true, () => false))) return 'it was not there'
+					await run('git', ['-C', dir, 'rm', '-r', '-q', 'cp-peers'])
+					await run('git', ['-C', dir, 'commit', '-q', '-m', 'Remove cp-peers'])
+					await run('git', ['-C', dir, 'push', '-q'], { timeout: 60_000 })
+				} finally {
+					await rm(dir, { recursive: true, force: true })
+				}
+			})
+			await step("Deleted the inbox's state", () => rm(stateFile, { force: true }))
+			await ctx.ui
+				.confirm({
+					title: 'The inbox is uninstalled',
+					message: `${report.join('\n')}\n\nLeft for you: delete the \`cp-inbox\` trigger in Settings → Triggers, archive the inbox thread, and delete the project, which takes this orb and \`~/cp-work\` with it.`,
+					confirmButtonText: 'Done',
+				})
+				.catch(() => undefined)
+		},
+	)
 
 	// Each conversation has a button that shows you its cpd thread, so peer
 	// text reaches you without passing through an agent.
@@ -728,6 +880,7 @@ export default async function (amp: PluginAPI) {
 		headers: ['webhook-id', 'webhook-timestamp', 'webhook-signature'],
 		handler: (event, ctx) =>
 			serial(async () => {
+				if (uninstalled) return
 				const n = verify(event, await key)
 				if (!n) {
 					ctx.logger.log('cp-inbox: dropped unverified event', event.id)
@@ -739,6 +892,7 @@ export default async function (amp: PluginAPI) {
 				try {
 					await inbox.handle(ctx, n)
 					await inbox.tellAsker(n)
+					void nameThreads()
 					state.seen.push(n.id)
 					state.seen.splice(0, state.seen.length - 1000)
 					await inbox.sweep(ctx)
@@ -750,6 +904,21 @@ export default async function (amp: PluginAPI) {
 	const signing = webhookKey(cpToken, url)
 	setKey(signing)
 	void register(amp, cpURL, cpToken, url, signing)
+	// Aliases change in cpd without an event, so their titles follow within
+	// minutes while the orb is awake, and on every event.
+	void nameThreads()
+	setInterval(() => void nameThreads(), 10 * 60_000).unref()
+}
+
+// peerTitle is a peer thread's title: the peer's name, and as many of its
+// aliases as fit a readable title.
+function peerTitle(peer: string, aliases: string[]): string {
+	const shown: string[] = []
+	for (const alias of aliases) {
+		if (`${peer} (${[...shown, alias].join(', ')})`.length > 120) break
+		shown.push(alias)
+	}
+	return shown.length ? `${peer} (${shown.join(', ')})` : peer
 }
 
 // askedLabel marks the Amp thread that asked for a cpd thread. It holds the

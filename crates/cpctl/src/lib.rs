@@ -284,15 +284,12 @@ impl App {
             "peer add" => self.peer_add(&arg(0), &arg(1), p).await,
             "peer ls" => self.peer_ls().await,
             "peer show" => self.peer_show(&arg(0)).await,
-            "peer rm" => {
-                let n = name(&arg(0))?;
-                self.client.delete(&format!("/api/v1/peers/{n}")).await?;
-                self.done(
-                    &format!("removed {n}; threads with them are kept"),
-                    &[step("cpctl peer ls", "see the remaining peers")],
-                );
-                Ok(())
+            "peer alias" | "peer unalias" => {
+                let given = p.args.get(1..).unwrap_or_default();
+                self.peer_alias(&arg(0), given, command == "peer alias")
+                    .await
             }
+            "peer rm" => self.peer_rm(&arg(0)).await,
             "requests" => self.requests().await,
             "approve" => self.approve(&arg(0), p).await,
             "deny" => {
@@ -455,18 +452,123 @@ impl App {
     async fn peer_show(&mut self, n: &str) -> Result<(), Failure> {
         let n = name(n)?;
         let (peer, raw): (Peer, _) = self.client.get(&format!("/api/v1/peers/{n}")).await?;
+        let owner = !self.client.is_agent();
         self.print(&raw, |w| {
             output::peers(w, std::slice::from_ref(&peer));
-            next(
-                w,
-                &[
-                    step(
-                        format!(r#"cpctl send {n} "<title>" -m "<details>""#),
-                        "ask them for something",
-                    ),
-                    step(format!("cpctl ls --peer {n}"), "threads with them"),
-                ],
-            );
+            let n = &peer.name;
+            let mut steps = vec![
+                step(
+                    format!(r#"cpctl send {n} "<title>" -m "<details>""#),
+                    "ask them for something",
+                ),
+                step(format!("cpctl ls --peer {n}"), "threads with them"),
+            ];
+            if owner {
+                steps.push(step(
+                    format!("cpctl peer alias {n} <alias>"),
+                    "another name to call them by",
+                ));
+            }
+            next(w, &steps);
+        });
+        Ok(())
+    }
+
+    async fn peer_rm(&mut self, n: &str) -> Result<(), Failure> {
+        let n = name(n)?;
+        if let Err(mut f) = self.client.delete(&format!("/api/v1/peers/{n}")).await {
+            // cpd refuses an alias here; name the two commands it may have
+            // meant.
+            if f.status == Some(409)
+                && f.message.contains(" is an alias of ")
+                && let Ok((peer, _)) = self.client.get::<Peer>(&format!("/api/v1/peers/{n}")).await
+            {
+                let p = &peer.name;
+                f.hint = Some(format!(
+                    "cpctl peer unalias {p} {n} removes only the alias; cpctl peer rm {p} removes the peer"
+                ));
+            }
+            return Err(f);
+        }
+        self.done(
+            &format!("removed {n}; threads with them are kept"),
+            &[step("cpctl peer ls", "see the remaining peers")],
+        );
+        Ok(())
+    }
+
+    /// Adds or removes aliases: reads the peer's, then replaces them all.
+    async fn peer_alias(&mut self, n: &str, given: &[String], add: bool) -> Result<(), Failure> {
+        let n = name(n)?;
+        let given: Vec<Name> = given.iter().map(|a| name(a)).collect::<Result<_, _>>()?;
+        let (peer, _): (Peer, _) = self.client.get(&format!("/api/v1/peers/{n}")).await?;
+        let mut aliases = peer.aliases.clone();
+        if add {
+            for a in given {
+                if !aliases.contains(&a) {
+                    aliases.push(a);
+                }
+            }
+            if aliases.len() > cp_api::MAX_ALIASES {
+                return Err(Failure::usage(format!(
+                    "{} would have {} aliases; a peer has at most {}",
+                    peer.name,
+                    aliases.len(),
+                    cp_api::MAX_ALIASES
+                ))
+                .hint(format!(
+                    "remove some with cpctl peer unalias {} <alias>",
+                    peer.name
+                )));
+            }
+        } else {
+            for a in &given {
+                if !aliases.contains(a) {
+                    return Err(Failure::new(
+                        EXIT_NOT_FOUND,
+                        format!("{a} is not an alias of {}", peer.name),
+                    )
+                    .hint(format!("cpctl peer show {} lists its aliases", peer.name)));
+                }
+            }
+            aliases.retain(|a| !given.contains(a));
+        }
+        let body = cp_api::PeerAliases {
+            aliases: cp_api::Aliases::try_from(aliases)
+                .map_err(|e| Failure::usage(e.to_string()))?,
+        };
+        let (peer, raw): (Peer, _) = self
+            .client
+            .put(&format!("/api/v1/peers/{}/aliases", peer.name), &body)
+            .await?;
+        self.print(&raw, |w| {
+            let n = &peer.name;
+            match peer.aliases.first() {
+                None => {
+                    let _ = writeln!(w, "{n} has no aliases");
+                    next(
+                        w,
+                        &[step(
+                            format!("cpctl peer alias {n} <alias>"),
+                            "give them one",
+                        )],
+                    );
+                }
+                Some(first) => {
+                    let all: Vec<&str> = peer.aliases.iter().map(Name::as_str).collect();
+                    let _ = writeln!(w, "{n} is also called {}", all.join(", "));
+                    next(
+                        w,
+                        &[
+                            step(
+                                format!(r#"cpctl send {first} "<title>" -m "<details>""#),
+                                "an alias works wherever a peer's name does",
+                            ),
+                            step(format!("cpctl peer unalias {n} <alias>"), "remove one"),
+                        ],
+                    );
+                }
+            }
         });
         Ok(())
     }

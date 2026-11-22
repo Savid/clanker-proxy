@@ -6,7 +6,9 @@ use cp_thread::{
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::text::{Code, Cursor, DaemonUrl, Note, Peers, PublicKey, RequestRef, Token, Version};
+use crate::text::{
+    Aliases, Code, Cursor, DaemonUrl, Note, Peers, PublicKey, RequestRef, Token, Version,
+};
 
 // ---- system ----
 
@@ -124,6 +126,10 @@ pub enum PeerStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Peer {
     pub name: Name,
+    /// Other names the owner calls them by here, sorted. Operations that
+    /// take a peer's name accept these too, except removePeer.
+    #[schema(max_items = 10)]
+    pub aliases: Vec<Name>,
     pub url: DaemonUrl,
     pub status: PeerStatus,
     pub code: Code,
@@ -131,6 +137,14 @@ pub struct Peer {
     /// The release the peer's daemon last reported calling this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
+}
+
+/// A peer's aliases, replacing the ones it has.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerAliases {
+    /// Empty removes them all.
+    pub aliases: Aliases,
 }
 
 /// Peers, by name.

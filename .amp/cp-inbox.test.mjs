@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -30,10 +30,18 @@ async function fixture(t, base) {
 	const checkout = join(home, 'workspace', 'repo')
 	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_INBOX_AMP: ampCLI, CP_URL: 'https://cpd.test/', CP_TOKEN: token, CP_INBOX_HOME: home, AMP_WORKING_DIRECTORY: checkout }
 	const realFetch = globalThis.fetch
-	// What the broker passed on to cpd.
+	// What the broker passed on to cpd, the peers cpd lists, and self-revocations.
 	const forwarded = []
-	globalThis.fetch = async (url, init) => {
+	let peerList = []
+	const revoked = []
+	let revokeStatus = 204
+	globalThis.fetch = async (url, init = {}) => {
 		if (String(url).endsWith('/api/v1/me/webhook')) registrations.push({ url, init })
+		else if (String(url).endsWith('/api/v1/peers')) return Response.json({ peers: peerList })
+		else if (String(url).endsWith('/api/v1/me') && init.method === 'DELETE') {
+			revoked.push(init.headers.authorization)
+			return new Response(null, { status: revokeStatus })
+		}
 		else forwarded.push({ method: init.method, url: String(url), authorization: init.headers.authorization, body: init.body && Buffer.from(init.body).toString() })
 		return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
 	}
@@ -92,6 +100,25 @@ if (args[1] === 'search') {
     const found = JSON.parse(fs.readFileSync(path.join(__dirname, 'search.json'), 'utf8').toString() || '{}')
     process.stdout.write(JSON.stringify(found[args[2]] ?? []))
 }
+// Your personal plugins: a repository with cp-peers in it.
+if (args[0] === 'clone' && args[1] === 'user-plugins') {
+    const { execFileSync } = require('node:child_process')
+    const remote = path.join(__dirname, 'user-plugins.git')
+    const git = (...a) => execFileSync('git', a, { stdio: 'ignore' })
+    if (!fs.existsSync(remote)) {
+        git('init', '-q', '--bare', remote)
+        const seed = path.join(__dirname, 'seed')
+        git('clone', '-q', remote, seed)
+        fs.mkdirSync(path.join(seed, 'cp-peers'))
+        fs.writeFileSync(path.join(seed, 'cp-peers', 'index.ts'), 'x')
+        fs.mkdirSync(path.join(seed, 'other'))
+        fs.writeFileSync(path.join(seed, 'other', 'index.ts'), 'x')
+        git('-C', seed, 'add', '.')
+        git('-C', seed, 'commit', '-q', '-m', 'cp-peers')
+        git('-C', seed, 'push', '-q', 'origin', 'HEAD')
+    }
+    git('clone', '-q', remote, args[2])
+}
 `, { mode: 0o700 })
 	await writeFile(join(dir, 'search.json'), '{}')
 	const ampCalls = async () => (await readFile(join(dir, 'amp.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l))
@@ -119,6 +146,8 @@ if (args[1] === 'search') {
 	const failing = new Set()
 	const handle = (id) => ({
 		id,
+		// Its title is the last one the amp CLI gave it.
+		title: { get: async () => (await ampCalls()).filter((c) => c[1] === 'rename' && c[2] === id).at(-1)?.[3] ?? null },
 		state: { get: async () => threadState },
 		waitForResponse: async () => undefined,
 		labels: async () => labels[id] ?? [],
@@ -184,9 +213,42 @@ if (args[1] === 'search') {
 		await instance.default({ ...amp, on() {}, createWebhook: async () => ({ url: hookURL }), registerTool: (tool) => { own[tool.name] = tool } })
 		return { send: (thread, input) => own.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }) }
 	}
+	// The plugin loaded again in this orb, as after a restart.
+	const reload = async () => {
+		let check
+		let webhooks = 0
+		const commands = {}
+		const instance = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
+		await instance.default({
+			...amp,
+			on(name, fn) {
+				if (name === 'tool.call') check = fn
+			},
+			createWebhook: async () => {
+				webhooks++
+				return { url: hookURL }
+			},
+			registerTool() {},
+			registerCommand(id, options, run) {
+				commands[id] = run
+			},
+		})
+		return {
+			webhooks,
+			check: (thread, tool, input) => check({ thread: { id: thread }, tool, input }, { ui }),
+			command: (id, thread) => commands[id]({ ui, thread: handle(thread) }),
+		}
+	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		home, checkout, own: join(home, 'cp-work', subject), forwarded, httpFetch: realFetch,
+		reload,
+		home, checkout, own: join(home, 'cp-work', subject), forwarded, httpFetch: realFetch, revoked, dir, stateFile,
+		setPeers: (list) => { peerList = list },
+		revokeAnswers: (status) => { revokeStatus = status },
+		renames: async () => (await ampCalls()).filter((c) => c[1] === 'rename'),
+		until: async (check) => {
+			for (let i = 0; i < 100 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 20))
+		},
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
@@ -551,35 +613,103 @@ git config --global user.name
 	].join('\n'))
 })
 
-test("a peer's thread is named after the peer once it has answered", async (t) => {
+test("a peer's thread is named after the peer", async (t) => {
 	const f = await fixture(t)
 	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000031'))
-	for (let i = 0; i < 100 && !(await f.ampCalls()).length; i++) await new Promise((resolve) => setTimeout(resolve, 20))
-	assert.deepEqual(await f.ampCalls(), [['threads', 'rename', 'thread-1', 'alice']])
+	await f.until(async () => (await f.renames()).length)
+	await new Promise((resolve) => setTimeout(resolve, 100))
+	assert.deepEqual(await f.renames(), [['threads', 'rename', 'thread-1', 'alice']], 'once, while its title stays')
 })
 
-test('a conversation is archived when its thread ends, and comes back with it', async (t) => {
+test("a peer's thread is titled with its aliases, which follow cpd, and cp_send takes them", async (t) => {
 	const f = await fixture(t)
-	const ampCalls = f.ampCalls
-	f.ampCalls = async () => (await ampCalls()).filter((c) => c[1] !== 'search')
-	f.idle()
-	await f.respond({ state: 'closed' })
-	await f.deliver(f.event('thread.close', 'closed'))
-	assert.deepEqual(await f.ampCalls(), [['threads', 'archive', 'conversation']], 'ended by the peer while idle')
-	assert.equal(f.messages.length, 0)
+	await f.deliver(f.event('thread.open', 'open', true, '00000000-0000-4000-8000-000000000032'))
+	const hub = f.created[0].id
+	f.setPeers([{ name: 'alice', aliases: ['ally', 'al'] }])
+	await f.deliver(f.event('thread.reply', 'open', true, '00000000-0000-4000-8000-000000000032'))
+	await f.until(async () => (await f.renames()).some((c) => c[3] === 'alice (ally, al)'))
+	assert.equal((await f.renames()).at(-1).join(' '), `threads rename ${hub} alice (ally, al)`)
+	const renames = (await f.renames()).length
+	await f.deliver(f.event('thread.ack', 'acked', false, '00000000-0000-4000-8000-000000000032'))
+	await new Promise((resolve) => setTimeout(resolve, 100))
+	assert.equal((await f.renames()).length, renames, 'not renamed again while the title is right')
+	assert.match(await f.send('owner-thread', { peer: 'ally', title: 'Beer?', body: 'Free tonight?' }), /Sent to alice as thread/)
+	assert.deepEqual((await f.lastSent()).args.slice(-2), ['alice', 'Beer?'])
+	f.setPeers([{ name: 'alice', aliases: Array.from({ length: 10 }, (_, i) => `a-rather-long-alias-number-${i}`) }])
+	await f.deliver(f.event('thread.reply', 'acked', false, '00000000-0000-4000-8000-000000000032'))
+	await f.until(async () => (await f.renames()).length > renames)
+	assert.ok((await f.renames()).at(-1)[3].length <= 120, 'a title stays readable')
+	assert.match(await f.send(hub, { peer: 'ally', title: 'Beer?', body: 'Free tonight?' }), /Blocked by cp-inbox: this thread can send only to its own peer/, 'an alias cpd no longer has')
+})
 
-	await f.respond({ state: 'acked' })
-	await f.deliver(f.event('thread.reopen', 'acked', true))
-	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'archive', '--unarchive', 'conversation'])
-	assert.equal(f.messages.length, 1, 'unarchived before the message')
+test('uninstalling revokes the token, archives the threads, deletes the secrets and removes cp-peers', async (t) => {
+	const vars = { AMP_PROJECT_ID: 'project-1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' }
+	const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+	Object.assign(process.env, vars)
+	t.after(() => {
+		for (const [k, v] of Object.entries(previous)) {
+			if (v === undefined) delete process.env[k]
+			else process.env[k] = v
+		}
+	})
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, sent))
+	const [hub, conversation] = f.created.map((c) => c.id)
+	// Declined, nothing happens.
+	f.answerConfirm(false)
+	await f.command('cp-uninstall', 'inbox')
+	assert.deepEqual(f.revoked, [])
+	// A daemon that cannot revoke the token stops it before anything is removed.
+	f.answerConfirm(true)
+	f.revokeAnswers(405)
+	await f.command('cp-uninstall', 'inbox')
+	assert.equal(f.confirms.at(-1).title, 'Nothing was uninstalled')
+	assert.match(f.confirms.at(-1).message, /answered 405/)
+	assert.ok(!(await f.ampCalls()).some((c) => c[1] === 'archive' || c[0] === 'secrets'))
+	f.revokeAnswers(204)
+	await f.command('cp-uninstall', hub)
+	assert.deepEqual(f.revoked.at(-1), `Bearer ${token}`)
+	const calls = (await f.ampCalls()).map((c) => c.join(' '))
+	const archived = calls.filter((c) => c.startsWith('threads archive ')).slice(-3)
+	assert.deepEqual([...archived].sort(), [`threads archive ${conversation}`, 'threads archive conversation', `threads archive ${hub}`].sort())
+	assert.equal(archived.at(-1), `threads archive ${hub}`, 'the thread running it goes last')
+	assert.ok(calls.includes('secrets delete --project project-1 --yes CP_URL'))
+	assert.ok(calls.includes('secrets delete --project project-1 --yes CP_TOKEN'))
+	const left = execFileSync('git', ['--git-dir', join(f.dir, 'user-plugins.git'), 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' })
+	assert.equal(left, 'other/index.ts\n', 'only cp-peers is gone from your personal plugins')
+	await assert.rejects(stat(f.stateFile))
+	const report = f.confirms.at(-1)
+	assert.equal(report.title, 'The inbox is uninstalled')
+	assert.doesNotMatch(report.message, /failed/)
+	assert.match(report.message, /delete the `cp-inbox` trigger/)
+	// Afterwards it does nothing: no events, nothing in conversations, and a
+	// reload neither registers nor runs anything.
+	const before = f.posted.length
+	await f.deliver(f.event('thread.reply', 'open', true, sent))
+	assert.equal(f.posted.length, before)
+	assert.match((await f.check('conversation', 'shell_command', { cmd: 'ls' })).message, /uninstalled/)
+	f.labels.conversation = ['clanker-proxy']
+	const reload = await f.reload()
+	assert.equal(reload.webhooks, 0)
+	assert.equal((await reload.check('conversation', 'shell_command', { cmd: 'ls' })).action, 'reject-and-continue')
+})
 
-	assert.equal(await f.end('conversation'), undefined)
-	assert.equal((await f.ampCalls()).length, 2, 'not archived while the thread is live')
-	await f.respond({ state: 'closed' })
-	await f.end('conversation')
-	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'archive', 'conversation'], 'ended by this side')
-	await f.end('owner-thread')
-	assert.equal((await f.ampCalls()).length, 3, 'other threads are never archived')
+test('uninstall keeps cp-peers for another inbox, and refuses in an orb without the inbox', async (t) => {
+	process.env.AMP_PROJECT_ID = 'project-1'
+	t.after(() => delete process.env.AMP_PROJECT_ID)
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, sent))
+	await f.searches({ 'label:cp-peer archived:false': [{ id: 'T-00000000-0000-4000-8000-0000000000cc', title: 'carol' }] })
+	await f.command('cp-uninstall', 'inbox')
+	assert.match(f.confirms.at(-1).message, /kept: another inbox has 1 peer threads/)
+	assert.ok(!(await f.ampCalls()).some((c) => c[0] === 'clone'))
+
+	// Another orb of the project: its plugin started with no state of the inbox's.
+	const g = await fixture(t)
+	await rm(g.stateFile)
+	await (await g.reload()).command('cp-uninstall', 'inbox')
+	assert.match(g.notices.at(-1), /run Uninstall from the inbox/)
+	assert.deepEqual(g.revoked, [])
 })
 
 test('the thread that asked gets a link to the conversation once the peer answers, never their words', async (t) => {

@@ -32,24 +32,30 @@ fn peers_from(r: &Row, i: usize) -> Result<Peers, Error> {
 }
 
 impl<S: Sql, R: Runtime> Core<S, R> {
-    /// Checks a list of peers names only peers or former peers.
-    pub(crate) fn known_peers(&self, peers: &Peers) -> Result<(), Error> {
+    /// `peers` by their names, each alias replaced by its peer's name and
+    /// each peer once. Each must be a peer or a former one.
+    pub(crate) fn known_peers(&self, peers: &Peers) -> Result<Peers, Error> {
+        let mut names: Vec<Name> = Vec::with_capacity(peers.as_slice().len());
         for p in peers.as_slice() {
-            if !self.known_peer(p)? {
+            let real = self.resolve_peer(p, None)?;
+            if !self.known_peer(&real)? {
                 return Err(Error::new(
                     ErrorKind::Invalid,
                     format!("no peer is named {p}"),
                 ));
             }
+            if !names.contains(&real) {
+                names.push(real);
+            }
         }
-        Ok(())
+        Peers::try_from(names).map_err(|e| Error::new(ErrorKind::Internal, e.to_string()))
     }
 
     /// Makes an agent token. The token is returned this once; only its hash
     /// is kept.
     pub fn create_agent_token(&mut self, input: AgentTokenInput) -> Result<NewAgentToken, Error> {
         let now = self.now();
-        self.known_peers(&input.peers)?;
+        let peers = self.known_peers(&input.peers)?;
         let expires = input.expires_at.map(Millis::from_at);
         if expires.is_some_and(|t| t <= now) {
             return Err(Error::new(
@@ -86,14 +92,14 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             &[
                 text(&input.name),
                 secrets::hash(&token).into(),
-                serde_json::to_string(&input.peers).unwrap_or_else(|_| "[]".into()).into(),
+                serde_json::to_string(&peers).unwrap_or_else(|_| "[]".into()).into(),
                 now.0.into(),
                 expires.map(|t| t.0).into(),
             ],
         )?;
         Ok(NewAgentToken {
             name: input.name,
-            peers: input.peers,
+            peers,
             token: Token::new(token).map_err(|e| Error::new(ErrorKind::Internal, e.to_string()))?,
             created_at: now.at(),
             expires_at: expires.map(Millis::at),
@@ -119,7 +125,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(AgentTokenList { tokens })
     }
 
-    /// Revokes an agent token.
+    /// Revokes an agent token, deleting its webhook.
     pub fn delete_agent_token(&mut self, name: &Name) -> Result<(), Error> {
         // Its webhook goes with it.
         match self.delete_agent_webhook(name) {
@@ -139,8 +145,35 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(())
     }
 
+    /// Revokes the agent token `token` at its holder's request, as the
+    /// owner would by name. Found by the token rather than the name the
+    /// caller authenticated as, which may have been revoked and given to a
+    /// new token since.
+    pub fn revoke_own_agent_token(&mut self, token: &str) -> Result<(), Error> {
+        let name: Name = self
+            .sql
+            .query_one(
+                "SELECT name FROM agent_tokens WHERE hash = ?",
+                &[secrets::hash(token).into()],
+            )?
+            .ok_or_else(|| Error::new(ErrorKind::Unauthorized, "unknown agent token"))?
+            .parse(0)?;
+        self.delete_agent_token(&name)
+    }
+
     /// The agent a token lets in, recording its use at most once a minute.
     pub fn authenticate_agent(&mut self, token: &str) -> Result<Agent, Error> {
+        self.agent(token, false)
+    }
+
+    /// The agent a token lets in to revoke itself. An expired token still
+    /// may, so an integration whose token lapsed can remove itself and its
+    /// webhook.
+    pub fn authenticate_agent_to_revoke(&mut self, token: &str) -> Result<Agent, Error> {
+        self.agent(token, true)
+    }
+
+    fn agent(&mut self, token: &str, expired_ok: bool) -> Result<Agent, Error> {
         if !token.starts_with(prefix::AGENT) {
             return Err(Error::new(ErrorKind::Unauthorized, "not an agent token"));
         }
@@ -152,7 +185,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 &[secrets::hash(token).into()],
             )?
             .ok_or_else(|| Error::new(ErrorKind::Unauthorized, "unknown agent token"))?;
-        if r.opt_int(2)?.is_some_and(|t| now.0 >= t) {
+        if !expired_ok && r.opt_int(2)?.is_some_and(|t| now.0 >= t) {
             return Err(Error::new(ErrorKind::Unauthorized, "agent token expired"));
         }
         let name: Name = r.parse(0)?;

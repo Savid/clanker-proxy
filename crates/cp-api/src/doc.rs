@@ -15,11 +15,11 @@ use crate::error::Problem;
 use crate::model::{
     AgentTokenInput, AgentTokenList, AgentTokenSummary, Approval, Delivery, DeliveryStatus,
     GetThreadQuery, Health, HealthStatus, ListThreadsQuery, Me, NewAgentToken, NewThread, Peer,
-    PeerInput, PeerList, PeerStatus, PeeringRequest, Receipt, ReceiptStatus, Request, RequestList,
-    RequestReceipt, Thread, ThreadAction, ThreadEvent, ThreadList, ThreadSummary, TurnFilter,
-    WebhookDeliveriesQuery, WireEvent,
+    PeerAliases, PeerInput, PeerList, PeerStatus, PeeringRequest, Receipt, ReceiptStatus, Request,
+    RequestList, RequestReceipt, Thread, ThreadAction, ThreadEvent, ThreadList, ThreadSummary,
+    TurnFilter, WebhookDeliveriesQuery, WireEvent,
 };
-use crate::text::{Cursor, ThreadRef};
+use crate::text::{Aliases, Cursor, ThreadRef};
 use crate::webhooks::{
     OwnWebhook, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList, WebhookEventOrigin,
     WebhookEventType, WebhookEvents, WebhookHeader, WebhookList, WebhookOrigin, WebhookPayload,
@@ -68,7 +68,7 @@ async fn deny_request() {}
 
 #[utoipa::path(post, path = "/api/v1/peering-requests/{id}/approve", operation_id = "approveRequest", tag = "peering",
     summary = "Approve a peering request",
-    description = "First sends the requester's daemon, at the URL it gave, an acceptance signed for its key: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls signed with the requester's key answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
+    description = "First sends the requester's daemon, at the URL it gave, an acceptance signed for its key: only if that daemon confirms does the requester become a peer, under the name given or the one they asked for. So a request cannot claim someone else's URL. Fails with 409 when that name is another peer's name or alias: give another. Fails with 502 when their daemon does not confirm, and the request stays. While confirming, calls signed with the requester's key answer 503 to retry. Only one approval runs at a time; another answers 409. Redirects are refused.",
     params(("id" = crate::text::RequestRef, Path, description = "The request's reference.")),
     request_body(content = Approval, description = "What to call the new peer."),
     responses((status = 201, description = "The new peer.", body = Peer),
@@ -77,14 +77,14 @@ async fn approve_request() {}
 
 #[utoipa::path(get, path = "/api/v1/peers", operation_id = "listPeers", tag = "peering",
     summary = "List peers",
-    description = "Every peer, requested or active. An agent token limited to peers lists only those.",
+    description = "Every peer, requested or active, with its aliases. An agent token limited to peers lists only those.",
     responses((status = 200, description = "Peers, by name.", body = PeerList),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn list_peers() {}
 
 #[utoipa::path(post, path = "/api/v1/peers", operation_id = "addPeer", tag = "peering",
     summary = "Ask another daemon to become peers",
-    description = "Makes a secret, saves the peer as requested, and sends a peering request to the daemon at the URL; if that fails, nothing is kept and it answers 502. Events to them queue until their owner approves. Fails with 409 when the name or URL already belongs to a peer, or when that daemon has already asked to peer (approve its request instead). Redirects are refused.",
+    description = "Makes a secret, saves the peer as requested, and sends a peering request to the daemon at the URL; if that fails, nothing is kept and it answers 502. Events to them queue until their owner approves. Fails with 409 when the name is a peer's name or alias, the URL already belongs to a peer, or that daemon has already asked to peer (approve its request instead). Redirects are refused.",
     request_body(content = PeerInput, description = "Who to ask, and where."),
     responses((status = 201, description = "The requested peer.", body = Peer),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -93,22 +93,31 @@ async fn add_peer() {}
 #[utoipa::path(get, path = "/api/v1/peers/{name}", operation_id = "getPeer", tag = "peering",
     summary = "Read a peer",
     description = "One peer, with the short code both owners compared. For an agent token limited to peers, any other answers 404 as if it did not exist.",
-    params(("name" = Name, Path, description = "The peer's name.")),
+    params(("name" = Name, Path, description = "The peer's name or an alias.")),
     responses((status = 200, description = "The peer.", body = Peer),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn get_peer() {}
 
 #[utoipa::path(delete, path = "/api/v1/peers/{name}", operation_id = "removePeer", tag = "peering",
     summary = "Remove a peer",
-    description = "Their key stops working here and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL.",
-    params(("name" = Name, Path, description = "The peer's name.")),
+    description = "Their key stops working here, their aliases go, and events not yet delivered to them fail. Threads are kept, so their name can later go only to a peer at the same URL. Takes the peer's name only: an alias answers 409 and removes nothing.",
+    params(("name" = Name, Path, description = "The peer's name, not an alias.")),
     responses((status = 204, description = "The peer is gone."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn remove_peer() {}
 
+#[utoipa::path(put, path = "/api/v1/peers/{name}/aliases", operation_id = "setPeerAliases", tag = "peering",
+    summary = "Set a peer's aliases",
+    description = "Replaces the peer's aliases: other names the owner calls them by here, which every operation that takes a peer's name accepts, except removePeer. Responses and threads keep the peer's name, and peers never see aliases. Peers' names and aliases share one namespace, so this fails with 409 when an alias is the owner's name, a peer's name, another peer's alias, the name of a removed peer kept for their threads, or a name being approved; adding or approving a peer under an alias fails the same way. At most 10.",
+    params(("name" = Name, Path, description = "The peer's name or an alias.")),
+    request_body(content = PeerAliases, description = "Every alias the peer is to have."),
+    responses((status = 200, description = "The peer.", body = Peer),
+        (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
+async fn set_peer_aliases() {}
+
 #[utoipa::path(get, path = "/api/v1/threads", operation_id = "listThreads", tag = "threads",
     summary = "List threads",
-    description = "Newest activity first. An agent token limited to peers lists only threads with those peers.",
+    description = "Newest activity first. The peer filter takes a peer's name or an alias. An agent token limited to peers lists only threads with those peers.",
     params(ListThreadsQuery),
     responses((status = 200, description = "Matching threads.", body = ThreadList),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -116,7 +125,7 @@ async fn list_threads() {}
 
 #[utoipa::path(post, path = "/api/v1/threads", operation_id = "openThread", tag = "threads",
     summary = "Open a thread with a peer",
-    description = "The thread is stored and queued for delivery to the peer. An agent token limited to peers opens threads only with those; any other answers 404 as if it were not a peer.",
+    description = "The thread is stored and queued for delivery to the peer, named by its name or an alias. An agent token limited to peers opens threads only with those; any other answers 404 as if it were not a peer.",
     request_body(content = NewThread, description = "The thread to open."),
     responses((status = 201, description = "The new thread, without its events.", body = ThreadSummary),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -170,7 +179,7 @@ async fn list_agent_tokens() {}
 
 #[utoipa::path(post, path = "/api/v1/agent-tokens", operation_id = "createAgentToken", tag = "tokens",
     summary = "Create an agent token",
-    description = "A token that can send, list, read, stream and act on threads and read peers, optionally only some peers, but cannot peer, make tokens or change the owner's webhooks. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
+    description = "A token that can send, list, read, stream and act on threads and read peers, optionally only some peers, but cannot peer, make tokens or change the owner's webhooks. Peers may be named by alias; the token keeps their names. The token is in this response only. Fails with 409 when the name is taken, 400 for an unknown peer or a past expiry.",
     request_body(content = AgentTokenInput, description = "The new token's name, peers and expiry."),
     responses((status = 201, description = "The token.", body = NewAgentToken),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
@@ -178,11 +187,18 @@ async fn create_agent_token() {}
 
 #[utoipa::path(delete, path = "/api/v1/agent-tokens/{name}", operation_id = "deleteAgentToken", tag = "tokens",
     summary = "Revoke an agent token",
-    description = "The token stops working at once, and its open streams end.",
+    description = "The token stops working at once, its webhook is deleted, and its open streams end.",
     params(("name" = Name, Path, description = "The token's name.")),
     responses((status = 204, description = "Revoked."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn delete_agent_token() {}
+
+#[utoipa::path(delete, path = "/api/v1/me", operation_id = "revokeOwnToken", tag = "tokens",
+    summary = "Revoke the calling agent token",
+    description = "For agent tokens: revokes the token making the call, as deleteAgentToken would, so an integration can uninstall itself; an expired token may still. It stops working at once, its webhook is deleted, and its open streams end.",
+    responses((status = 204, description = "Revoked."),
+        (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
+async fn revoke_own_token() {}
 
 #[utoipa::path(get, path = "/api/v1/webhooks", operation_id = "listWebhooks", tag = "webhooks",
     summary = "List webhooks",
@@ -287,15 +303,15 @@ async fn receive_webhook_notification() {}
     ),
     paths(
         get_health, get_me, request_peering, list_requests, deny_request, approve_request,
-        list_peers, add_peer, get_peer, remove_peer, list_threads, open_thread, get_thread,
-        act_on_thread, stream_events, deliver_event, notify_peering_accepted,
-        list_agent_tokens, create_agent_token, delete_agent_token, list_webhooks,
+        list_peers, add_peer, get_peer, remove_peer, set_peer_aliases, list_threads, open_thread,
+        get_thread, act_on_thread, stream_events, deliver_event, notify_peering_accepted,
+        list_agent_tokens, create_agent_token, delete_agent_token, revoke_own_token, list_webhooks,
         create_webhook, get_webhook, update_webhook, delete_webhook, list_webhook_deliveries,
         retry_webhook_delivery, set_own_webhook, delete_own_webhook,
     ),
     components(schemas(
         Problem, Health, HealthStatus, Me, PeeringRequest, ReceiptStatus, RequestReceipt, Request,
-        RequestList, Approval, PeerInput, PeerStatus, Peer, PeerList, NewThread, ThreadAction,
+        RequestList, Approval, PeerInput, PeerStatus, Peer, PeerList, PeerAliases, Aliases, NewThread, ThreadAction,
         ThreadSummary, Thread, ThreadEvent, Delivery, DeliveryStatus, ThreadList, TurnFilter,
         WireEvent, Receipt, AgentTokenInput, AgentTokenSummary, NewAgentToken, AgentTokenList,
         WebhookType, WebhookEventType, WebhookEvents, WebhookOrigin, WebhookEventOrigin,
@@ -314,6 +330,7 @@ fn operation_mut(item: &mut PathItem, method: Method) -> Option<&mut Operation> 
     match method {
         Method::Get => item.get.as_mut(),
         Method::Post => item.post.as_mut(),
+        Method::Put => item.put.as_mut(),
         Method::Patch => item.patch.as_mut(),
         Method::Delete => item.delete.as_mut(),
     }

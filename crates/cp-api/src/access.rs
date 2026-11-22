@@ -26,6 +26,7 @@ pub enum Access {
 pub enum Method {
     Get,
     Post,
+    Put,
     Patch,
     Delete,
 }
@@ -35,6 +36,7 @@ impl Method {
         match self {
             Method::Get => "GET",
             Method::Post => "POST",
+            Method::Put => "PUT",
             Method::Patch => "PATCH",
             Method::Delete => "DELETE",
         }
@@ -105,6 +107,7 @@ operations! {
     AddPeer => "addPeer", Post, "/api/v1/peers", Owner, true;
     GetPeer => "getPeer", Get, "/api/v1/peers/{name}", OwnerOrAgent, false;
     RemovePeer => "removePeer", Delete, "/api/v1/peers/{name}", Owner, false;
+    SetPeerAliases => "setPeerAliases", Put, "/api/v1/peers/{name}/aliases", Owner, true;
     ListThreads => "listThreads", Get, "/api/v1/threads", OwnerOrAgent, false;
     OpenThread => "openThread", Post, "/api/v1/threads", OwnerOrAgent, true;
     GetThread => "getThread", Get, "/api/v1/threads/{ref}", OwnerOrAgent, false;
@@ -115,6 +118,7 @@ operations! {
     ListAgentTokens => "listAgentTokens", Get, "/api/v1/agent-tokens", Owner, false;
     CreateAgentToken => "createAgentToken", Post, "/api/v1/agent-tokens", Owner, true;
     DeleteAgentToken => "deleteAgentToken", Delete, "/api/v1/agent-tokens/{name}", Owner, false;
+    RevokeOwnToken => "revokeOwnToken", Delete, "/api/v1/me", Agent, false;
     ListWebhooks => "listWebhooks", Get, "/api/v1/webhooks", Owner, false;
     CreateWebhook => "createWebhook", Post, "/api/v1/webhooks", Owner, true;
     GetWebhook => "getWebhook", Get, "/api/v1/webhooks/{name}", Owner, false;

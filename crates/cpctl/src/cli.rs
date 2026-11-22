@@ -83,7 +83,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "<name> <url> [-m <note>]",
         2..2,
         "ask the daemon at <url> to connect; <name> is what you call them",
-        "Sends a peering request with this daemon's public key; calls between daemons are signed, and no secret is shared. The peer stays \"requested\" until their owner approves; threads sent meanwhile are delivered after that. Both owners see the same code: they should compare it over a channel they trust. Each daemon has one peer name here; adding its URL again under another name is refused.",
+        "Sends a peering request with this daemon's public key; calls between daemons are signed, and no secret is shared. The peer stays \"requested\" until their owner approves; threads sent meanwhile are delivered after that. Both owners see the same code: they should compare it over a channel they trust. Each daemon has one peer name here; adding its URL again under another name is refused, and so is a name that is already a peer's alias. For more names, use cpctl peer alias.",
         r#"cpctl peer add bob https://cp.bob.dev -m "hi, it's alice""#,
         [value(
             "message",
@@ -96,7 +96,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "peer ls",
         "",
         0..0,
-        "list peers and whether they are active",
+        "list peers, their aliases, and whether they are active",
         "",
         "cpctl peer ls",
         []
@@ -105,17 +105,35 @@ pub(crate) static COMMANDS: &[Command] = &[
         "peer show",
         "<name>",
         1..1,
-        "one peer: status, URL and code",
-        "\"requested\" becomes \"active\" once their owner approves.",
+        "one peer: aliases, status, URL and code",
+        "<name> may be an alias. \"requested\" becomes \"active\" once their owner approves.",
         "cpctl peer show bob",
+        []
+    ),
+    cmd!(
+        "peer alias",
+        "<name> <alias>...",
+        2..11,
+        "give a peer other names to call them by here",
+        "Aliases are this daemon's own: every command that takes a peer accepts one but peer rm (send, ls --peer, peer show, token add --peers, webhook --peers), output and threads show the peer's name, and the peer never sees them. Peers' names and aliases share one namespace, so an alias cannot be your name, a peer's name or another peer's alias, and a peer cannot be added or approved under an alias (approve --as names them differently). At most 10 per peer.",
+        "cpctl peer alias tester bobby",
+        []
+    ),
+    cmd!(
+        "peer unalias",
+        "<name> <alias>...",
+        2..11,
+        "remove a peer's aliases",
+        "",
+        "cpctl peer unalias tester bobby",
         []
     ),
     cmd!(
         "peer rm",
         "<name>",
         1..1,
-        "forget a peer; threads with them are kept",
-        "Their key stops working here and anything not yet delivered to them fails. Their name can later go only to a daemon at the same URL.",
+        "forget a peer and their aliases; threads with them are kept",
+        "Their key stops working here and anything not yet delivered to them fails. Their name can later go only to a daemon at the same URL. Takes the peer's name, never an alias: to drop an alias, use cpctl peer unalias.",
         "cpctl peer rm bob",
         []
     ),
@@ -133,7 +151,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "<id>",
         1..1,
         "accept a peering request",
-        "Their daemon must confirm at the URL it gave, or nothing is approved. Only after your owner has confirmed the code with them.",
+        "Their daemon must confirm at the URL it gave, or nothing is approved. Only after your owner has confirmed the code with them. Refused when the name is already a peer's name or alias: give another with --as.",
         "cpctl approve 3e7b10c2",
         [value(
             "as",
@@ -777,6 +795,7 @@ Common tasks:
   let someone connect to you   cpctl me, and give them the name and URL it prints
   answer a connection request  cpctl requests, then cpctl approve <id>
   ask a peer for something     cpctl send <peer> "<title>" -m "<details>"
+  call a peer by another name  cpctl peer alias <peer> <alias>
   see what is waiting on you   cpctl inbox
   read a thread                cpctl show <ref>
   wait for their answer        cpctl wait <ref> --timeout 30m
@@ -800,6 +819,7 @@ Threads:
   overruled if both sides move at once, one move can take no effect; show and
             wait say so, and the thread's state is what stands.
   <ref>     a thread ID, or a unique prefix of at least 4 characters.
+  <peer>    a peer's name, or one of its aliases.
   body      -m "<text>" (markdown), or -m - to read it from stdin. Every body,
             with any action, goes to the peer. There are no attachments: put
             everything they need in the body.

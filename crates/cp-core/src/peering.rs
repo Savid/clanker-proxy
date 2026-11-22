@@ -7,7 +7,7 @@
 //! again.
 
 use cp_api::{
-    Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
+    Aliases, Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
     PeeringRequest, Peers, PublicKey, ReceiptStatus, Request, RequestList, RequestReceipt,
     RequestRef, Version,
 };
@@ -82,8 +82,18 @@ fn peer_row(r: &Row) -> Result<PeerRow, Error> {
 
 impl<S: Sql, R: Runtime> Core<S, R> {
     fn peer_view(&self, p: &PeerRow) -> Result<Peer, Error> {
+        let aliases = self
+            .sql
+            .query(
+                "SELECT alias FROM peer_aliases WHERE peer = ? ORDER BY alias",
+                &[text(&p.name)],
+            )?
+            .iter()
+            .map(|r| r.parse(0))
+            .collect::<Result<_, _>>()?;
         Ok(Peer {
             name: p.name.clone(),
+            aliases,
             url: p.url.clone(),
             status: p.status,
             code: code(&p.key, &self.key)?,
@@ -125,13 +135,87 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(PeerList { peers })
     }
 
-    /// The peer `name`, if it is in `scope`; any other answers as if it did
-    /// not exist.
+    /// The peer `name` names, by its name or an alias, if it is in `scope`;
+    /// any other answers as if it did not exist.
     pub fn peer(&self, name: &Name, scope: Option<&Peers>) -> Result<Peer, Error> {
+        let real = self.resolve_peer(name, scope)?;
         let p = self
-            .load_peer(name)?
-            .filter(|_| scope.is_none_or(|s| s.reaches(name)))
+            .load_peer(&real)?
+            .filter(|_| scope.is_none_or(|s| s.reaches(&real)))
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
+        self.peer_view(&p)
+    }
+
+    /// The name of the peer `name` is an alias of, when that peer is in
+    /// `scope`; otherwise `name` itself, which callers look up as a name. A
+    /// caller limited to some peers cannot tell an alias of another peer
+    /// from no peer at all.
+    pub(crate) fn resolve_peer(&self, name: &Name, scope: Option<&Peers>) -> Result<Name, Error> {
+        Ok(self
+            .alias_of(name)?
+            .filter(|p| scope.is_none_or(|s| s.reaches(p)))
+            .unwrap_or_else(|| name.clone()))
+    }
+
+    /// The peer `name` is an alias of, if it is one.
+    fn alias_of(&self, name: &Name) -> Result<Option<Name>, Error> {
+        self.sql
+            .query_one(
+                "SELECT peer FROM peer_aliases WHERE alias = ?",
+                &[text(name)],
+            )?
+            .map(|r| r.parse(0))
+            .transpose()
+    }
+
+    /// Replaces the aliases of the peer `name` names. Aliases share the
+    /// namespace of peers' names: each must be free of the owner's name,
+    /// peers' names, other peers' aliases, removed peers' names kept for
+    /// their threads, and the name an approval is confirming.
+    pub fn set_peer_aliases(&mut self, name: &Name, aliases: &Aliases) -> Result<Peer, Error> {
+        let real = self.resolve_peer(name, None)?;
+        let p = self
+            .load_peer(&real)?
+            .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
+        let approving = self
+            .live_op()?
+            .map(|r| r.text(1).map(str::to_string))
+            .transpose()?;
+        for alias in aliases.as_slice() {
+            let taken = |detail: String| Err(err(ErrorKind::Conflict, detail));
+            if *alias == self.me {
+                return taken(format!("{alias} is this daemon's owner"));
+            }
+            if *alias == p.name {
+                return taken(format!("{alias} is already this peer's name"));
+            }
+            if self.load_peer(alias)?.is_some() {
+                return taken(format!("{alias} is another peer's name"));
+            }
+            if let Some(other) = self.alias_of(alias)?.filter(|o| *o != p.name) {
+                return taken(format!("{alias} is an alias of {other}"));
+            }
+            if let Some(r) = self.sql.query_one(
+                "SELECT url FROM former_peers WHERE name = ?",
+                &[text(alias)],
+            )? {
+                return taken(format!(
+                    "{alias} was a peer at {} and threads with them are kept",
+                    r.text(0)?
+                ));
+            }
+            if approving.as_deref() == Some(alias.as_str()) {
+                return taken(format!("{alias} is being approved; retry in a few seconds"));
+            }
+        }
+        self.sql
+            .execute("DELETE FROM peer_aliases WHERE peer = ?", &[text(&p.name)])?;
+        for alias in aliases.as_slice() {
+            self.sql.execute(
+                "INSERT INTO peer_aliases (alias, peer) VALUES (?, ?)",
+                &[text(alias), text(&p.name)],
+            )?;
+        }
         self.peer_view(&p)
     }
 
@@ -154,6 +238,12 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             return Err(err(
                 ErrorKind::Unprocessable,
                 format!("{name} is this daemon's owner; choose another name"),
+            ));
+        }
+        if let Some(peer) = self.alias_of(name)? {
+            return Err(err(
+                ErrorKind::Conflict,
+                format!("{name} is an alias of {peer}; give this one another name"),
             ));
         }
         // Threads name their participants, so a removed peer's name stays
@@ -455,6 +545,15 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             ));
         }
         let now = self.now();
+        // The same daemon under another name, which has moved URL, is
+        // forgotten as if removed. A peer of the same name and URL is
+        // replaced and keeps its aliases.
+        for r in self.sql.query(
+            &format!("SELECT {PEER_COLUMNS} FROM peers WHERE key = ? AND name != ?"),
+            &[text(key.as_str()), text(&name)],
+        )? {
+            self.forget_peer(&peer_row(&r)?)?;
+        }
         self.sql.execute(
             "DELETE FROM peers WHERE name = ? OR key = ?",
             &[text(&name), text(key.as_str())],
@@ -509,10 +608,19 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(())
     }
 
-    /// Forgets a peer: their key stops working and events not yet
-    /// delivered to them fail. Threads stay, and their name stays with their
-    /// URL.
+    /// Forgets the peer `name`: their key stops working, their aliases go,
+    /// and events not yet delivered to them fail. Threads stay, and their
+    /// name stays with their URL. Only the peer's name will do: an alias is
+    /// refused, so removing an alias by mistake never removes the peer.
     pub fn remove_peer(&mut self, name: &Name) -> Result<(), Error> {
+        if let Some(peer) = self.alias_of(name)? {
+            return Err(err(
+                ErrorKind::Conflict,
+                format!(
+                    "{name} is an alias of {peer}; remove the peer by its name, or only the alias"
+                ),
+            ));
+        }
         let p = self
             .load_peer(name)?
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
@@ -525,6 +633,13 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 format!("{name} is being approved; retry in a few seconds"),
             ));
         }
+        self.forget_peer(&p)
+    }
+
+    /// Drops a peer and their aliases. Their name stays with their URL while
+    /// threads name them, and events not yet delivered to them fail.
+    fn forget_peer(&mut self, p: &PeerRow) -> Result<(), Error> {
+        let name = &p.name;
         if self
             .sql
             .query_one(
@@ -540,6 +655,8 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         }
         self.sql
             .execute("DELETE FROM peers WHERE name = ?", &[text(name)])?;
+        self.sql
+            .execute("DELETE FROM peer_aliases WHERE peer = ?", &[text(name)])?;
         let failed = self.sql.query(
             "SELECT thread, count(*) FROM outbox WHERE peer = ? AND status = 'pending' GROUP BY thread",
             &[text(name)],

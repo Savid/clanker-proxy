@@ -189,6 +189,21 @@ impl Client {
         self.decode(resp).await
     }
 
+    pub(crate) async fn put<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(T, String), Failure> {
+        let json = serde_json::to_vec(body).map_err(|e| Failure::new(EXIT_ERROR, e.to_string()))?;
+        let req = self
+            .http
+            .put(format!("{}{path}", self.base))
+            .header("content-type", "application/json")
+            .body(json);
+        let resp = self.send(req).await?;
+        self.decode(resp).await
+    }
+
     /// POST without a body, for operations that only act.
     pub(crate) async fn post_empty(&self, path: &str) -> Result<(), Failure> {
         self.send(self.http.post(format!("{}{path}", self.base)))

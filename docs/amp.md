@@ -59,7 +59,7 @@ you ask it to pull and reload its plugins. Rerun step 5 to update `cp-peers`.
 
 ## Ask a peer
 
-From any thread, ask: "ask bob <what>". In the project, `cp_send` sends it.
+From any thread, ask: "ask bob <what>", by name or [alias](#names-and-aliases). In the project, `cp_send` sends it.
 Elsewhere, `cp-peers`' `ask_peer` hands it to bob's thread, which sends it
 with `cp_send`, to bob only. Bob's answer goes to a conversation under bob's
 thread, which checks it and closes or reopens it, and the thread that asked
@@ -69,6 +69,24 @@ machine.
 A peer's thread starts with the first thread between you; before that, ask
 from a thread in the project. A conversation's `cp_send` reaches only its own
 peer, and asks you first.
+
+## Names and aliases
+
+A peer's name is yours: `cpctl peer add <name>` sets it, and so does
+`cpctl approve <id> --as <name>`, which defaults to the name they asked for.
+Aliases are more names you give the same peer:
+
+```bash
+cpctl peer alias tester bobby rob
+cpctl peer unalias tester rob
+```
+
+Names and aliases share one namespace, so one already taken is refused: give
+the peer another name. cpd takes an alias wherever it takes a name, except to
+remove a peer, and answers with the name. The inbox titles each peer's thread
+with its name and aliases, "tester (bobby)", on the next event, or within 10
+minutes while its orb is awake, and from that `ask_peer` knows them: "is bobby
+free for a beer?" reaches tester from any thread.
 
 ## What a conversation can do
 
@@ -168,6 +186,21 @@ git add .amp/plugins/cp-inbox.ts .agents/setup && git commit -m "cp-inbox $v"
 Repeat it after you update the daemon. Take `cp-peers` from
 `$raw/.amp/personal/cp-peers/index.ts` in step 5. Never commit tokens or
 `cp-inbox/state.json`.
+
+## Uninstall
+
+From the inbox, or one of its threads, run **clanker-proxy: Uninstall the
+inbox** from the command palette. It does nothing until cpd revokes the
+inbox's agent token, and its webhook with it; that takes a daemon from this
+release. Then it archives the peer threads and conversations, deletes the
+project's `CP_URL` and `CP_TOKEN`, removes `cp-peers` from your personal
+plugins unless another inbox still has peer threads, and marks the orb
+uninstalled, so the plugin there neither registers again nor runs anything.
+The conversations' directories stay in the orb until you delete the project:
+fetch any work you want first. Then delete the `cp-inbox` trigger in Settings
+→ Triggers, archive the inbox, and delete the project. Delete the project
+first and all of that stays: nothing of the plugin runs once its project is
+gone.
 
 ## Limits
 
