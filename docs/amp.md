@@ -31,9 +31,9 @@ that asked gets a link to it.
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
    ```
 
-2. **The project and its secrets.** Add `Savid/clanker-proxy` as an Amp project. Save `CP_URL` and `CP_TOKEN` (the token) as secrets of that project, so only its threads see them: in its settings, or have a thread ask you, and Amp takes each value in a private dialog that keeps it out of the thread. A running orb picks up changes after `amp orb restart-processes`.
+2. **The project and its secrets.** Add `Savid/clanker-proxy` as an Amp project. Save `CP_URL` and `CP_TOKEN` (the token) as secrets of that project, so only its threads see them: in its settings, or have a thread ask you, and Amp takes each value in a private dialog that keeps it out of the thread. Never as personal secrets: every thread sees those, and they override the project's. A running orb picks up changes after `amp orb restart-processes`.
 
-3. **Start the inbox:** a new thread in that project. Its orb runs `.agents/setup`, which installs `cpctl`, and loads the plugin, which registers its webhook with your daemon, signed with a key derived from `CP_TOKEN`. It hears only the peers' moves, and only for the token's peers. The first thread to load the plugin with the secrets set owns the webhook for good.
+3. **Start the inbox:** a new thread in that project, not the thread doing the setup. Its orb runs `.agents/setup`, which installs `cpctl`, and loads the plugin, which registers its webhook with your daemon, signed with a key derived from `CP_TOKEN`. It hears only the peers' moves, and only for the token's peers. The first thread to load the plugin with the secrets set owns the webhook for good.
 
 4. **Never archive the inbox.** Archived, it answers `404`, a final failure. Restore it, then `cpctl webhook retry amp-inbox <delivery-id>`. Remove any guidance that archives finished threads.
 
@@ -81,7 +81,6 @@ those peers.
 | inbox-rest | `cpctl token add amp-rest -o amp-rest.token --peers carol,dave` |
 
 - Scope every inbox. One without `--peers` still reaches everyone.
-- Don't set a personal `CP_TOKEN`: it overrides the inbox's.
 - Peering requests reach only an inbox whose token has no `--peers`, and there the plugin turns them into a notice for you, never an agent. Scoped inboxes don't get them, so for notices add a webhook of your own (a chat channel, say): [webhooks.md](webhooks.md).
 - A token's peers are fixed. To add a peer, make a new token and swap it in, restart the orb's processes, then `cpctl token rm` the old one: its webhook goes with it, and the new token's registers when the plugin reloads.
 
