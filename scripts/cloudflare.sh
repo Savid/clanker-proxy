@@ -29,6 +29,9 @@ Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
                      token an Amp inbox needs), local (on this machine), or
                      none (decide later)
   --bundle <file>    deploy this Worker bundle instead of downloading one
+  --start-over       when this release cannot read the daemon's data (one
+                     that changed storage), start on empty storage: its
+                     peers, threads and agent tokens stay behind
 
 Environment: CP_VERSION picks a release (default: the latest);
 CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID log in without a browser.
@@ -73,10 +76,11 @@ valid_name() { # valid_name <value> <max length>
     [ "${#1}" -le "$2" ] && printf '%s' "$1" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
 }
 
-name='' worker='' url='' token_file='' agent='' bundle=''
+name='' worker='' url='' token_file='' agent='' bundle='' start_over='' storage=''
 while [ "$#" -gt 0 ]; do
     case $1 in
         -h | --help) usage; exit 0 ;;
+        --start-over) start_over=yes; shift; continue ;;
         --name | --worker | --url | --token-file | --bundle | --agent) ;;
         *) fail "unknown option $1 (see --help)" ;;
     esac
@@ -259,18 +263,44 @@ if [ -n "$existing" ]; then
     deploy
     found=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
     url=${url:-$found}
-    say "Updated: $url now runs $version."
-    # With the owner token here, the share line can name the owner.
+    # With the owner token here, the update is checked, and the share line
+    # can name the owner.
     saved=${token_file:-$config/$worker.token}
+    stale='' owner=''
     if [ -s "$saved" ]; then
         (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$saved")" >"$tmp/auth")
-        owner=$(curl -fsS -H @"$tmp/auth" "$url/api/v1/me" 2>/dev/null |
-            sed -n 's/.*"name":"\([^"]*\)".*/\1/p' || true)
-        if [ -n "$owner" ]; then
-            share "$owner" "$url"
-        fi
+        # Until the new release answers. A release that changed storage
+        # refuses the daemon's earlier data.
+        i=0
+        while :; do
+            curl -sS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
+            if grep -q 'start from empty storage' "$tmp/me.json"; then
+                stale=yes
+                break
+            fi
+            if grep -q '"name":' "$tmp/me.json" && { [ "$version" = local ] || grep -q "\"version\":\"$version\"" "$tmp/me.json"; }; then
+                owner=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$tmp/me.json")
+                break
+            fi
+            i=$((i + 1))
+            [ "$i" -lt 30 ] || break
+            sleep 2
+        done
     fi
-    exit 0
+    if [ -z "$stale" ]; then
+        say "Updated: $url now runs $version."
+        [ -z "$owner" ] || share "$owner" "$url"
+        exit 0
+    fi
+    if [ -z "$start_over" ] && [ -n "$tty" ] &&
+        [ "$(ask "$worker's data is from an earlier release, which $version cannot read. Start over on empty storage? Its peers, threads and agent tokens stay behind (y/n)" n)" = y ]; then
+        start_over=yes
+    fi
+    [ -n "$start_over" ] ||
+        fail "$worker's data is from an earlier release, which $version cannot read; rerun with --start-over to start on empty storage (its peers, threads and agent tokens stay behind, and you peer again)"
+    # A new name for the Durable Object; the old one keeps its data, unreachable.
+    storage=owner-$(date +%s)
+    say "Starting $worker over on empty storage."
 fi
 
 [ -n "$name" ] || [ -n "$tty" ] || fail "pass --name <your name>: there is no terminal to ask on"
@@ -309,9 +339,10 @@ fi
 # All three settings go out in one deploy, so no version ever runs with only
 # some of them. The Worker gets only the owner token's SHA-256: the token
 # stays in the file on this machine.
-(umask 077 && NAME=$name URL=$url TOKEN=$(cat "$token_file") node -e '
+(umask 077 && NAME=$name URL=$url STORAGE=$storage TOKEN=$(cat "$token_file") node -e '
 const hash = require("crypto").createHash("sha256").update(process.env.TOKEN.trim()).digest("hex");
-process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash }));
+const storage = process.env.STORAGE ? { CP_STORAGE: process.env.STORAGE } : {};
+process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash, ...storage }));
 ' >"$tmp/secrets.json")
 say "Storing settings..."
 deploy --secrets-file "$tmp/secrets.json"

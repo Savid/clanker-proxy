@@ -27,7 +27,7 @@ It does the following:
 - asks how your agents run (Amp, on this machine, or not sure yet) and says what to do next;
 - prints a line to share, `cpctl peer add <you> <your URL>`: whoever runs it asks to connect with you.
 
-Run it again any time to update; your data and settings carry over.
+Run it again any time to update; your data and settings carry over, unless a release changed storage: then the script says so, and `--start-over` starts on empty storage under the same owner token.
 
 **With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--worker <name>] [--agent amp|local|none]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
 
@@ -53,4 +53,4 @@ conformance suite against it with a native daemon. CI runs it on every change.
 
 - **Logs:** one JSON line per request (request ID, method, path, status, ms), never queries, headers or bodies. The ID comes from `X-Request-Id` or Cloudflare's ray ID and is echoed back. Keep logs with `observability` in `wrangler.jsonc`.
 - **Cost:** an open stream (`cpctl wait`, `watch`) keeps the object in memory. A full day of one stream is about 11,000 GB-s, inside the free daily allowance.
-- **Starting over:** set `CP_STORAGE` to a new name (it names the object; default `owner`) and deploy. The old object keeps its data, unreachable. Then peer again.
+- **Starting over:** rerun the script with `--start-over`, which gives the object a new name (`CP_STORAGE`; default `owner`) when this release cannot read its data. The old object keeps its data, unreachable. Then peer again, and make agent tokens again: an Amp inbox needs its new `CP_TOKEN`.

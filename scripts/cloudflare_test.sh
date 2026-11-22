@@ -43,16 +43,23 @@ esac
 FAKE
 chmod 755 "$work/wrangler"
 
-# The Worker: answers /api/v1/me, and makes agent tokens.
+# The Worker: answers /api/v1/me, and makes agent tokens. With a "stale"
+# file, it refuses its storage until a deploy names new storage.
 cat >"$work/worker.py" <<'PY'
-import http.server, sys
+import http.server, os, sys
+work = sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
-    def answer(self, body):
-        self.send_response(200)
+    def answer(self, body, status=200):
+        self.send_response(status)
         self.send_header("content-type", "application/json")
         self.end_headers()
         self.wfile.write(body.encode())
     def do_GET(self):
+        secrets = os.path.join(work, "secrets.json")
+        moved = os.path.exists(secrets) and "CP_STORAGE" in open(secrets).read()
+        if os.path.exists(os.path.join(work, "stale")) and not moved:
+            self.answer('{"status":503,"detail":"stored data is schema version 5, from an earlier release this one cannot migrate; start from empty storage"}', 503)
+            return
         self.answer('{"name":"tester"}')
     def do_POST(self):
         self.rfile.read(int(self.headers.get("content-length", 0)))
@@ -62,7 +69,7 @@ class H(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 PY
 port=18519
-python3 "$work/worker.py" "$port" &
+python3 "$work/worker.py" "$port" "$work" &
 server=$!
 i=0
 until curl -fsS "http://127.0.0.1:$port/api/v1/me" >/dev/null 2>&1; do
@@ -77,6 +84,8 @@ run() {
         sh "$script" --bundle "$work/bundle.tar.gz" "$@" >"$work/out" 2>&1
 }
 token_file=$work/home/.config/clanker-proxy/cp-test.token
+# An update of a deployment made before.
+run_existing() { (export FAKE_EXISTING=1; run "$@"); }
 
 sh "$script" --help | grep -q 'usage: cloudflare.sh' || fail "--help"
 run --bogus && fail "an unknown option was accepted"
@@ -122,9 +131,22 @@ if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi
 grep -q '^cpa_' "$work/home/.config/clanker-proxy/cp-test.amp-inbox.token" || fail "amp: agent token not saved"
 
 before=$(cat "$token_file")
-(export FAKE_EXISTING=1; run --worker cp-test --url "http://127.0.0.1:$port") || fail "update failed"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "update failed"
 grep -q 'Updating cp-test; its settings stay as they are' "$work/out" || fail "update message"
 grep -q 'cpctl peer add tester http://127.0.0.1:18519' "$work/out" || fail "no share line after an update"
 [ "$(cat "$token_file")" = "$before" ] || fail "the update changed the owner token"
+
+# A release that cannot read the daemon's data: refused without --start-over,
+# then a fresh setup on new storage that keeps the owner token.
+: >"$work/stale"
+rm -f "$work/secrets.json"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "updated over data it cannot read"
+grep -q 'rerun with --start-over' "$work/out" || fail "no start-over advice"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" --name tester --start-over || fail "start over failed"
+grep -q 'Starting cp-test over on empty storage' "$work/out" || fail "start over message"
+grep -q 'running at http://127.0.0.1:18519, owner tester' "$work/out" || fail "no summary after starting over"
+grep -q '"CP_STORAGE":"owner-[0-9]*"' "$work/secrets.json" || fail "start over sent no new storage name"
+[ "$(cat "$token_file")" = "$before" ] || fail "starting over changed the owner token"
+rm "$work/stale"
 
 echo "cloudflare setup tests passed"
