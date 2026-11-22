@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
 import { execFile, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
@@ -10,6 +10,8 @@ import { promisify } from 'node:util'
 const subject = '00000000-0000-4000-8000-000000000001'
 const sent = '00000000-0000-4000-8000-000000000002'
 const peer = 'alice'
+// The label cp_send puts on the thread that asked.
+const asked = (id) => `cp-ask-${BigInt(`0x${id.replace(/-/g, '')}`).toString(36)}`
 const token = 'cpa_' + 'T'.repeat(43)
 const hookURL = 'https://example.invalid/webhook'
 // The key the plugin derives from its agent token and webhook URL.
@@ -178,12 +180,13 @@ if (args[1] === 'search') {
 	const another = async () => {
 		const own = {}
 		const instance = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
-		await instance.default({ ...amp, on() {}, registerTool: (tool) => { own[tool.name] = tool } })
+		// Its own webhook registration, so events still reach the first instance.
+		await instance.default({ ...amp, on() {}, createWebhook: async () => ({ url: hookURL }), registerTool: (tool) => { own[tool.name] = tool } })
 		return { send: (thread, input) => own.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }) }
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		home, checkout, own: join(home, 'cp-work', subject.slice(0, 8)), forwarded, httpFetch: realFetch,
+		home, checkout, own: join(home, 'cp-work', subject), forwarded, httpFetch: realFetch,
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
@@ -313,7 +316,7 @@ test("cp_send from one of your threads sends, and a conversation under the peer'
 	const f = await fixture(t)
 	const out = await f.send('owner-thread', { peer: 'alice', title: '-h Review PR 31', body: 'please' })
 	assert.equal(out, `Sent to alice as thread ${sent}. A conversation under alice's thread handles their answer, and this thread gets a link to it.`)
-	assert.deepEqual(f.labels['owner-thread'], ['cp-asks-00000000'], 'the inbox finds the asking thread by this label')
+	assert.deepEqual(f.labels['owner-thread'], [asked(sent)], 'the inbox finds the asking thread by this label')
 	assert.deepEqual(await f.lastSent(), { args: ['-m', '-', '--', 'alice', '-h Review PR 31'], body: 'please' }, 'a title cannot pass for a flag')
 	assert.equal(f.confirms.length, 0, 'your own threads send without a prompt')
 	await f.deliver(f.event('thread.resolve', 'resolved', true, sent))
@@ -348,54 +351,49 @@ test('a conversation sends only to its own peer, and only with your approval', a
 	assert.deepEqual((await f.lastSent()).args, ['-m', '-', '--fyi', '--', 'alice', 'Another'])
 })
 
-test("a conversation cannot reach other threads, Amp's settings or your machine", async (t) => {
+test("a conversation has only its own tools: no files, other threads, Amp or services outside", async (t) => {
 	const f = await fixture(t)
-	for (const tool of ['code_exec', 'tool_search', 'Task', 'oracle', 'librarian', 'skill', 'send_thread_message', 'create_thread', 'read_thread', 'find_thread', 'load_plugin', 'manage_amp', 'mac_shell', 'slack_write', 'mcp__github__create_pull_request']) {
-		assert.equal((await f.check('conversation', tool, {})).action, 'reject-and-continue', tool)
+	for (const tool of [
+		'Read', 'Grep', 'glob', 'finder', 'create_file', 'edit_file', 'apply_patch', 'undo_edit', 'format_file', 'get_diagnostics', 'look_at', 'view_media', 'git_push',
+		'code_exec', 'tool_search', 'Task', 'oracle', 'librarian', 'skill', 'send_thread_message', 'create_thread', 'read_thread', 'find_thread', 'load_plugin', 'manage_amp',
+		'mac_shell', 'slack_write', 'mcp__github__create_pull_request',
+	]) {
+		assert.equal((await f.check('conversation', tool, { path: join(f.own, 'x') })).action, 'reject-and-continue', tool)
+	}
+	assert.deepEqual(await f.check('conversation', 'web_search', { query: 'x' }), { action: 'allow' })
+	assert.deepEqual(await f.check('conversation', 'read_web_page', { url: 'https://example.com/' }), { action: 'allow' })
+	for (const url of ['file:///home/user/.local/share/amp/secrets.json', undefined]) {
+		assert.match((await f.check('conversation', 'read_web_page', { url })).message, /only http and https/, String(url))
 	}
 	assert.equal(f.confirms.length, 0)
-	f.answerConfirm(false)
-	assert.equal((await f.check('conversation', 'git_push', { remote: 'origin' })).action, 'reject-and-continue')
-	assert.match(f.confirms.at(-1).message, /git_push/)
 	assert.match((await f.check('conversation', 'shell_command', { cmd: 'amp threads markdown T-1' })).message, /amp CLI reaches your other threads/)
-	const send = await f.check('conversation', 'shell_command', { cmd: 'cpctl send bob "x" -m y' })
-	assert.match(send.message, /only with the cp_send tool/)
+	assert.match((await f.check('conversation', 'shell_command', { cmd: 'cpctl send bob "x" -m y' })).message, /only with the cp_send tool/)
+	assert.match((await f.check('conversation', 'shell_command', { cmd: `cpctl wait ${subject.slice(0, 8)} --timeout 30m` })).message, /end your turn/)
 	assert.deepEqual(await f.check('owner-thread', 'send_thread_message', {}), { action: 'allow' })
 	for (const cmd of ['cpctl --version 2>&1', `cpctl show ${subject.slice(0, 8)} 2>/dev/null | head -5`, `cpctl show ${subject} &>/tmp/x`, 'cat <<EOF\nhi\nEOF']) {
 		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'modify', cmd)
 	}
-	for (const cmd of ['diff <(env) x', 'cpctl show 99999999 >/dev/null', 'echo 1 > x; printenv']) {
+	for (const cmd of ['diff <(cpctl ls) x', 'cpctl show 99999999 >/dev/null', 'echo 1 > x; cpctl inbox']) {
 		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'reject-and-continue', cmd)
 	}
 })
 
-test('a conversation runs with only its own tools, writing only in its own directory', async (t) => {
+test('a conversation runs as its own agent, briefed on its sandbox', async (t) => {
 	const f = await fixture(t)
 	await f.deliver(f.event('thread.open', 'open', true, sent))
 	assert.deepEqual(f.agents.map((a) => a.model), ['anthropic/claude-opus-5-5'])
 	const { include, exclude } = f.agents[0].tools
 	assert.deepEqual(exclude, ['code_exec', 'tool_search'])
-	for (const tool of ['shell_command', 'edit_file', 'cp_ask_owner', 'cp_send']) assert.ok(include.includes(tool), tool)
-	for (const tool of ['code_exec', 'Task', 'find_thread', 'send_thread_message']) assert.ok(!include.includes(tool), tool)
+	assert.deepEqual(include, ['shell_command', 'shell_command_status', 'shell_command_kill', 'web_search', 'read_web_page', 'todo_read', 'todo_write', 'get_current_time', 'cp_ask_owner', 'cp_send'])
 	assert.equal(f.tools.cp_ask_owner.defer, false)
 	assert.equal(f.tools.cp_send.defer, false)
-	assert.match(f.messages.at(-1), new RegExp(`write only in your own directory, ${join(f.home, 'cp-work', sent.slice(0, 8))}`))
-
-	const mine = join(f.own, 'repo', 'src', 'main.rs')
-	assert.deepEqual(await f.check('conversation', 'edit_file', { path: mine }), { action: 'allow' })
-	assert.deepEqual(await f.check('conversation', 'Read', { path: join(f.checkout, 'README.md') }), { action: 'allow' })
-	assert.deepEqual(await f.check('conversation', 'Grep', { pattern: 'x' }), { action: 'allow' })
-	for (const input of [{ path: 'src/main.rs' }, { path: join(f.checkout, 'AGENTS.md') }, { path: '/tmp/x' }, { patch: '*** Begin Patch\n*** Add File: .amp/plugins/x.ts\n+x\n*** End Patch' }]) {
-		assert.match((await f.check('conversation', 'apply_patch', input)).message, /writes only in its own directory/, JSON.stringify(input))
-	}
-	for (const path of [join(f.home, '.bash_history'), join(f.home, 'cp-work', 'ffffffff', 'secret.txt'), '/proc/1/environ']) {
-		assert.match((await f.check('conversation', 'Read', { path })).message, /reads only the checkout and its own directory/, path)
-	}
+	assert.match(f.messages.at(-1), new RegExp(`write only in your own directory, ${join(f.home, 'cp-work', sent)}`))
+	assert.match(f.messages.at(-1), /cannot push, publish or open pull requests/)
 })
 
-test('a conversation runs commands without your secrets, and never reads credentials or changes Amp', async (t) => {
+test('everything a conversation runs, approved or not, runs in the sandbox', async (t) => {
 	const previous = process.env.AMP_SECRET_ENV_NAMES
-	process.env.AMP_SECRET_ENV_NAMES = 'CP_URL, CP_TOKEN,SOPS_AGE_KEY,AMP_THREAD_IDENTITY_AUTH,not a name'
+	process.env.AMP_SECRET_ENV_NAMES = 'SOPS_AGE_KEY'
 	t.after(() => {
 		if (previous === undefined) delete process.env.AMP_SECRET_ENV_NAMES
 		else process.env.AMP_SECRET_ENV_NAMES = previous
@@ -404,26 +402,47 @@ test('a conversation runs commands without your secrets, and never reads credent
 	const run = await f.check('conversation', 'shell_command', { cmd: `cpctl show ${subject}`, cwd: '/w' })
 	assert.equal(run.action, 'modify')
 	assert.equal(run.input.cwd, '/w')
-	assert.match(run.input.cmd, /^sudo -n unshare --mount --pid --fork --kill-child --mount-proc --propagation private \/bin\/sh -c '/)
+	assert.match(run.input.cmd, /^\/usr\/bin\/sudo -n unshare --mount --pid --ipc --fork --kill-child --mount-proc --propagation private \/bin\/sh -c '/)
 	const tail = ` '${f.home}' '${f.own}' '${f.checkout}' '${process.getuid()}' '${process.getgid()}' '${process.env.PATH}' 'http://127.0.0.1:PORT' 'KEY' 'cpctl show ${subject}' "$PWD"`
 	assert.equal(run.input.cmd.slice(-tail.length - 60).replace(/127\.0\.0\.1:\d+/, '127.0.0.1:PORT').replace(/cpa_[\w-]{43}/, 'KEY').slice(-tail.length), tail)
 	assert.doesNotMatch(run.input.cmd, new RegExp(`SOPS_AGE_KEY|${token}`))
 	for (const d of ['home', 'tmp']) assert.ok((await stat(join(f.own, d))).isDirectory(), d)
-	f.answerConfirm(true)
-	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: 'git push' }), { action: 'modify', input: { cmd: 'unset SOPS_AGE_KEY CP_TOKEN\ngit push' } })
-	for (const cmd of [
-		'cat ~/.local/share/amp/secrets.json',
-		'cat $HOME/.config/gh/hosts.yml',
-		'cat /home/user/.env',
-		'ls ~/.kube/',
-		'echo $AMP_THREAD_IDENTITY_AUTH',
-	]) {
-		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'reject-and-continue', cmd)
+	// The sandbox hides credentials, so commands that name them are no business of the guard.
+	for (const cmd of ['cat ~/.local/share/amp/secrets.json', 'python3 -c "import os; print(os.environ)"', 'env', 'grep -r XDG_STATE_HOME .']) {
+		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'modify', cmd)
 	}
-	assert.equal((await f.check('conversation', 'Read', { path: '/home/user/.config/amp/settings.json' })).action, 'reject-and-continue')
-	// The sandbox keeps the checkout's plugins read-only, so its own clone's are fair game.
-	assert.equal((await f.check('conversation', 'shell_command', { cmd: 'wc -l repo/.amp/plugins/cp-inbox.ts' })).action, 'modify')
-	assert.deepEqual(await f.check('owner-thread', 'shell_command', { cmd: 'echo hi' }), { action: 'allow' })
+	// Approved, a push runs in the sandbox too, without your credentials.
+	const push = await f.check('conversation', 'shell_command', { cmd: 'git push origin cp/x' })
+	assert.equal(push.action, 'modify')
+	assert.ok(push.input.cmd.startsWith('/usr/bin/sudo -n unshare'))
+	assert.match(f.confirms.at(-1).message, /runs in the sandbox, without your credentials/)
+	// What the approval shows is what runs.
+	await f.check('conversation', 'shell_command', { cmd: 'git push origin \u202emain' })
+	assert.match(f.confirms.at(-1).message, /git push origin \\u\{202e\}main/)
+	f.answerConfirm(false)
+	assert.match((await f.check('conversation', 'shell_command', { cmd: 'git push' })).message, /declined/)
+	// Whatever a conversation leaves in place of its HOME is replaced.
+	await rm(join(f.own, 'home'), { recursive: true })
+	await writeFile(join(f.own, 'home'), 'x')
+	assert.equal((await f.check('conversation', 'shell_command', { cmd: 'ls' })).action, 'modify')
+	assert.ok((await stat(join(f.own, 'home'))).isDirectory())
+	// A guard that fails refuses.
+	await rm(join(f.home, 'cp-work'), { recursive: true })
+	await writeFile(join(f.home, 'cp-work'), 'x')
+	assert.match((await f.check('conversation', 'shell_command', { cmd: 'ls' })).message, /the guard failed/)
+})
+
+test('without its settings, the plugin refuses everything in conversations and peer threads', async (t) => {
+	const previous = { url: process.env.CP_URL, token: process.env.CP_TOKEN }
+	delete process.env.CP_URL
+	delete process.env.CP_TOKEN
+	t.after(() => Object.assign(process.env, { CP_URL: previous.url, CP_TOKEN: previous.token }))
+	let guard
+	const labels = { conversation: ['clanker-proxy'], peer: ['cp-peer'], mine: [] }
+	const plugin = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
+	await plugin.default({ logger: { log() {} }, on: (name, fn) => { if (name === 'tool.call') guard = fn }, threads: { get: (id) => ({ labels: async () => labels[id] }) } })
+	for (const id of ['conversation', 'peer']) assert.equal((await guard({ thread: { id }, tool: 'shell_command', input: {} })).action, 'reject-and-continue', id)
+	assert.deepEqual(await guard({ thread: { id: 'mine' }, tool: 'shell_command', input: {} }), { action: 'allow' })
 })
 
 test('a conversation has a button that shows you its cpd thread, its text fenced', async (t) => {
@@ -479,9 +498,10 @@ test("a conversation's cpctl reaches only its own thread, through the plugin, wh
 // The sandbox itself, run for real where sudo needs no password, as in CI
 // and Amp's orbs.
 const sandboxable = spawnSync('sudo', ['-n', 'true']).status === 0 && spawnSync('sh', ['-c', 'command -v unshare && command -v setpriv']).status === 0
-test('a sandboxed command sees only the checkout and its own directory, as you, without secrets or sudo', { skip: !sandboxable && 'needs passwordless sudo, unshare and setpriv' }, async (t) => {
+test('a sandboxed command sees only the checkout and its own directory, as you, without secrets or sudo', { skip: !sandboxable && !process.env.CI && 'needs passwordless sudo, unshare and setpriv' }, async (t) => {
 	// Not under /tmp, which the sandbox replaces.
-	const base = await mkdtemp(join(homedir(), '.cp-inbox-test-'))
+	await mkdir('target', { recursive: true })
+	const base = await mkdtemp(join(process.cwd(), 'target', 'cp-inbox-test-'))
 	t.after(() => rm(base, { recursive: true, force: true }))
 	const f = await fixture(t, base)
 	const { home, checkout, own } = f
@@ -510,6 +530,9 @@ echo "secret=\${SOPS_AGE_KEY:-none} token=$(echo "$CP_TOKEN" | cut -c1-4) real=$
 echo "me=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CP_TOKEN" "$CP_URL/api/v1/me") list=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CP_TOKEN" "$CP_URL/api/v1/threads")"
 if sudo -n true 2>/dev/null; then echo sudo=yes; else echo sudo=no; fi
 n=$(ls /proc | grep -c '^[0-9][0-9]*$'); if [ "$n" -lt 10 ]; then echo procs=few; else echo "procs=$n"; fi
+echo "ptys=$(ls /dev/pts | tr '\\n' ' ')"
+see /mnt/home staging
+can /sys/kernel/x sys
 git config --global user.name
 `)
 	const path = process.env.PATH
@@ -524,7 +547,7 @@ git config --global user.name
 		`uid=${uid} groups=${process.getgid()}`,
 		'amp=hidden', 'other=hidden', 'amp-bin=hidden',
 		'guidance', 'checkout=read-only', 'own=writable', 'tmp=writable',
-		`home=${join(own, 'home')}`, 'tool-ran', 'secret=none token=cpa_ real=no', 'me=200 list=403', 'sudo=no', 'procs=few', 'Owner', '',
+		`home=${join(own, 'home')}`, 'tool-ran', 'secret=none token=cpa_ real=no', 'me=200 list=403', 'sudo=no', 'procs=few', 'ptys=ptmx ', 'staging=hidden', 'sys=read-only', 'Owner', '',
 	].join('\n'))
 })
 
@@ -550,7 +573,7 @@ test('a conversation is archived when its thread ends, and comes back with it', 
 	assert.deepEqual((await f.ampCalls()).at(-1), ['threads', 'archive', '--unarchive', 'conversation'])
 	assert.equal(f.messages.length, 1, 'unarchived before the message')
 
-	assert.deepEqual(await f.end('conversation'), { action: 'done' })
+	assert.equal(await f.end('conversation'), undefined)
 	assert.equal((await f.ampCalls()).length, 2, 'not archived while the thread is live')
 	await f.respond({ state: 'closed' })
 	await f.end('conversation')
@@ -562,8 +585,8 @@ test('a conversation is archived when its thread ends, and comes back with it', 
 test('the thread that asked gets a link to the conversation once the peer answers, never their words', async (t) => {
 	const f = await fixture(t)
 	const asker = 'T-00000000-0000-4000-8000-0000000000aa'
-	await f.searches({ 'label:cp-asks-00000000': [{ id: asker }] })
-	f.labels[asker] = ['cp-asks-00000000', 'mine']
+	await f.searches({ [`label:${asked(sent)}`]: [{ id: asker }] })
+	f.labels[asker] = [asked(sent), 'mine']
 	await f.deliver(f.event('thread.ack', 'acked', false, sent))
 	assert.ok(!f.posted.some((p) => p.thread === asker), 'an ack is not an answer')
 	await f.deliver(f.event('thread.resolve', 'resolved', true, sent))
@@ -580,10 +603,10 @@ test("a peer's thread sends for the thread that asked, which gets the link", asy
 	const hub = f.created[0].id
 	const asker = 'T-00000000-0000-4000-8000-0000000000bb'
 	assert.match(await f.send(hub, { peer: 'alice', title: 't', body: 'b', replyTo: asker }), new RegExp(`thread ${asker} gets a link to it\\.$`))
-	assert.deepEqual(f.labels[asker], ['cp-asks-00000000'])
+	assert.deepEqual(f.labels[asker], [asked(sent)])
 	const out = await f.send(hub, { peer: 'alice', title: 't', body: 'b', replyTo: 'not a thread' })
 	assert.match(out, /handles their answer\.$/)
-	assert.ok(!Object.entries(f.labels).some(([id, l]) => id !== asker && l.some((x) => x.startsWith('cp-asks-'))), 'no other thread is told')
+	assert.ok(!Object.entries(f.labels).some(([id, l]) => id !== asker && l.some((x) => x.startsWith('cp-ask-'))), 'no other thread is told')
 })
 
 test('an ended thread never starts a new conversation', async (t) => {

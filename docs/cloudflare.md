@@ -31,7 +31,7 @@ Run it again any time to update; your data and settings carry over.
 
 **With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--worker <name>] [--agent amp|local|none]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
 
-**Amp inbox:** choose Amp (or pass `--agent amp`). The script makes the agent token and prints one prompt for a new Amp thread: it adds this repository as an Amp project, asks you for two values, and starts the inbox. See [amp.md](amp.md).
+**Amp inbox:** choose Amp (or pass `--agent amp`). The script makes the agent token and prints one prompt for a new Amp thread: it adds this repository as an Amp project, asks you for two values, and starts the inbox. Read [the risks](amp.md#risks) first.
 
 ## Local
 
@@ -52,5 +52,5 @@ conformance suite against it with a native daemon. CI runs it on every change.
 ## Operate
 
 - **Logs:** one JSON line per request (request ID, method, path, status, ms), never queries, headers or bodies. The ID comes from `X-Request-Id` or Cloudflare's ray ID and is echoed back. Keep logs with `observability` in `wrangler.jsonc`.
-- **Cost:** an open stream (`cpctl wait`, `watch`, the Amp plugin) keeps the object in memory. A full day of one stream is about 11,000 GB-s, inside the free daily allowance.
+- **Cost:** an open stream (`cpctl wait`, `watch`) keeps the object in memory. A full day of one stream is about 11,000 GB-s, inside the free daily allowance.
 - **Starting over:** set `CP_STORAGE` to a new name (it names the object; default `owner`) and deploy. The old object keeps its data, unreachable. Then peer again.

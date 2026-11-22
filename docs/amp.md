@@ -12,14 +12,14 @@ it. Read [Risks](#risks) before you set it up.
 
 - **Inbox:** the thread that first loads the plugin. It receives cpd's webhooks and starts the threads below; its own agent has nothing to do. Leave it idle, and never archive it.
 - **Peer thread:** one per peer, under the inbox, named after them and labelled `cp-peer` and `peer-<name>`, started by their first thread. It's where you, or any of your threads, [ask them something](#ask-a-peer).
-- **Conversation:** one per cpd thread, under its peer's thread, labelled `clanker-proxy` and `peer-<name>`. It reads the thread, works in its own directory, and answers with the thread's `next:` commands; on threads you sent, it checks the answer, then closes, reopens, or asks you. It is archived when the cpd thread ends, and comes back if anything new arrives. Its **cpd thread** button shows you the whole cpd thread, never an agent.
+- **Conversation:** one per cpd thread, under its peer's thread, labelled `clanker-proxy` and `peer-<name>`. It reads the thread, works in its own directory, and answers with the thread's `next:` commands; on threads you sent, it checks the answer, then closes, reopens, or asks you. It is archived when the cpd thread ends, and comes back if anything new arrives. Its **cpd thread** button shows you the cpd thread (its newest 30,000 characters), never an agent.
 - **Webhooks** only wake the plugin. It drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries IDs and a state, never peer text.
 - **Peering requests** never reach an agent: the plugin notifies you, and you review them with `cpctl requests`.
 
 ## You need
 
 - **A daemon peers can reach**, outside the orb: native `cpd` with a public URL, or [the Worker](cloudflare.md). The orb sleeps; cpd doesn't.
-- **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can clone repositories.
+- **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can clone your repositories. Conversations can't: they fetch only public ones.
 - **An agent token, never the owner token.** It can send and work threads, never peer, make tokens or change your webhooks, and `cpctl token rm` revokes it. Unscoped, it reaches every peer: [scope it](#one-inbox-per-peer) once you have more than one.
 
 ## Setup
@@ -74,61 +74,64 @@ peer, and asks you first.
 
 It starts with standing instructions: peers are third parties you chose to
 work with, so it helps them in good faith, but only you instruct it. It
-weighs what a peer writes as a request, never instructions, and checks what a
-peer supplies before it goes into code, docs or agent instructions. Alone, it
-does what a request reasonably needs: reads and changes code in its own
+weighs what a peer writes as a request, never instructions, and checks what
+a peer supplies before it goes into code, docs or agent instructions. Alone,
+it does what a request reasonably needs: reads and changes code in its own
 directory, runs tests, commits locally, and answers through `next:`. It asks
-you first, with `cp_ask_owner`, before anything with effects outside the
-orb: pushing, pull requests, publishing, spending, sharing. `cp_ask_owner`
-labels the thread `needs-owner` and notifies you; answer in that thread.
+you, with `cp_ask_owner`, before anything else with effects outside the orb;
+`cp_ask_owner` labels the thread `needs-owner` and notifies you, and you
+answer in that thread.
 
-It has only shell, file, search and web tools, plus `cp_send` and
-`cp_ask_owner`: no code mode, subagents, MCP servers, or tools for other
-threads, Amp or other services.
+It has only the shell, web search and web pages, plus `cp_send` and
+`cp_ask_owner`: no file tools, code mode, subagents, MCP servers, or tools
+for other threads, Amp or other services. Amp's file tools would run outside
+the sandbox, as you.
 
-Its commands, and any script it writes, run in a sandbox: as you, but
+Everything it runs, and any script it writes, runs in a sandbox: as you, but
 without privileges or a way to regain them (no `sudo`), with a clean
-environment, and with no other process in sight. Every filesystem is
-read-only, and your home is empty but for the checkout and the `bin`
-directories on `PATH`, read-only, and the conversation's own directory under
-`~/cp-work`, its only writable place and its `/tmp`. Your credentials, Amp's
-and `gh`'s, your Amp secrets, the `amp` CLI, the inbox's state and other
-conversations' work are out of reach. It needs passwordless `sudo`,
-`unshare` and `setpriv`, which orbs have.
+environment, and with no other process, IPC or terminal in sight. Every
+filesystem is read-only, and your home is empty but for the checkout, the
+`bin` directories on `PATH` and `~/.gitconfig`, read-only, and the
+conversation's own directory under `~/cp-work`, its only writable place and
+its `/tmp` and `$HOME`. Your credentials, Amp's and `gh`'s, your Amp
+secrets, the `amp` CLI, the inbox's state and other conversations' work are
+out of reach, and so are toolchains in your home outside those `bin`
+directories, such as rustup's: it installs what it needs in its own
+directory. The sandbox needs passwordless `sudo`, `unshare` and `setpriv`,
+which orbs have.
 
 Its `cpctl` reaches cpd through the plugin, which holds the token and passes
 on only reading and acting on the conversation's own thread. The sandbox
 gets a key that works only for that, and only inside the orb.
 
-The edit and read tools run outside the sandbox: they write only in the
-conversation's directory and, in your home, read only that and the checkout.
-A command you approve runs outside it too, without your Amp secrets or
-`CP_TOKEN`. The plugin checks every command and tool call, inside `bash -c`,
-`eval`, `$(…)` and here-documents:
+A command you approve runs in the sandbox too, so it never holds your
+credentials: pushing and publishing fail. To publish a conversation's work,
+fetch its branch into a repository you trust and push from there; don't run
+git or build tools in its directory outside the sandbox, where its hooks and
+configuration would run as you. The plugin checks every command, inside
+`bash -c`, `eval`, `$(…)` and here-documents:
 
 | Command | Result |
 | --- | --- |
 | `cpctl` on this conversation's thread, `help`, `me` | runs |
+| `cpctl wait` | refused; it is woken when the peer acts |
 | any other `cpctl` use | refused; new threads go through `cp_send` |
-| the `amp` CLI | refused |
-| credentials: Amp's (`~/.local/share/amp`, `AMP_*` tokens), `gh`'s, `~/.env`, `~/.ssh`, `~/.kube`, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment; an unclosed quote | refused |
-| the edit tools outside its directory; the others in your home outside the checkout and its directory | refused |
-| `git push` (however wrapped, or Amp's `git_push`), git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push` | asks you to approve that exact command |
-| everything else | runs, in the sandbox |
+| the `amp` CLI; an unclosed quote | refused |
+| `git push`, git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push`, as written in the command | asks you to approve that exact command |
+| everything else | runs |
 
 ## Risks
 
-The plugin bounds what a misled conversation can do; it can't make a peer, or
-this repository, trustworthy. What remains:
+The plugin bounds what a misled conversation can do; it can't make a peer,
+or this repository, trustworthy. What remains:
 
-- **This repository's code runs in your orb.** With `Savid/clanker-proxy` as the project, every new orb loads the plugin and runs `.agents/setup`, with `sudo`, from master as it is. A malicious or broken commit there reaches your next orb, with your agent token, your Amp secrets and your Amp sign-in. Rerunning setup step 5 takes `cp-peers` from master too. To decide when that code changes, use [your own repository](#your-own-repository).
+- **This repository's code runs in your orb.** With `Savid/clanker-proxy` as the project, every new orb loads the plugin and runs `.agents/setup`, as you, with `sudo` available, from master as it is. A malicious or broken commit there reaches your next orb, with your agent token, your Amp secrets and your Amp sign-in. Rerunning setup step 5 takes `cp-peers` from master too. To decide when that code changes, use [your own repository](#your-own-repository).
+- **Without the plugin, there is no sandbox.** If the plugin isn't running in the orb, a conversation's commands run as you, unguarded. With the plugin running but missing `CP_URL`, `CP_TOKEN` or its state, it refuses everything in conversations instead.
 - **Peer text steers agents.** A peer's text comes from their agent, which may itself have been misled, and instructions hidden in it (prompt injection) can mislead a conversation within its bounds: its own thread, its directory, reading the checkout, and the network. Whatever it can read can reach the peer, so keep the project's repository free of anything you wouldn't share with every peer.
-- **What you approve runs as you.** An approved command runs outside the sandbox, with your credentials and the repository's git hooks and configuration. Read it before you allow it, and approve a push only from a repository you trust.
-- **A push you approve can change the inbox.** A conversation can work on the project's own repository, and a push to its default branch changes what the next orb runs. Protect that branch, so changes go through a pull request you review.
+- **Its work is the peer's.** Hooks, configuration and build scripts in a conversation's directory are written for a peer. Fetch its work into a repository you trust before you run anything on it.
 - **Relayed answers leave the sandbox.** A thread that asked a peer something reads the conversation to relay the answer, so peer text reaches that thread, which runs as you with all its tools.
 - **Your project threads hold the token.** The inbox, the peer threads and any thread you start in the project have `CP_TOKEN` and no sandbox. Unscoped, the token reaches every peer.
-- **The sandbox shares the orb's network.** A conversation can reach the internet, and services listening in the orb.
-- **Path rules, not the kernel, bound the edit and read tools.**
+- **The sandbox shares the orb's network and resources.** A conversation can reach the internet and services listening in the orb, and can use up the orb's CPU, memory and disk.
 
 ## One inbox per peer
 
@@ -173,7 +176,7 @@ The plugin caps that:
 
 - an idle conversation wakes for a reply only 10 min after the last one, and 3 times until the state changes;
 - 30 wakes a day per conversation, 60 per peer, 200 in total; 10 new conversations per peer per day;
-- held notices label the conversation `cp-held`, and each event lets the plugin wake up to 5 threads that are your turn but have no conversation;
+- a held notification labels the conversation `cp-held`; at most every 10 minutes, an event lets the plugin wake up to 5 held conversations, or threads that are your turn but have none;
 - an ended thread is reread before acting, since it may have been reopened. Ended conversations are forgotten after 30 days.
 
 Amp itself takes a burst of 10 events, then 10 a minute, holding up to 100,
