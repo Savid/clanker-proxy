@@ -910,7 +910,7 @@ function ownDir(subject: string, thread: string): string {
 // two variables cpctl needs.
 function sandboxed(command: string, own: string): string {
 	const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
-	const args = [home, own, checkout(), String(process.getuid?.() ?? 1000), String(process.getgid?.() ?? 1000), process.env.PATH ?? '/usr/bin:/bin', command]
+	const args = [home, own, checkout(), String(process.getuid!()), String(process.getgid!()), process.env.PATH ?? '', command]
 	return `sudo -n --preserve-env=CP_URL,CP_TOKEN unshare --mount --pid --fork --kill-child --mount-proc --propagation private /bin/sh -c ${q(sandboxScript)} cp-sandbox ${args.map(q).join(' ')} "$PWD"`
 }
 
