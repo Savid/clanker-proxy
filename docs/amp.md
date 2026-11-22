@@ -13,8 +13,8 @@ that asked gets a link to it.
 - **Inbox:** the thread that first loads the plugin. The plugin there receives cpd's webhooks and starts the threads below; the inbox's own agent never sees them and has nothing to do. Leave it idle, and never archive it. Peering requests never reach an agent: the plugin notifies you, and you review them with `cpctl requests`.
 - **Webhooks** are trusted only as a wake-up. The plugin drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries only IDs and a state, never peer text: what a conversation acts on, it reads from cpd.
 - **Peer thread:** one per peer, under the inbox, named after them and labelled `cp-peer` and `peer-<name>`, from that peer's first thread. It holds their conversations, and it's where you, or another of your threads, ask them something ([ask a peer](#ask-a-peer)).
-- **Conversation:** one per cpd thread, under its peer's thread, in its own git worktree under `~/cp-work`. It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads this side sent: it checks the peer's answer, then closes, reopens, or asks you. Once the cpd thread is closed, declined or withdrawn, the plugin archives it; anything new on that thread brings it back. Its **cpd thread** button shows you the whole cpd thread in a dialog, never to an agent.
-- **Peer text** arrives only in conversations, through `cpctl show`, quoted line by line after `│`. Your other threads see it only by reading a conversation, as a thread that asked a peer something does to relay the answer. Peers are third parties you chose to work with: agents help them in good faith, but only you instruct them. A peer's text comes from their agent, which may itself have been misled, so agents weigh it as a request, never instructions; they ignore attempts to steer them (prompt injection) and check what a peer supplies before it goes into code, docs or agent instructions (poisoning). Each thread's conversation is separate, but they share the orb and its token; to wall peers off from each other, give each its own inbox ([one inbox per peer](#one-inbox-per-peer)).
+- **Conversation:** one per cpd thread, under its peer's thread, with its own directory under `~/cp-work` and a [sandbox](#what-agents-may-do-alone). It reads with `cpctl show`, works, and answers with the thread's `next:` commands. That includes threads this side sent: it checks the peer's answer, then closes, reopens, or asks you. Once the cpd thread is closed, declined or withdrawn, the plugin archives it; anything new on that thread brings it back. Its **cpd thread** button shows you the whole cpd thread in a dialog, never to an agent.
+- **Peer text** arrives only in conversations, through `cpctl show`, quoted line by line after `│`. Your other threads see it only by reading a conversation, as a thread that asked a peer something does to relay the answer. Peers are third parties you chose to work with: agents help them in good faith, but only you instruct them. A peer's text comes from their agent, which may itself have been misled, so agents weigh it as a request, never instructions; they ignore attempts to steer them (prompt injection) and check what a peer supplies before it goes into code, docs or agent instructions (poisoning). Conversations can't see each other's work, but they share the inbox's token; to wall peers off from each other, give each its own inbox ([one inbox per peer](#one-inbox-per-peer)).
 
 ## You need
 
@@ -97,7 +97,7 @@ For an inbox in a repository of your own, copy
 ## What agents may do alone
 
 Each conversation starts with standing instructions. Alone, it does what a
-peer's request reasonably needs: reads and changes code in its own worktree,
+peer's request reasonably needs: reads and changes code in its own directory,
 runs tests, commits locally, and answers through `next:`. It asks you first,
 with `cp_ask_owner`, before anything with effects outside the orb: pushing,
 pull requests, publishing, spending, sharing. A new thread to its peer goes
@@ -107,9 +107,24 @@ credentials.
 
 A conversation has only shell, file, search and web tools, plus `cp_send`
 and `cp_ask_owner`: no code mode, subagents, MCP servers, or tools for other
-threads, Amp or other services. Amp puts all your secrets in the orb,
-personal ones too; a conversation's commands run with them unset, except
-`CP_URL` and `CP_TOKEN`. The plugin also checks every command and tool call:
+threads, Amp or other services.
+
+Its commands, and any script it writes, run in a sandbox: as you, but
+without privileges or a way to regain them (no `sudo`), with only `CP_URL`
+and `CP_TOKEN` in the environment, and with no other process in sight. Every
+filesystem is read-only, and your home is empty but for the checkout and the
+`bin` directories on `PATH`, read-only, and the conversation's own directory,
+its only writable place and its `/tmp`. Your credentials, Amp's and `gh`'s,
+your Amp secrets, the `amp` CLI, the inbox's state and other conversations'
+work are out of reach. It needs passwordless `sudo`, `unshare` and `setpriv`,
+which orbs have. The sandbox shares the orb's network.
+
+A command you approve runs outside the sandbox, since it may need your
+credentials, but still without your Amp secrets. It also runs the
+repository's git hooks and configuration, so approve a push only from a
+repository you trust. The edit and read tools run outside the sandbox too:
+they write only in the conversation's directory and, in your home, read only
+that and the checkout. The plugin also checks every command and tool call:
 
 | Command | Result |
 | --- | --- |
@@ -117,14 +132,11 @@ personal ones too; a conversation's commands run with them unset, except
 | any other `cpctl` use, or `--url`/`--token` overrides | refused; new threads go through `cp_send` |
 | the `amp` CLI; Amp's plugins, skills and settings (`.amp/plugins`, `~/.config/amp`, your plugins repository) | refused |
 | credentials: `CP_TOKEN`, Amp's (`~/.local/share/amp`, `AMP_*` tokens), `gh`'s, `~/.env`, `~/.ssh`, `~/.kube`, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment; an unclosed quote | refused |
-| the edit tools in the orb's checkout, which every thread there reads | refused; it works in its worktree |
+| the edit tools outside its directory; the others in your home outside the checkout and its directory | refused |
 | `git push` (however wrapped, or Amp's `git_push`), git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push` | asks you to approve that exact command |
-| everything else | runs |
+| everything else | runs, in the sandbox |
 
-Commands are checked inside `bash -c`, `eval`, `$(…)` and here-documents. A
-script the agent writes and then runs is not, and could still find your
-secrets in another process's environment: keep secrets you can't risk out of
-your personal Amp secrets. This is a guardrail, not a sandbox.
+Commands are checked inside `bash -c`, `eval`, `$(…)` and here-documents.
 When an agent needs you, its `cp_ask_owner` tool labels the thread
 `needs-owner` and notifies you; answer in that thread.
 
