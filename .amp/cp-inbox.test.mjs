@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { promisify } from 'node:util'
 
 const subject = '00000000-0000-4000-8000-000000000001'
 const sent = '00000000-0000-4000-8000-000000000002'
@@ -27,9 +28,12 @@ async function fixture(t, base) {
 	const checkout = join(home, 'workspace', 'repo')
 	const env = { XDG_STATE_HOME: dir, CP_INBOX_CPCTL: cpctl, CP_INBOX_AMP: ampCLI, CP_URL: 'https://cpd.test/', CP_TOKEN: token, CP_INBOX_HOME: home, AMP_WORKING_DIRECTORY: checkout }
 	const realFetch = globalThis.fetch
+	// What the broker passed on to cpd.
+	const forwarded = []
 	globalThis.fetch = async (url, init) => {
-		registrations.push({ url, init })
-		return new Response('{}', { status: 200 })
+		if (String(url).endsWith('/api/v1/me/webhook')) registrations.push({ url, init })
+		else forwarded.push({ method: init.method, url: String(url), authorization: init.headers.authorization, body: init.body && Buffer.from(init.body).toString() })
+		return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
 	}
 	t.after(() => { globalThis.fetch = realFetch })
 	const previous = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]))
@@ -179,7 +183,7 @@ if (args[1] === 'search') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		home, checkout, own: join(home, 'cp-work', subject.slice(0, 8)),
+		home, checkout, own: join(home, 'cp-work', subject.slice(0, 8)), forwarded, httpFetch: realFetch,
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
@@ -400,12 +404,13 @@ test('a conversation runs commands without your secrets, and never reads credent
 	const run = await f.check('conversation', 'shell_command', { cmd: `cpctl show ${subject}`, cwd: '/w' })
 	assert.equal(run.action, 'modify')
 	assert.equal(run.input.cwd, '/w')
-	assert.match(run.input.cmd, /^sudo -n --preserve-env=CP_URL,CP_TOKEN unshare --mount --pid --fork --kill-child --mount-proc --propagation private \/bin\/sh -c '/)
-	assert.ok(run.input.cmd.endsWith(` '${f.home}' '${f.own}' '${f.checkout}' '${process.getuid()}' '${process.getgid()}' '${process.env.PATH}' 'cpctl show ${subject}' "$PWD"`))
-	assert.doesNotMatch(run.input.cmd, /SOPS_AGE_KEY/)
+	assert.match(run.input.cmd, /^sudo -n unshare --mount --pid --fork --kill-child --mount-proc --propagation private \/bin\/sh -c '/)
+	const tail = ` '${f.home}' '${f.own}' '${f.checkout}' '${process.getuid()}' '${process.getgid()}' '${process.env.PATH}' 'http://127.0.0.1:PORT' 'KEY' 'cpctl show ${subject}' "$PWD"`
+	assert.equal(run.input.cmd.slice(-tail.length - 60).replace(/127\.0\.0\.1:\d+/, '127.0.0.1:PORT').replace(/cpa_[\w-]{43}/, 'KEY').slice(-tail.length), tail)
+	assert.doesNotMatch(run.input.cmd, new RegExp(`SOPS_AGE_KEY|${token}`))
 	for (const d of ['home', 'tmp']) assert.ok((await stat(join(f.own, d))).isDirectory(), d)
 	f.answerConfirm(true)
-	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: 'git push' }), { action: 'modify', input: { cmd: 'unset SOPS_AGE_KEY\ngit push' } })
+	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: 'git push' }), { action: 'modify', input: { cmd: 'unset SOPS_AGE_KEY CP_TOKEN\ngit push' } })
 	for (const cmd of [
 		'cat ~/.local/share/amp/secrets.json',
 		'cat $HOME/.config/gh/hosts.yml',
@@ -442,6 +447,35 @@ test('a conversation has a button that shows you its cpd thread, its text fenced
 	assert.match(f.notices.at(-1), /not a conversation/)
 })
 
+test("a conversation's cpctl reaches only its own thread, through the plugin, which holds the token", async (t) => {
+	const f = await fixture(t)
+	const run = await f.check('conversation', 'shell_command', { cmd: `cpctl show ${subject.slice(0, 8)}` })
+	const [, url, key] = run.input.cmd.match(/'(http:\/\/127\.0\.0\.1:\d+)' '(cpa_[\w-]{43})'/)
+	const call = (path, init = {}) => f.httpFetch(url + path, { ...init, headers: { authorization: `Bearer ${key}`, ...init.headers } })
+	assert.equal((await call(`/api/v1/threads/${subject.slice(0, 8)}?limit=20`)).status, 200)
+	assert.equal((await call(`/api/v1/threads/${subject.slice(0, 8)}/events`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"action":"ack"}' })).status, 200)
+	assert.equal((await call('/api/v1/me')).status, 200)
+	const real = `Bearer ${token}`
+	assert.deepEqual(f.forwarded, [
+		{ method: 'GET', url: `https://cpd.test/api/v1/threads/${subject}?limit=20`, authorization: real, body: undefined },
+		{ method: 'POST', url: `https://cpd.test/api/v1/threads/${subject}/events`, authorization: real, body: '{"action":"ack"}' },
+		{ method: 'GET', url: 'https://cpd.test/api/v1/me', authorization: real, body: undefined },
+	])
+	for (const [method, path] of [
+		['GET', '/api/v1/threads'], ['POST', '/api/v1/threads'], ['GET', '/api/v1/stream'], ['POST', '/api/v1/me/webhook'],
+		['GET', `/api/v1/threads/${sent}`], ['GET', `/api/v1/threads/${subject}/events`], ['POST', `/api/v1/threads/${subject}`], ['GET', '/api/v1/threads/ffff'],
+	]) {
+		assert.equal((await call(path, { method })).status, 403, `${method} ${path}`)
+	}
+	assert.equal((await f.httpFetch(url + '/api/v1/me')).status, 401)
+	assert.equal((await f.httpFetch(url + '/api/v1/me', { headers: { authorization: real } })).status, 401)
+	assert.equal(f.forwarded.length, 3)
+	// Another conversation gets its own key, which reaches only its own thread.
+	f.labels['other-conversation'] = ['clanker-proxy']
+	const other = await f.check('other-conversation', 'shell_command', { cmd: 'cpctl me' })
+	assert.doesNotMatch(other.input.cmd, new RegExp(key))
+})
+
 // The sandbox itself, run for real where sudo needs no password, as in CI
 // and Amp's orbs.
 const sandboxable = spawnSync('sudo', ['-n', 'true']).status === 0 && spawnSync('sh', ['-c', 'command -v unshare && command -v setpriv']).status === 0
@@ -472,7 +506,8 @@ can ${own}/probe.out own
 can /tmp/probe.out tmp
 echo "home=$HOME"
 tool
-echo "secret=\${SOPS_AGE_KEY:-none} url=$CP_URL"
+echo "secret=\${SOPS_AGE_KEY:-none} token=$(echo "$CP_TOKEN" | cut -c1-4) real=$(if [ "$CP_TOKEN" = "${token}" ]; then echo yes; else echo no; fi)"
+echo "me=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CP_TOKEN" "$CP_URL/api/v1/me") list=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CP_TOKEN" "$CP_URL/api/v1/threads")"
 if sudo -n true 2>/dev/null; then echo sudo=yes; else echo sudo=no; fi
 n=$(ls /proc | grep -c '^[0-9][0-9]*$'); if [ "$n" -lt 10 ]; then echo procs=few; else echo "procs=$n"; fi
 git config --global user.name
@@ -482,13 +517,14 @@ git config --global user.name
 	t.after(() => { process.env.PATH = path })
 	const run = await f.check('conversation', 'shell_command', { cmd: 'sh probe.sh' })
 	assert.equal(run.action, 'modify')
-	const out = execFileSync('bash', ['-c', run.input.cmd], { cwd: own, encoding: 'utf8', env: { ...process.env, SOPS_AGE_KEY: 'leaked' } })
+	// Not execFileSync: the broker answers from this process.
+	const { stdout: out } = await promisify(execFile)('bash', ['-c', run.input.cmd], { cwd: own, env: { ...process.env, SOPS_AGE_KEY: 'leaked' } })
 	const uid = process.getuid()
 	assert.equal(out, [
 		`uid=${uid} groups=${process.getgid()}`,
 		'amp=hidden', 'other=hidden', 'amp-bin=hidden',
 		'guidance', 'checkout=read-only', 'own=writable', 'tmp=writable',
-		`home=${join(own, 'home')}`, 'tool-ran', 'secret=none url=https://cpd.test/', 'sudo=no', 'procs=few', 'Owner', '',
+		`home=${join(own, 'home')}`, 'tool-ran', 'secret=none token=cpa_ real=no', 'me=200 list=403', 'sudo=no', 'procs=few', 'Owner', '',
 	].join('\n'))
 })
 
