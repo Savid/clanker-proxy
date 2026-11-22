@@ -24,17 +24,29 @@ interface Peer {
 	thread: string
 }
 
+async function search(query: string): Promise<unknown[]> {
+	const { stdout } = await run(ampCLI, ['threads', 'search', query, '--json'], { timeout: 15_000 })
+	const found: unknown = JSON.parse(stdout)
+	return Array.isArray(found) ? found : []
+}
+
 // peers reads cp-inbox's peer threads, each titled with its peer's name and
 // aliases: "bob (bobby, rob)".
 async function peers(): Promise<Peer[]> {
-	const { stdout } = await run(ampCLI, ['threads', 'search', 'label:cp-peer archived:false', '--json'], { timeout: 15_000 })
-	const found: unknown = JSON.parse(stdout)
+	const found = await search('label:cp-peer archived:false')
 	const named = (n: string) => peerName.test(n) && n.length <= 39
-	return (Array.isArray(found) ? found : []).flatMap((t): Peer[] => {
+	return found.flatMap((t: any): Peer[] => {
 		const title = typeof t?.title === 'string' ? t.title.match(/^([a-z0-9-]+)(?: \(([a-z0-9, -]+)\))?$/) : null
 		if (typeof t?.id !== 'string' || !ampThread.test(t.id) || !title || !named(title[1]!)) return []
 		return [{ name: title[1]!, aliases: (title[2] ?? '').split(', ').filter(named), thread: t.id }]
 	})
+}
+
+// labelled finds a peer's thread by its label, before cp-inbox has titled it.
+async function labelled(name: string): Promise<Peer | undefined> {
+	// cp-inbox's labels are cut to Amp's 32 characters.
+	const [t]: any[] = await search(`label:cp-peer archived:false label:${`peer-${name}`.slice(0, 32).replace(/-+$/, '')}`)
+	return typeof t?.id === 'string' && ampThread.test(t.id) ? { name, aliases: [], thread: t.id } : undefined
 }
 
 // called lists a peer with its aliases, for the agent.
@@ -68,16 +80,20 @@ export default async function (amp: PluginAPI) {
 			let found: Peer | undefined
 			try {
 				// Read now: aliases may have changed since this thread started.
-				found = (await peers()).find((p) => p.name === peer || p.aliases.includes(peer))
+				// A name beats an alias.
+				const all = await peers()
+				found = all.find((p) => p.name === peer) ?? all.find((p) => p.aliases.includes(peer)) ?? (await labelled(peer))
 			} catch {
 				return 'ask_peer: cannot search your threads.'
 			}
 			// A peer's thread starts with the first thread between you.
 			if (!found) return `ask_peer: ${peer} has no thread in your clanker-proxy inbox yet. Ask them first from a thread of that project, with cp_send.`
 			const { name, thread } = found
+			// The name as asked: the peer's thread resolves it with cpd, and
+			// refuses any peer but its own, so a stale title cannot misroute it.
 			await amp.threads.get(thread).appendUserMessage({
 				type: 'user-message',
-				content: `My thread ${ctx.thread.id} asks you to send ${name} this, with replyTo ${ctx.thread.id}:\n\n${message}`,
+				content: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}:\n\n${message}`,
 			})
 			return `Passed to ${name}'s thread, https://ampcode.com/threads/${thread}, which sends it. When ${name} answers, this thread gets a link to the conversation that handles it.`
 		},
