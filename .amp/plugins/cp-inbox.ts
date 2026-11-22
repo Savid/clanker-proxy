@@ -56,6 +56,8 @@ const sweepMax = 5
 const keepEnded = 30 * day
 // An approval prompt must show the whole command.
 const maxApprovable = 2000
+// How much of a cpd thread its dialog shows.
+const maxShown = 30_000
 
 const states = new Set(['open', 'acked', 'needs-input', 'resolved', 'closed', 'declined', 'withdrawn'])
 const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
@@ -584,10 +586,45 @@ export default async function (amp: PluginAPI) {
 		}
 	})
 
+	// Each conversation has a button that shows you its cpd thread, so peer
+	// text reaches you without passing through an agent.
+	amp.registerCommand(
+		'cp-thread',
+		{ title: 'Show the cpd thread', category: 'clanker-proxy', description: "Shows this conversation's cpd thread, every message in it, to you only." },
+		async (ctx) => {
+			const subject = ctx.thread ? await conversationFor(ctx.thread.id) : undefined
+			if (!subject) {
+				await ctx.ui.notify('clanker-proxy: this thread is not a conversation with a known cpd thread.').catch(() => undefined)
+				return
+			}
+			let message: string
+			try {
+				const { stdout } = await run(cpctl, ['--json', 'show', subject, '--all'], { timeout: 15_000, maxBuffer: 64 * 1024 * 1024 })
+				message = threadMarkdown(JSON.parse(stdout))
+			} catch {
+				// Child-process errors include captured output, which can contain peer text.
+				message = `cpctl cannot read ${subject} right now.`
+			}
+			await ctx.ui.confirm({ title: `cpd thread ${subject.slice(0, 8)}`, message, confirmButtonText: 'Close' }).catch(() => undefined)
+		},
+	)
+	const buttons = new Set<ThreadID>()
+	const showButton = async (id: ThreadID) => {
+		if (buttons.has(id) || !(await conversationFor(id))) return
+		buttons.add(id)
+		try {
+			amp.threads.get(id).createQuickAction({ text: 'cpd thread', icon: 'eye', action: 'run-command', args: { command: 'cp-thread' } })
+		} catch {
+			buttons.delete(id)
+		}
+	}
+	amp.on('session.start', (event) => showButton(event.thread.id).catch(() => undefined))
+
 	// A conversation is archived once it stops with its cpd thread ended,
 	// whichever side ended it: this daemon's moves send the inbox no event.
 	amp.on('agent.end', async (event) => {
 		try {
+			await showButton(event.thread.id)
 			const subject = await conversationFor(event.thread.id)
 			const c = subject ? state.conversations[subject] : undefined
 			if (subject && c && endedStates.has(await currentState(subject, c.peer, AbortSignal.timeout(15_000)))) await archive(c.amp)
@@ -739,8 +776,36 @@ function hubBriefing(peer: string): string {
 	].join('\n')
 }
 
-// fenced quotes text for an approval prompt in a fence longer than any run of
-// backticks inside it, so the text cannot end the fence and hide what follows.
+// threadMarkdown shows you a cpd thread. Its title and bodies, written by
+// agents, are fenced so their markdown cannot render links or images; when
+// the whole thread does not fit, the newest events are kept.
+function threadMarkdown(t: {
+	id: string
+	title?: string
+	sender: string
+	recipient: string
+	kind: string
+	state: string
+	log?: { from: string; at: string; action: string; body?: string; ignored?: boolean; delivery?: { status: string } }[]
+}): string {
+	const head = `${t.sender} → ${t.recipient} · ${t.kind} · ${t.state}\n\n${fenced(t.title ?? '')}`
+	const events: string[] = []
+	let size = head.length
+	for (const e of [...(t.log ?? [])].reverse()) {
+		const notes = [e.ignored ? 'no effect' : '', e.delivery && e.delivery.status !== 'delivered' ? e.delivery.status : ''].filter(Boolean)
+		const part = `**${e.action}** · ${e.from} · ${e.at}${notes.length ? ` · ${notes.join(', ')}` : ''}${e.body ? '\n\n' + fenced(e.body) : ''}`
+		if (size + part.length > maxShown) {
+			events.unshift(`Earlier events do not fit here: \`cpctl show ${t.id} --all\` shows them all.`)
+			break
+		}
+		events.unshift(part)
+		size += part.length
+	}
+	return [head, ...events].join('\n\n')
+}
+
+// fenced quotes text in a fence longer than any run of backticks inside it,
+// so the text cannot end the fence and pass as markdown or hide what follows.
 function fenced(text: string): string {
 	const fence = '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((m) => m[0].length + 1)))
 	return `${fence}\n${text}\n${fence}`
@@ -893,16 +958,20 @@ function heredocs(command: string): { shell: string; expanded: string } {
 
 // simpleCommands splits a command line into the words of each simple
 // command, removing quotes and escapes as the shell would, so quoting or a
-// line continuation cannot disguise a word. It returns undefined when a
-// quote is left open.
+// line continuation cannot disguise a word. Redirections are not words; the
+// whole command is still checked as text. It returns undefined when a quote
+// is left open.
 function simpleCommands(command: string): string[][] | undefined {
 	const out: string[][] = []
 	let words: string[] = []
 	let word = ''
 	let inWord = false
 	let quote = ''
+	// target is set after a redirection operator, whose next word is a file.
+	let target = false
 	const endWord = () => {
-		if (inWord) words.push(word)
+		if (inWord && !target) words.push(word)
+		if (inWord) target = false
 		word = ''
 		inWord = false
 	}
@@ -926,6 +995,20 @@ function simpleCommands(command: string): string[][] | undefined {
 		} else if (ch === "'" || ch === '"') {
 			quote = ch
 			inWord = true
+		} else if (ch === '<' || ch === '>' || (ch === '&' && command[i + 1] === '>')) {
+			// A file descriptor before the operator is not a word either.
+			if (/^\d+$/.test(word)) {
+				word = ''
+				inWord = false
+			} else endWord()
+			while ('<>&|'.includes(command[i + 1] ?? '')) i++
+			if (command[i] === '&' && /\d/.test(command[i + 1] ?? '')) {
+				// >&2 duplicates a descriptor and names no file.
+				while (/\d/.test(command[i + 1] ?? '')) i++
+			} else if (command[i + 1] !== '(') {
+				// <(…) and >(…) run a command, which is checked like any other.
+				target = true
+			}
 		} else if (ch === '\n' || ';&|(){}`'.includes(ch)) {
 			endCommand()
 		} else if (/\s/.test(ch)) {

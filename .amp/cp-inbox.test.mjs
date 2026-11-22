@@ -98,7 +98,11 @@ if (args[1] === 'search') {
 	let handler
 	let guard
 	let agentEnd
+	let sessionStart
 	const tools = {}
+	const commands = {}
+	// Quick actions, with the thread they were added to.
+	const buttons = []
 	const labels = {}
 	// Threads whose messages fail, as an archived one's do.
 	const failing = new Set()
@@ -109,14 +113,19 @@ if (args[1] === 'search') {
 		labels: async () => labels[id] ?? [],
 		addLabels: async (l) => { labels[id] = [...(labels[id] ?? []), ...l] },
 		setLabels: async (l) => { labels[id] = l },
+		createQuickAction: (definition) => {
+			buttons.push({ thread: id, ...definition })
+			return { unsubscribe() {}, update() {} }
+		},
 		appendUserMessage: async ({ content }) => {
 			if (failing.has(id)) throw new Error('archived')
 			messages.push(content)
 			posted.push({ thread: id, content })
 		},
 	})
+	const notices = []
 	const ui = {
-		notify: async () => undefined,
+		notify: async (message) => { notices.push(message) },
 		confirm: async (c) => {
 			confirms.push(c)
 			return confirmAnswer
@@ -136,11 +145,14 @@ if (args[1] === 'search') {
 		on(name, fn) {
 			if (name === 'tool.call') guard = fn
 			if (name === 'agent.end') agentEnd = fn
+			if (name === 'session.start') sessionStart = fn
 		},
 		registerTool(tool) {
 			tools[tool.name] = tool
 		},
-		registerCommand() {},
+		registerCommand(id, options, run) {
+			commands[id] = run
+		},
 		createAgent: (config) => {
 			agents.push(config)
 			return agent
@@ -162,7 +174,9 @@ if (args[1] === 'search') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		messages, posted, logs, created, agents, tools, confirms, another, ampCalls, labels, failing,
+		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
+		open: (thread) => sessionStart({ thread: { id: thread } }),
+		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		idle: () => { threadState = 'idle' },
 		end: (thread) => agentEnd({ thread: { id: thread } }),
@@ -337,6 +351,12 @@ test("a conversation cannot reach other threads, Amp's settings or your machine"
 	const send = await f.check('conversation', 'shell_command', { cmd: 'cpctl send bob "x" -m y' })
 	assert.match(send.message, /only with the cp_send tool/)
 	assert.deepEqual(await f.check('owner-thread', 'send_thread_message', {}), { action: 'allow' })
+	for (const cmd of ['cpctl --version 2>&1', `cpctl show ${subject.slice(0, 8)} 2>/dev/null | head -5`, `cpctl show ${subject} &>/tmp/x`, 'cat <<EOF\nhi\nEOF']) {
+		assert.deepEqual(await f.check('conversation', 'shell_command', { cmd }), { action: 'allow' }, cmd)
+	}
+	for (const cmd of ['diff <(env) x', 'cpctl show 99999999 >/dev/null', 'echo 1 > x; printenv']) {
+		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'reject-and-continue', cmd)
+	}
 })
 
 test('a conversation runs with only its own tools, writing only in its worktree', async (t) => {
@@ -384,6 +404,27 @@ test('a conversation runs commands without your secrets, and never reads credent
 	}
 	assert.equal((await f.check('conversation', 'Read', { path: '/home/user/.config/amp/settings.json' })).action, 'reject-and-continue')
 	assert.deepEqual(await f.check('owner-thread', 'shell_command', { cmd: 'echo hi' }), { action: 'allow' })
+})
+
+test('a conversation has a button that shows you its cpd thread, its text fenced', async (t) => {
+	const f = await fixture(t)
+	await f.respond({ title: 'Hi [x](https://evil.test)', sender: peer, recipient: 'savid', kind: 'request', state: 'open', log: [
+		{ from: peer, at: '2026-01-01T00:00:00Z', action: 'open', body: '![beacon](https://evil.test/b.png)\n```\nbreak out' },
+		{ from: 'savid', at: '2026-01-01T00:01:00Z', action: 'reply', body: 'ok', delivery: { status: 'pending' } },
+	] })
+	await f.open('conversation')
+	await f.end('conversation')
+	await f.open('owner-thread')
+	assert.deepEqual(f.buttons, [{ thread: 'conversation', text: 'cpd thread', icon: 'eye', action: 'run-command', args: { command: 'cp-thread' } }])
+	await f.command('cp-thread', 'conversation')
+	const { title, message } = f.confirms.at(-1)
+	assert.equal(title, `cpd thread ${subject.slice(0, 8)}`)
+	assert.match(message, /^alice → savid · request · open\n\n```\nHi \[x\]\(https:\/\/evil.test\)\n```/)
+	assert.match(message, /\*\*open\*\* · alice · 2026-01-01T00:00:00Z\n\n````\n!\[beacon\]\(https:\/\/evil.test\/b.png\)\n```\nbreak out\n````/)
+	assert.match(message, /\*\*reply\*\* · savid · 2026-01-01T00:01:00Z · pending\n\n```\nok\n```$/)
+	await f.command('cp-thread', 'owner-thread')
+	assert.equal(f.confirms.length, 1)
+	assert.match(f.notices.at(-1), /not a conversation/)
 })
 
 test("a peer's thread is named after the peer once it has answered", async (t) => {
