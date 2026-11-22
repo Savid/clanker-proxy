@@ -4,8 +4,8 @@
 use bytes::Bytes;
 use cp_api::{
     Access, AgentTokenInput, Approval, Error, ErrorKind, GetThreadQuery, Health, HealthStatus,
-    ListThreadsQuery, MAX_REQUEST_BODY, Me, NewThread, Op, PeerInput, PeeringRequest, Peers,
-    RequestRef, ThreadAction, ThreadList, ThreadRef, WireEvent, prefix,
+    ListThreadsQuery, MAX_REQUEST_BODY, Me, NewThread, Op, PeerAliases, PeerInput, PeeringRequest,
+    Peers, RequestRef, ThreadAction, ThreadList, ThreadRef, WireEvent, prefix,
 };
 use cp_core::SignedCall;
 use cp_thread::Name;
@@ -349,6 +349,15 @@ impl<H: Host> Service<H> {
                 h.core(move |c| c.remove_peer(&name)).await?;
                 empty()
             }
+            Op::SetPeerAliases => {
+                let name = param_name(params, "name")?;
+                let body: PeerAliases = decode(req)?;
+                json(
+                    200,
+                    &h.core(move |c| c.set_peer_aliases(&name, &body.aliases))
+                        .await?,
+                )
+            }
             Op::ListThreads => {
                 let q: ListThreadsQuery = query(req)?;
                 let threads = h.core(move |c| c.threads(&q, scope.as_ref())).await?;
@@ -416,6 +425,13 @@ impl<H: Host> Service<H> {
             Op::DeleteAgentToken => {
                 let name = param_name(params, "name")?;
                 h.core(move |c| c.delete_agent_token(&name)).await?;
+                empty()
+            }
+            Op::RevokeOwnToken => {
+                let Caller::Agent { token, .. } = caller else {
+                    return Err(unauthorized());
+                };
+                h.core(move |c| c.revoke_own_agent_token(&token)).await?;
                 empty()
             }
             Op::ListWebhooks => {

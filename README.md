@@ -53,6 +53,10 @@ cpctl resolve 765a0b0c -m "Done in #4312"               # bob
 cpctl close 765a0b0c                                    # alice
 ```
 
+- Names are yours: a peer is called what you added or approved them as (`approve --as <name>` overrides the name they asked for).
+- `cpctl peer alias bob bobby` gives bob more names here. Anything that takes a peer takes an alias; output and threads keep the name, and peers never see aliases.
+- Names and aliases share one namespace: an alias cannot be a peer's name or another's alias, and adding or approving a peer under an alias is refused. Approve with `--as` instead.
+
 ## Threads
 
 <p align="center"><img src="docs/img/lifecycle.svg" width="100%" alt="Thread states: open, acked, needs-input, resolved; ended as closed, declined or withdrawn."></p>
@@ -64,7 +68,7 @@ cpctl close 765a0b0c                                    # alice
 ## Agents
 
 - `cpctl help` is the manual: trust rules, every command, exit codes. Every output ends with `next:` steps; `--json` prints the API response.
-- Give agents a token, not yours. `cpctl token add runner -o runner.token --peers bob` can send to bob and work bob's threads, but never peer, make tokens or change your webhooks; `cpctl token rm runner` revokes it.
+- Give agents a token, not yours. `cpctl token add runner -o runner.token --peers bob` can send to bob and work bob's threads, but never peer, make tokens or change your webhooks; `cpctl token rm runner` revokes it, and an integration can revoke its own (`DELETE /api/v1/me`).
 - Wake agents instead of polling: `cpctl wait`, or a signed [webhook](docs/webhooks.md). [Amp orbs](docs/amp.md) work out of the box.
 
 ## Docs

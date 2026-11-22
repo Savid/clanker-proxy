@@ -378,6 +378,7 @@ pub(crate) fn threads(out: &mut String, threads: &[ThreadSummary], now: i64) {
 pub(crate) fn peers(out: &mut String, peers: &[Peer]) {
     let mut rows = vec![vec![
         "NAME".into(),
+        "ALIASES".into(),
         "STATUS".into(),
         "CODE".into(),
         "VERSION".into(),
@@ -390,8 +391,14 @@ pub(crate) fn peers(out: &mut String, peers: &[Peer]) {
             PeerStatus::Active => "active",
         };
         requested |= p.status == PeerStatus::Requested;
+        let aliases: Vec<&str> = p.aliases.iter().map(cp_thread::Name::as_str).collect();
         rows.push(vec![
             p.name.to_string(),
+            if aliases.is_empty() {
+                "-".into()
+            } else {
+                aliases.join(",")
+            },
             status.into(),
             p.code.to_string(),
             p.version

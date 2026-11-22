@@ -14,9 +14,9 @@ pub use doc::openapi;
 pub use error::{Error, ErrorKind, Problem};
 pub use model::*;
 pub use text::{
-    Code, Cursor, DaemonUrl, Invalid, MAX_NOTE, MAX_PEERS, MAX_URL, MAX_WEBHOOK_URL, Note, Peers,
-    PublicKey, RequestRef, ThreadRef, Token, Version, WebhookHeaderName, WebhookHeaderValue,
-    WebhookSecret, WebhookUrl,
+    Aliases, Code, Cursor, DaemonUrl, Invalid, MAX_ALIASES, MAX_NOTE, MAX_PEERS, MAX_URL,
+    MAX_WEBHOOK_URL, Note, Peers, PublicKey, RequestRef, ThreadRef, Token, Version,
+    WebhookHeaderName, WebhookHeaderValue, WebhookSecret, WebhookUrl,
 };
 pub use webhooks::{
     OwnWebhook, Provider, Webhook, WebhookCreate, WebhookDelivery, WebhookDeliveryList,

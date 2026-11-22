@@ -41,6 +41,7 @@ impl Router {
         let method = match *method {
             http::Method::GET => Some(Method::Get),
             http::Method::POST => Some(Method::Post),
+            http::Method::PUT => Some(Method::Put),
             http::Method::PATCH => Some(Method::Patch),
             http::Method::DELETE => Some(Method::Delete),
             _ => None,

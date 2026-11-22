@@ -444,7 +444,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             url: w.url.expose().to_string(),
             events: w.events,
             origin: w.origin,
-            peers: w.peers,
+            peers: self.known_peers(&w.peers)?,
             enabled: w.enabled,
             secret: w
                 .secret
@@ -455,7 +455,6 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             agent: None,
         };
         c.validate()?;
-        self.known_peers(&c.peers)?;
         if self
             .sql
             .query_one("SELECT 1 FROM webhooks WHERE name = ?", &[text(&c.name)])?
@@ -502,8 +501,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             c.origin = o;
         }
         if let Some(p) = u.peers {
-            self.known_peers(&p)?;
-            c.peers = p;
+            c.peers = self.known_peers(&p)?;
         }
         if let Some(e) = u.enabled {
             c.enabled = e;

@@ -322,6 +322,46 @@ async fn exit_codes_say_what_happened() {
 }
 
 #[tokio::test]
+async fn aliases_name_a_peer_everywhere() {
+    let (alice, bob) = peered().await;
+    let out = ok(&alice, &["peer", "alias", "bob", "bobby", "b"]).await;
+    assert!(out.starts_with("bob is also called b, bobby\n"), "{out}");
+    assert!(out.contains("cpctl send b "), "{out}");
+    let ls = ok(&alice, &["peer", "ls"]).await;
+    assert!(ls.contains("ALIASES") && ls.contains("b,bobby"), "{ls}");
+    let show = ok(&alice, &["peer", "show", "bobby"]).await;
+    assert!(
+        show.contains("b,bobby") && show.contains("cpctl send bob "),
+        "{show}"
+    );
+
+    let sent = json(&alice, &["send", "bobby", "via an alias"]).await;
+    assert_eq!(sent["peer"], "bob");
+    let listed = json(&alice, &["ls", "--peer", "b"]).await;
+    assert_eq!(listed["threads"][0]["id"], sent["id"]);
+
+    let taken = cp(&alice, &["peer", "alias", "bob", "alice"]).await;
+    assert_eq!(taken.exit, cpctl::EXIT_REFUSED, "{}", taken.stderr);
+    assert_eq!(
+        cp(&alice, &["peer", "unalias", "bob", "carl"]).await.exit,
+        cpctl::EXIT_NOT_FOUND
+    );
+    let many: Vec<String> = (0..10).map(|i| format!("x{i}")).collect();
+    let mut line = vec!["peer", "alias", "bob"];
+    line.extend(many.iter().map(String::as_str));
+    assert_eq!(cp(&alice, &line).await.exit, cpctl::EXIT_USAGE);
+
+    let out = ok(&alice, &["peer", "unalias", "b", "b", "bobby"]).await;
+    assert!(out.starts_with("bob has no aliases\n"), "{out}");
+    assert_eq!(
+        json(&alice, &["peer", "show", "bob"]).await["aliases"],
+        serde_json::json!([])
+    );
+    alice.daemon.shutdown().await;
+    bob.daemon.shutdown().await;
+}
+
+#[tokio::test]
 async fn agent_tokens_send_and_work_threads_but_not_peering() {
     let (alice, bob) = peered().await;
     let file = alice.dir.0.join("runner.token");

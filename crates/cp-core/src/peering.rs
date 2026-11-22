@@ -7,7 +7,7 @@
 //! again.
 
 use cp_api::{
-    Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
+    Aliases, Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
     PeeringRequest, Peers, PublicKey, ReceiptStatus, Request, RequestList, RequestReceipt,
     RequestRef, Version,
 };
@@ -82,8 +82,18 @@ fn peer_row(r: &Row) -> Result<PeerRow, Error> {
 
 impl<S: Sql, R: Runtime> Core<S, R> {
     fn peer_view(&self, p: &PeerRow) -> Result<Peer, Error> {
+        let aliases = self
+            .sql
+            .query(
+                "SELECT alias FROM peer_aliases WHERE peer = ? ORDER BY alias",
+                &[text(&p.name)],
+            )?
+            .iter()
+            .map(|r| r.parse(0))
+            .collect::<Result<_, _>>()?;
         Ok(Peer {
             name: p.name.clone(),
+            aliases,
             url: p.url.clone(),
             status: p.status,
             code: code(&p.key, &self.key)?,
@@ -125,13 +135,81 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(PeerList { peers })
     }
 
-    /// The peer `name`, if it is in `scope`; any other answers as if it did
-    /// not exist.
+    /// The peer `name` names, by its name or an alias, if it is in `scope`;
+    /// any other answers as if it did not exist.
     pub fn peer(&self, name: &Name, scope: Option<&Peers>) -> Result<Peer, Error> {
+        let real = self.resolve_peer(name, scope)?;
         let p = self
-            .load_peer(name)?
-            .filter(|_| scope.is_none_or(|s| s.reaches(name)))
+            .load_peer(&real)?
+            .filter(|_| scope.is_none_or(|s| s.reaches(&real)))
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
+        self.peer_view(&p)
+    }
+
+    /// The name of the peer `name` is an alias of, when that peer is in
+    /// `scope`; otherwise `name` itself, which callers look up as a name. A
+    /// caller limited to some peers cannot tell an alias of another peer
+    /// from no peer at all.
+    pub(crate) fn resolve_peer(&self, name: &Name, scope: Option<&Peers>) -> Result<Name, Error> {
+        Ok(self
+            .alias_of(name)?
+            .filter(|p| scope.is_none_or(|s| s.reaches(p)))
+            .unwrap_or_else(|| name.clone()))
+    }
+
+    /// The peer `name` is an alias of, if it is one.
+    fn alias_of(&self, name: &Name) -> Result<Option<Name>, Error> {
+        self.sql
+            .query_one(
+                "SELECT peer FROM peer_aliases WHERE alias = ?",
+                &[text(name)],
+            )?
+            .map(|r| r.parse(0))
+            .transpose()
+    }
+
+    /// Replaces the aliases of the peer `name` names. Aliases share the
+    /// namespace of peers' names: each must be free of the owner's name,
+    /// peers' names, other peers' aliases, and removed peers' names kept for
+    /// their threads, unless that removed peer was at this one's URL.
+    pub fn set_peer_aliases(&mut self, name: &Name, aliases: &Aliases) -> Result<Peer, Error> {
+        let real = self.resolve_peer(name, None)?;
+        let p = self
+            .load_peer(&real)?
+            .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
+        for alias in aliases.as_slice() {
+            let taken = |detail: String| Err(err(ErrorKind::Conflict, detail));
+            if *alias == self.me {
+                return taken(format!("{alias} is this daemon's owner"));
+            }
+            if *alias == p.name {
+                return taken(format!("{alias} is already this peer's name"));
+            }
+            if self.load_peer(alias)?.is_some() {
+                return taken(format!("{alias} is another peer's name"));
+            }
+            if let Some(other) = self.alias_of(alias)?.filter(|o| *o != p.name) {
+                return taken(format!("{alias} is an alias of {other}"));
+            }
+            if let Some(r) = self.sql.query_one(
+                "SELECT url FROM former_peers WHERE name = ?",
+                &[text(alias)],
+            )? && r.text(0)? != p.url.as_str()
+            {
+                return taken(format!(
+                    "{alias} was a peer at {} and threads with them are kept",
+                    r.text(0)?
+                ));
+            }
+        }
+        self.sql
+            .execute("DELETE FROM peer_aliases WHERE peer = ?", &[text(&p.name)])?;
+        for alias in aliases.as_slice() {
+            self.sql.execute(
+                "INSERT INTO peer_aliases (alias, peer) VALUES (?, ?)",
+                &[text(alias), text(&p.name)],
+            )?;
+        }
         self.peer_view(&p)
     }
 
@@ -154,6 +232,12 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             return Err(err(
                 ErrorKind::Unprocessable,
                 format!("{name} is this daemon's owner; choose another name"),
+            ));
+        }
+        if let Some(peer) = self.alias_of(name)? {
+            return Err(err(
+                ErrorKind::Conflict,
+                format!("{name} is an alias of {peer}; give this one another name"),
             ));
         }
         // Threads name their participants, so a removed peer's name stays
@@ -455,6 +539,12 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             ));
         }
         let now = self.now();
+        // A peer of the same name and URL is replaced and keeps its aliases;
+        // the same daemon under another name goes, and its aliases with it.
+        self.sql.execute(
+            "DELETE FROM peer_aliases WHERE peer IN (SELECT name FROM peers WHERE key = ? AND name != ?)",
+            &[text(key.as_str()), text(&name)],
+        )?;
         self.sql.execute(
             "DELETE FROM peers WHERE name = ? OR key = ?",
             &[text(&name), text(key.as_str())],
@@ -509,13 +599,14 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         Ok(())
     }
 
-    /// Forgets a peer: their key stops working and events not yet
-    /// delivered to them fail. Threads stay, and their name stays with their
-    /// URL.
+    /// Forgets the peer `name` names: their key stops working, their aliases
+    /// go, and events not yet delivered to them fail. Threads stay, and their
+    /// name stays with their URL.
     pub fn remove_peer(&mut self, name: &Name) -> Result<(), Error> {
         let p = self
-            .load_peer(name)?
+            .load_peer(&self.resolve_peer(name, None)?)?
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
+        let name = &p.name;
         if self
             .live_op()?
             .is_some_and(|r| r.text(1).is_ok_and(|n| n == name.as_str()))
@@ -540,6 +631,8 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         }
         self.sql
             .execute("DELETE FROM peers WHERE name = ?", &[text(name)])?;
+        self.sql
+            .execute("DELETE FROM peer_aliases WHERE peer = ?", &[text(name)])?;
         let failed = self.sql.query(
             "SELECT thread, count(*) FROM outbox WHERE peer = ? AND status = 'pending' GROUP BY thread",
             &[text(name)],

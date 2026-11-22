@@ -4,7 +4,7 @@
 /// The version `STATEMENTS` create. Before 1.0 a storage change bumps
 /// this instead of adding a migration: earlier data is refused, and its
 /// owner starts again from empty storage.
-pub const BASELINE: u32 = 5;
+pub const BASELINE: u32 = 6;
 
 /// Changes since the baseline, in order: entry `i` moves stored data from
 /// version `BASELINE + i` to the next. Append only: deployed data has
@@ -32,6 +32,14 @@ pub const STATEMENTS: &[&str] = &[
         first_401_at INTEGER,
         version TEXT
     ) STRICT",
+    // Other names the owner gives peers, in one namespace with peers' names.
+    // No foreign key, since the Worker's storage does not enforce them: the
+    // core deletes a peer's aliases with it.
+    "CREATE TABLE IF NOT EXISTS peer_aliases (
+        alias TEXT PRIMARY KEY,
+        peer TEXT NOT NULL
+    ) STRICT",
+    "CREATE INDEX IF NOT EXISTS peer_aliases_peer ON peer_aliases (peer, alias)",
     "CREATE TABLE IF NOT EXISTS former_peers (
         name TEXT PRIMARY KEY,
         url TEXT NOT NULL

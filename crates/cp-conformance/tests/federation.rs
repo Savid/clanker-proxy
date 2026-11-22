@@ -1,5 +1,6 @@
 //! A daemon on each host working a thread with the other: peering, delivery
-//! both ways, the event stream, webhooks, agent tokens and errors.
+//! both ways, the event stream, webhooks, agent tokens and errors; then
+//! peer aliases and agent tokens revoking themselves.
 //!
 //! The far daemon is native unless `CP_CONFORMANCE_URL` and
 //! `CP_CONFORMANCE_TOKEN` name another one; the near daemon is always native.
@@ -235,6 +236,34 @@ async fn stream_until(mut resp: reqwest::Response, needle: String) -> String {
     seen
 }
 
+/// Approves the far daemon's pending request from the daemon at `from`,
+/// with `body`, retrying while another test's approval confirms.
+async fn approve(far: &Node, from: &str, body: Value) -> (u16, Value) {
+    let requests = far.get("/api/v1/peering-requests").await;
+    let id = requests["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["url"] == from)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let path = format!("/api/v1/peering-requests/{id}/approve");
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let (status, v) = far.call(Method::POST, &path, Some(body.clone())).await;
+        let busy = status == 409
+            && v["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("confirming"));
+        if !busy || tokio::time::Instant::now() > deadline {
+            return (status, v);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::too_many_lines)] // one conversation, read top to bottom
 async fn a_thread_crosses_hosts_with_its_notifications() {
@@ -288,14 +317,8 @@ async fn a_thread_crosses_hosts_with_its_notifications() {
         request["code"], asked["code"],
         "both owners see the same code"
     );
-    far.post(
-        &format!(
-            "/api/v1/peering-requests/{}/approve",
-            request["id"].as_str().unwrap()
-        ),
-        json!({"name": near_as}),
-    )
-    .await;
+    let (status, p) = approve(&far, &near.url, json!({"name": near_as})).await;
+    assert_eq!(status, 201, "{p}");
     assert_eq!(near.get("/api/v1/peers/far").await["status"], "active");
 
     // The stream is open before the thread arrives, so it carries it.
@@ -518,6 +541,263 @@ async fn a_thread_crosses_hosts_with_its_notifications() {
     far.ok(Method::DELETE, &format!("/api/v1/peers/{near_as}"), None)
         .await;
     assert_ne!(far_name, near_as);
+    near.stop().await;
+    far.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)] // one owner's session, read top to bottom
+async fn aliases_name_peers_and_agent_tokens_revoke_themselves() {
+    let far = far().await;
+    let near = native("near").await;
+    // Unique per run, since the far daemon may outlive it.
+    let run = near.url.rsplit(':').next().unwrap().to_string();
+    let other = native(&format!("other{run}")).await;
+    let (near_as, other_as) = (format!("near{run}"), format!("o{run}"));
+    let (alias, other_name) = (format!("bobby{run}"), format!("other{run}"));
+    let aliases = |name: &str| format!("/api/v1/peers/{name}/aliases");
+
+    near.post("/api/v1/peers", json!({"name": "far", "url": far.url}))
+        .await;
+    let (status, p) = approve(&far, &near.url, json!({"name": near_as})).await;
+    assert_eq!(status, 201, "{p}");
+    assert_eq!(p["aliases"], json!([]), "always present");
+
+    // Aliases replace the peer's set, sorted and each once, and name the
+    // peer wherever a peer's name goes.
+    let p = far
+        .ok(
+            Method::PUT,
+            &aliases(&near_as),
+            Some(json!({"aliases": [other_name, alias, alias]})),
+        )
+        .await;
+    assert_eq!(p["name"], near_as.as_str());
+    assert_eq!(p["aliases"], json!([alias, other_name]));
+    let p = far.get(&format!("/api/v1/peers/{alias}")).await;
+    assert_eq!(
+        (p["name"].as_str(), &p["aliases"]),
+        (Some(near_as.as_str()), &json!([alias, other_name]))
+    );
+    let listed = far.get("/api/v1/peers").await;
+    assert!(
+        listed["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == near_as.as_str() && p["aliases"][0] == alias.as_str())
+    );
+    let opened = far
+        .post(
+            "/api/v1/threads",
+            json!({"to": alias, "title": "Sent to an alias", "body": "hi"}),
+        )
+        .await;
+    let id = opened["id"].as_str().unwrap().to_string();
+    assert_eq!(opened["peer"], near_as.as_str(), "stored by name");
+    assert_eq!(far.thread(&id).await["recipient"], near_as.as_str());
+    let by_alias = far.get(&format!("/api/v1/threads?peer={alias}")).await;
+    assert!(
+        by_alias["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == id.as_str())
+    );
+    eventually("near gets the thread", || {
+        let near = &near;
+        let path = format!("/api/v1/threads/{id}");
+        async move { near.call(Method::GET, &path, None).await.0 == 200 }
+    })
+    .await;
+
+    // Peers' names and aliases share one namespace.
+    let (status, p) = far
+        .call(
+            Method::POST,
+            "/api/v1/peers",
+            Some(json!({"name": alias, "url": "http://127.0.0.1:9"})),
+        )
+        .await;
+    assert_eq!(status, 409, "{p}");
+    assert!(
+        p["detail"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{alias} is an alias of {near_as}")),
+        "{p}"
+    );
+    other
+        .post("/api/v1/peers", json!({"name": "far", "url": far.url}))
+        .await;
+    let (status, p) = approve(&far, &other.url, json!({})).await;
+    assert_eq!(status, 409, "the name they asked for is an alias: {p}");
+    assert!(
+        p["detail"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{other_name} is an alias of {near_as}")),
+        "{p}"
+    );
+    let (status, p) = approve(&far, &other.url, json!({"name": alias})).await;
+    assert_eq!(status, 409, "{p}");
+    let (status, p) = approve(&far, &other.url, json!({"name": other_as})).await;
+    assert_eq!(status, 201, "{p}");
+    for (peer, set) in [
+        (near_as.as_str(), json!([other_as])),
+        (other_as.as_str(), json!([alias])),
+    ] {
+        let (status, p) = far
+            .call(Method::PUT, &aliases(peer), Some(json!({"aliases": set})))
+            .await;
+        assert_eq!(status, 409, "{peer} {set}: {p}");
+    }
+    let (status, _) = far
+        .call(
+            Method::PUT,
+            &aliases(&format!("nobody{run}")),
+            Some(json!({"aliases": []})),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let eleven: Vec<String> = (0..11).map(|i| format!("a{i}x{run}")).collect();
+    let (status, _) = far
+        .call(
+            Method::PUT,
+            &aliases(&near_as),
+            Some(json!({"aliases": eleven})),
+        )
+        .await;
+    assert_eq!(status, 400);
+
+    // An agent token limited to the other peer: near's alias is no peer to
+    // it.
+    let other_alias = format!("oo{run}");
+    far.ok(
+        Method::PUT,
+        &aliases(&other_as),
+        Some(json!({"aliases": [other_alias]})),
+    )
+    .await;
+    let scoped_name = format!("scoped{run}");
+    let scoped = far
+        .post(
+            "/api/v1/agent-tokens",
+            json!({"name": scoped_name, "peers": [other_alias]}),
+        )
+        .await;
+    assert_eq!(scoped["peers"], json!([other_as]), "kept by name");
+    let scoped = scoped["token"].as_str().unwrap().to_string();
+    let (status, _) = far
+        .call_as(
+            &scoped,
+            Method::GET,
+            &format!("/api/v1/peers/{alias}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (status, _) = far
+        .call_as(
+            &scoped,
+            Method::POST,
+            "/api/v1/threads",
+            Some(json!({"to": alias, "title": "t", "body": "b"})),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (status, list) = far
+        .call_as(
+            &scoped,
+            Method::GET,
+            &format!("/api/v1/threads?peer={alias}"),
+            None,
+        )
+        .await;
+    assert_eq!((status, &list["threads"]), (200, &json!([])));
+    let (status, p) = far
+        .call_as(
+            &scoped,
+            Method::GET,
+            &format!("/api/v1/peers/{other_alias}"),
+            None,
+        )
+        .await;
+    assert_eq!((status, p["name"].as_str()), (200, Some(other_as.as_str())));
+
+    // An agent token revokes itself, and its webhook goes with it. Its peer
+    // sends nothing, so the webhook is never called.
+    let (status, p) = far
+        .call_as(
+            &scoped,
+            Method::POST,
+            "/api/v1/me/webhook",
+            Some(json!({"url": "https://hooks.example.com/cp-conformance",
+                        "secret": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="})),
+        )
+        .await;
+    assert_eq!(status, 200, "{p}");
+    assert_eq!(
+        far.get(&format!("/api/v1/webhooks/{scoped_name}")).await["agent"],
+        scoped_name.as_str()
+    );
+    let (status, _) = far.call(Method::DELETE, "/api/v1/me", None).await;
+    assert_eq!(status, 401, "the owner token is not an agent token");
+    let (status, _) = far
+        .call_as(&scoped, Method::DELETE, "/api/v1/me", None)
+        .await;
+    assert_eq!(status, 204);
+    let (status, _) = far
+        .call_as(&scoped, Method::GET, "/api/v1/threads", None)
+        .await;
+    assert_eq!(status, 401);
+    let (status, _) = far
+        .call(
+            Method::GET,
+            &format!("/api/v1/webhooks/{scoped_name}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, 404);
+    let tokens = far.get("/api/v1/agent-tokens").await;
+    assert!(
+        !tokens["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == scoped_name.as_str())
+    );
+
+    // Removing a peer, by an alias, removes its aliases.
+    far.ok(
+        Method::DELETE,
+        &format!("/api/v1/peers/{other_alias}"),
+        None,
+    )
+    .await;
+    for name in [&other_as, &other_alias] {
+        let (status, _) = far
+            .call(Method::GET, &format!("/api/v1/peers/{name}"), None)
+            .await;
+        assert_eq!(status, 404, "{name}");
+    }
+    let p = far
+        .ok(
+            Method::PUT,
+            &aliases(&alias),
+            Some(json!({"aliases": [alias, other_alias]})),
+        )
+        .await;
+    assert_eq!(p["aliases"], json!([alias, other_alias]), "free again");
+
+    // Tidy the far daemon, which may be reused.
+    far.ok(Method::DELETE, &format!("/api/v1/peers/{near_as}"), None)
+        .await;
+    let (status, _) = far
+        .call(Method::GET, &format!("/api/v1/peers/{alias}"), None)
+        .await;
+    assert_eq!(status, 404);
+    other.stop().await;
     near.stop().await;
     far.stop().await;
 }

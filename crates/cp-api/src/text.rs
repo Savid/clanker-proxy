@@ -444,7 +444,7 @@ impl PartialSchema for Peers {
             .max_items(Some(MAX_PEERS))
             .unique_items(true)
             .description(Some(
-                "Peers this applies to, by name; each must be a peer or a former one. Empty: every peer, including peers added later.",
+                "Peers this applies to, each a peer or a former one; an alias is kept as the peer's name. Empty: every peer, including peers added later.",
             ))
             .build()
             .into()
@@ -452,6 +452,54 @@ impl PartialSchema for Peers {
 }
 
 impl ToSchema for Peers {}
+
+/// Most aliases a peer may have.
+pub const MAX_ALIASES: usize = 10;
+
+/// Other names the owner calls a peer by: sorted, each once.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<Name>", into = "Vec<Name>")]
+pub struct Aliases(Vec<Name>);
+
+impl Aliases {
+    pub fn as_slice(&self) -> &[Name] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<Name>> for Aliases {
+    type Error = Invalid;
+
+    fn try_from(mut aliases: Vec<Name>) -> Result<Self, Invalid> {
+        if aliases.len() > MAX_ALIASES {
+            return Err(Invalid(format!("at most {MAX_ALIASES} aliases")));
+        }
+        aliases.sort();
+        aliases.dedup();
+        Ok(Self(aliases))
+    }
+}
+
+impl From<Aliases> for Vec<Name> {
+    fn from(a: Aliases) -> Self {
+        a.0
+    }
+}
+
+impl PartialSchema for Aliases {
+    fn schema() -> RefOr<Schema> {
+        ArrayBuilder::new()
+            .items(Name::schema())
+            .max_items(Some(MAX_ALIASES))
+            .description(Some(
+                "Other names for the peer, in the same namespace as peers' names; a repeated one counts once.",
+            ))
+            .build()
+            .into()
+    }
+}
+
+impl ToSchema for Aliases {}
 
 macro_rules! secret {
     ($(#[$doc:meta])* $name:ident, $check:expr, $bounds:expr) => {

@@ -261,6 +261,17 @@ async fn access_is_checked_for_every_operation() {
             if *op == Op::StreamEvents && matches!(who, "agent" | "owner") {
                 continue; // admitted, and a stream would not end
             }
+            // Admitted, it revokes the token it carries: use one of its own.
+            let throwaway;
+            let token = if *op == Op::RevokeOwnToken && who == "agent" {
+                let t = a
+                    .post("/api/v1/agent-tokens", json!({"name": "throwaway"}))
+                    .await;
+                throwaway = t["token"].as_str().unwrap().to_string();
+                throwaway.as_str()
+            } else {
+                token
+            };
             let mut req = client().request(method.clone(), format!("{}{path}", a.url));
             if !token.is_empty() {
                 req = req.bearer_auth(token);
