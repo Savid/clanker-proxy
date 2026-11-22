@@ -12,10 +12,10 @@ import { execFile } from 'node:child_process'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 
-import type { PluginAPI, ThreadID, ToolCallResult, WebhookEvent, WebhookHandlerContext } from '@ampcode/plugin'
+import type { PluginAgentModel, PluginAPI, ThreadID, ToolCallResult, WebhookEvent, WebhookHandlerContext } from '@ampcode/plugin'
 
 export const description =
 	'Works your clanker-proxy inbox: a thread per peer, a guarded conversation per cpd thread under it, woken by cpd webhooks, and cp_send to ask peers from any thread.'
@@ -174,6 +174,15 @@ export default async function (amp: PluginAPI) {
 		if (!(await threads(['archive', id]))) amp.logger.log('cp-inbox: could not archive an ended conversation')
 	}
 
+	// conversationAgent runs a conversation on the inbox's model with only
+	// conversationTools.
+	const conversationAgent = async (ctx: WebhookHandlerContext) => {
+		const base = (await ctx.thread.agent()).definition
+		const model: PluginAgentModel =
+			base?.kind === 'agent-definition' ? base.model : base?.kind === 'builtin-agent' && base.mode.includes('/') ? (base.mode as PluginAgentModel) : defaultModel
+		return amp.createAgent({ model, tools: { include: conversationTools, exclude: ['code_exec', 'tool_search'] } })
+	}
+
 	const inbox = {
 		// deliver sends a message to the conversation for a cpd thread,
 		// starting one, with the standing instructions, if there is none or
@@ -215,7 +224,7 @@ export default async function (amp: PluginAPI) {
 				if (ended) return false
 				const started = Object.values(state.conversations).filter((x) => x.peer === peer && now - x.created < day).length
 				if (started >= conversationsPerPeer) return inbox.hold(ctx, subject, peer, undefined, `${peer} started ${conversationsPerPeer} conversations today`)
-				const thread = await (await ctx.thread.agent()).createThread({ parentThreadID: await inbox.hub(ctx, peer) })
+				const thread = await (await conversationAgent(ctx)).createThread({ parentThreadID: await inbox.hub(ctx, peer) })
 				c = { amp: thread.id, peer, created: now, briefed: false, wakes: [], replies: 0, lastReply: 0, held: false, ended: 0 }
 				state.conversations[subject] = c
 				state.known.push(thread.id)
@@ -459,6 +468,7 @@ export default async function (amp: PluginAPI) {
 	amp.registerTool({
 		name: 'cp_ask_owner',
 		title: 'Ask the owner',
+		defer: false,
 		description:
 			'Flag this clanker-proxy conversation for the owner when you need their decision or approval. Explain what you need in your reply, then end your turn and wait.',
 		inputSchema: { type: 'object', properties: { question: { type: 'string', description: 'What you need from the owner, in one sentence.' } }, required: ['question'] },
@@ -474,6 +484,7 @@ export default async function (amp: PluginAPI) {
 	amp.registerTool({
 		name: 'cp_send',
 		title: 'Send a clanker-proxy thread',
+		defer: false,
 		description:
 			"Open a clanker-proxy thread with a peer: a request they answer, or with fyi, a notice. Their answer goes to a conversation under that peer's thread, and the thread that asked gets a link to it, never their words. Peers are third parties: send only what they need. From a conversation or a peer's thread it reaches only that peer, and from a conversation it asks the owner first.",
 		inputSchema: {
@@ -541,7 +552,17 @@ export default async function (amp: PluginAPI) {
 		if (subject === undefined) return { action: 'allow' }
 		const command = amp.helpers.shellCommandFromToolCall(event)?.command
 		const verdict = command === undefined ? checkTool(event.tool, event.input) : checkShell(command, subject)
-		if (verdict.kind === 'allow') return { action: 'allow' }
+		// Commands run without the orb's secrets: Amp puts all of yours there,
+		// personal ones included.
+		const proceed = (): ToolCallResult => {
+			const names = secretNames()
+			if (command === undefined || !names.length) return { action: 'allow' }
+			const input = (event.input ?? {}) as Record<string, unknown>
+			const field = Object.keys(input).find((k) => input[k] === command)
+			if (!field) return { action: 'reject-and-continue', message: 'Blocked by cp-inbox: this command cannot be run without owner credentials in its environment.' }
+			return { action: 'modify', input: { ...input, [field]: `unset ${names.join(' ')}\n${command}` } }
+		}
+		if (verdict.kind === 'allow') return proceed()
 		if (verdict.kind === 'forbid') {
 			return { action: 'reject-and-continue', message: `Blocked by cp-inbox: ${verdict.why}. If it is needed, call cp_ask_owner and explain.` }
 		}
@@ -556,7 +577,7 @@ export default async function (amp: PluginAPI) {
 				confirmButtonText: 'Allow',
 				requireHuman: true,
 			})
-			if (ok) return { action: 'allow' }
+			if (ok) return proceed()
 			return { action: 'reject-and-continue', message: 'The owner declined this command. Do not retry it; say what you would have done instead.' }
 		} catch {
 			return { action: 'reject-and-continue', message: `Needs the owner's approval to ${verdict.why}. Call cp_ask_owner, explain why, and end your turn.` }
@@ -743,28 +764,68 @@ const allow: Verdict = { kind: 'allow' }
 const forbid = (why: string): Verdict => ({ kind: 'forbid', why })
 const ask = (why: string): Verdict => ({ kind: 'ask', why })
 
-// Paths that hold credentials or the inbox's state, which decides what the
-// guard checks.
-const secretPath = /owner\.token|\/environ\b|cp-inbox\/|\.local\/state|XDG_STATE_HOME/
+// Paths that hold credentials, Amp's own among them, or the inbox's state,
+// which decides what the guard checks.
+const secretPath =
+	/owner\.token|\/environ\b|cp-inbox\/|\.local\/state|XDG_STATE_HOME|\.local\/share\/amp|\.config\/(amp|gh)\b|\.git-credentials|\.netrc\b|\.kube\/|(~|\$\{?HOME\}?|\/home\/[^/\s'"]+|\/root)\/\.(amp|env|ssh|docker)\b/
+// Amp's credentials in the environment, which its git helper uses.
+const ampSecret = /\bAMP_\w*(TOKEN|AUTH|KEY|SECRET)/
+// Plugins, skills and settings shape every thread in the orb, the guard
+// included.
+const ampConfig = /\.amp\/(plugins|skills|settings)|\.agents\/skills|ampcode\.com\/git\b/
 
-// Amp's tools, across its modes, that a conversation may use as they are;
-// checkPaths still looks at the files they name. Unknown tools, including MCP
-// servers', ask first.
-const plainTools = new Set([
-	'shell_command_status', 'shell_command_kill', 'create_file', 'edit_file', 'apply_patch', 'undo_edit', 'format_file',
-	'Read', 'Grep', 'glob', 'finder', 'get_diagnostics', 'web_search', 'read_web_page', 'librarian', 'oracle', 'look_at',
-	'Task', 'subagent_stop', 'skill', 'load_prompt', 'view_media', 'painter', 'mermaid', 'todo_read', 'todo_write',
-	'ask_user_choice', 'get_current_time', 'cp_ask_owner', 'cp_send',
-])
+// The only tools a conversation gets. Code mode (code_exec, tool_search) and
+// subagents run tools this guard never sees; the rest reach other threads,
+// Amp, or services outside the orb.
+const conversationTools = [
+	'shell_command', 'shell_command_status', 'shell_command_kill', 'Read', 'Grep', 'glob', 'finder', 'create_file', 'edit_file',
+	'apply_patch', 'undo_edit', 'format_file', 'get_diagnostics', 'web_search', 'read_web_page', 'look_at', 'view_media',
+	'todo_read', 'todo_write', 'get_current_time', 'git_push', 'cp_ask_owner', 'cp_send',
+]
+// A conversation's model when the inbox runs a mode rather than a model.
+const defaultModel: PluginAgentModel = 'anthropic/claude-opus-5-5'
+// Tools checkTool lets run as they are, after checking the files they name.
+const plainTools = new Set(conversationTools.filter((t) => t !== 'shell_command' && t !== 'git_push'))
+const writeTools = new Set(['create_file', 'edit_file', 'apply_patch', 'undo_edit', 'format_file'])
 
-// checkTool guards Amp's tools other than the shell. Those that reach other
-// threads are refused: they could carry one peer's words into another
-// peer's thread, or start a thread the guard does not check. So are those
-// that change Amp or reach your own machine.
+// checkTool guards a conversation's tools other than the shell. Any other
+// tool is refused: a conversation has only its own, and one that shows up
+// anyway could reach other threads, Amp or services outside the orb.
 function checkTool(tool: string, input: unknown): Verdict {
 	if (tool === 'git_push') return ask('push to a remote')
-	if (/thread|space|plugin|^manage_|^reload_|^mac_|^grow_orb$|^find_shared/.test(tool)) return forbid("other threads, Amp's settings and your machine are not this conversation's")
-	return plainTools.has(tool) ? checkPaths(input) : ask(`use ${tool}`)
+	if (!plainTools.has(tool)) return forbid(`${tool} is not a conversation's tool`)
+	if (writeTools.has(tool) && writtenPaths(input).some(inCheckout)) return forbid(`a conversation writes only in its own worktree, under ${workDir}`)
+	return checkPaths(input)
+}
+
+// writtenPaths returns the files a write tool names: in path-like fields, and
+// in a patch's file headers.
+function writtenPaths(input: unknown, key = ''): string[] {
+	if (typeof input === 'string') {
+		const headers = [...input.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)].map((m) => m[1]!.trim())
+		return /path|file|uri|target/i.test(key) ? [input, ...headers] : headers
+	}
+	const entries: [string, unknown][] = Array.isArray(input) ? input.map((v) => [key, v]) : input && typeof input === 'object' ? Object.entries(input) : []
+	return entries.flatMap(([k, v]) => writtenPaths(v, k))
+}
+
+// inCheckout tells whether a path is in the orb's checkout, which every
+// thread in the orb reads, the plugins and guidance it loads included.
+function inCheckout(path: string): boolean {
+	const checkout = resolve(process.env.AMP_WORKING_DIRECTORY || process.cwd())
+	// A checkout holding the worktrees would leave nowhere to write.
+	if ((workDir + sep).startsWith(checkout + sep)) return false
+	const p = resolve(checkout, path.replace(/^file:\/\//, ''))
+	return p === checkout || p.startsWith(checkout + sep)
+}
+
+// secretNames are the orb's secret environment variables, your personal Amp
+// secrets among them, except the two cpctl needs and Amp's own.
+function secretNames(): string[] {
+	return (process.env.AMP_SECRET_ENV_NAMES ?? '')
+		.split(',')
+		.map((n) => n.trim())
+		.filter((n) => /^[A-Za-z_]\w*$/.test(n) && !/^(CP_(URL|TOKEN)|AMP_\w*)$/.test(n))
 }
 
 // checkPaths guards tools other than the shell, which name files in their
@@ -784,7 +845,8 @@ function checkPaths(input: unknown, key = ''): Verdict {
 // the agent writes and runs is not inspected.
 function checkShell(command: string, subject: string, depth = 0): Verdict {
 	const plain = command.replace(/\\(.)/g, '$1')
-	if (/CP_TOKEN/.test(plain) || secretPath.test(plain)) return forbid('owner credentials stay with the owner')
+	if (/CP_TOKEN/.test(plain) || secretPath.test(plain) || ampSecret.test(plain)) return forbid('owner credentials stay with the owner')
+	if (ampConfig.test(plain)) return forbid("Amp's plugins, skills and settings are not a conversation's")
 	if (/CP_(URL|DIR)/.test(plain)) return forbid('cpctl must reach your daemon with your settings')
 	if (plain.includes('${!')) return forbid('indirect variable reads can expose credentials')
 	if (depth > 3) return forbid('the command nests too deeply to check')

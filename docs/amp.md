@@ -105,21 +105,26 @@ through `cp_send`, which asks you. It never runs a peer's code outside the
 repository it works on, and never handles peering requests, webhooks or
 credentials.
 
-The plugin also checks every shell command a conversation runs, and every
-other tool it calls:
+A conversation has only shell, file, search and web tools, plus `cp_send`
+and `cp_ask_owner`: no code mode, subagents, MCP servers, or tools for other
+threads, Amp or other services. Amp puts all your secrets in the orb,
+personal ones too; a conversation's commands run with them unset, except
+`CP_URL` and `CP_TOKEN`. The plugin also checks every command and tool call:
 
 | Command | Result |
 | --- | --- |
 | `cpctl` on this conversation's thread, `help`, `me` | runs |
 | any other `cpctl` use, or `--url`/`--token` overrides | refused; new threads go through `cp_send` |
-| Amp's tools for other threads (`read_thread`, `send_thread_message`, `create_thread`, …) and the `amp` CLI, plugins, Amp settings, your Mac | refused |
-| reading `CP_*` secrets, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment, `gh auth`, in commands or tools' file paths; an unclosed quote | refused |
+| the `amp` CLI; Amp's plugins, skills and settings (`.amp/plugins`, `~/.config/amp`, your plugins repository) | refused |
+| credentials: `CP_TOKEN`, Amp's (`~/.local/share/amp`, `AMP_*` tokens), `gh`'s, `~/.env`, `~/.ssh`, `~/.kube`, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment; an unclosed quote | refused |
+| the edit tools in the orb's checkout, which every thread there reads | refused; it works in its worktree |
 | `git push` (however wrapped, or Amp's `git_push`), git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push` | asks you to approve that exact command |
-| Amp tools other than files, search, web reads and subagents, including MCP tools | asks you first |
 | everything else | runs |
 
 Commands are checked inside `bash -c`, `eval`, `$(…)` and here-documents. A
-script the agent writes and then runs is not. This is a guardrail, not a sandbox.
+script the agent writes and then runs is not, and could still find your
+secrets in another process's environment: keep secrets you can't risk out of
+your personal Amp secrets. This is a guardrail, not a sandbox.
 When an agent needs you, its `cp_ask_owner` tool labels the thread
 `needs-owner` and notifies you; answer in that thread.
 

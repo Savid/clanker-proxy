@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -91,6 +91,8 @@ if (args[1] === 'search') {
 	const logs = []
 	// Threads the plugin started, with their parents.
 	const created = []
+	// The agents the plugin made, by their config.
+	const agents = []
 	const confirms = []
 	let confirmAnswer = true
 	let handler
@@ -139,6 +141,10 @@ if (args[1] === 'search') {
 			tools[tool.name] = tool
 		},
 		registerCommand() {},
+		createAgent: (config) => {
+			agents.push(config)
+			return agent
+		},
 		createWebhook: async (registration) => {
 			handler = registration.handler
 			return { url: hookURL }
@@ -156,7 +162,7 @@ if (args[1] === 'search') {
 	}
 	const ctx = { signal: new AbortController().signal, logger: amp.logger, ui, thread: { id: 'inbox', agent: async () => agent, addLabels: async () => undefined } }
 	return {
-		messages, posted, logs, created, confirms, another, ampCalls, labels, failing,
+		messages, posted, logs, created, agents, tools, confirms, another, ampCalls, labels, failing,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		idle: () => { threadState = 'idle' },
 		end: (thread) => agentEnd({ thread: { id: thread } }),
@@ -320,19 +326,64 @@ test('a conversation sends only to its own peer, and only with your approval', a
 
 test("a conversation cannot reach other threads, Amp's settings or your machine", async (t) => {
 	const f = await fixture(t)
-	for (const tool of ['send_thread_message', 'create_thread', 'read_thread', 'find_thread', 'reply_in_message_thread', 'load_plugin', 'manage_amp', 'mac_shell']) {
+	for (const tool of ['code_exec', 'tool_search', 'Task', 'oracle', 'librarian', 'skill', 'send_thread_message', 'create_thread', 'read_thread', 'find_thread', 'load_plugin', 'manage_amp', 'mac_shell', 'slack_write', 'mcp__github__create_pull_request']) {
 		assert.equal((await f.check('conversation', tool, {})).action, 'reject-and-continue', tool)
 	}
+	assert.equal(f.confirms.length, 0)
 	f.answerConfirm(false)
-	for (const tool of ['git_push', 'slack_write', 'mcp__github__create_pull_request']) {
-		assert.equal((await f.check('conversation', tool, { remote: 'origin' })).action, 'reject-and-continue', tool)
-		assert.match(f.confirms.at(-1).message, new RegExp(tool))
-	}
-	assert.deepEqual(await f.check('conversation', 'edit_file', { path: 'src/main.rs' }), { action: 'allow' })
+	assert.equal((await f.check('conversation', 'git_push', { remote: 'origin' })).action, 'reject-and-continue')
+	assert.match(f.confirms.at(-1).message, /git_push/)
 	assert.match((await f.check('conversation', 'shell_command', { cmd: 'amp threads markdown T-1' })).message, /amp CLI reaches your other threads/)
 	const send = await f.check('conversation', 'shell_command', { cmd: 'cpctl send bob "x" -m y' })
 	assert.match(send.message, /only with the cp_send tool/)
 	assert.deepEqual(await f.check('owner-thread', 'send_thread_message', {}), { action: 'allow' })
+})
+
+test('a conversation runs with only its own tools, writing only in its worktree', async (t) => {
+	const f = await fixture(t)
+	await f.deliver(f.event('thread.open', 'open', true, sent))
+	assert.deepEqual(f.agents.map((a) => a.model), ['anthropic/claude-opus-5-5'])
+	const { include, exclude } = f.agents[0].tools
+	assert.deepEqual(exclude, ['code_exec', 'tool_search'])
+	for (const tool of ['shell_command', 'edit_file', 'cp_ask_owner', 'cp_send']) assert.ok(include.includes(tool), tool)
+	for (const tool of ['code_exec', 'Task', 'find_thread', 'send_thread_message']) assert.ok(!include.includes(tool), tool)
+	assert.equal(f.tools.cp_ask_owner.defer, false)
+	assert.equal(f.tools.cp_send.defer, false)
+
+	const worktree = join(homedir(), 'cp-work', '00000000-repo', 'src', 'main.rs')
+	assert.deepEqual(await f.check('conversation', 'edit_file', { path: worktree }), { action: 'allow' })
+	for (const input of [{ path: 'src/main.rs' }, { path: join(process.cwd(), 'AGENTS.md') }, { patch: '*** Begin Patch\n*** Add File: .amp/plugins/x.ts\n+x\n*** End Patch' }]) {
+		assert.match((await f.check('conversation', 'apply_patch', input)).message, /only in its own worktree/, JSON.stringify(input))
+	}
+})
+
+test('a conversation runs commands without your secrets, and never reads credentials or changes Amp', async (t) => {
+	const previous = process.env.AMP_SECRET_ENV_NAMES
+	process.env.AMP_SECRET_ENV_NAMES = 'CP_URL, CP_TOKEN,SOPS_AGE_KEY,AMP_THREAD_IDENTITY_AUTH,not a name'
+	t.after(() => {
+		if (previous === undefined) delete process.env.AMP_SECRET_ENV_NAMES
+		else process.env.AMP_SECRET_ENV_NAMES = previous
+	})
+	const f = await fixture(t)
+	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: `cpctl show ${subject}`, cwd: '/w' }), {
+		action: 'modify',
+		input: { cmd: `unset SOPS_AGE_KEY\ncpctl show ${subject}`, cwd: '/w' },
+	})
+	f.answerConfirm(true)
+	assert.deepEqual(await f.check('conversation', 'shell_command', { cmd: 'git push' }), { action: 'modify', input: { cmd: 'unset SOPS_AGE_KEY\ngit push' } })
+	for (const cmd of [
+		'cat ~/.local/share/amp/secrets.json',
+		'cat $HOME/.config/gh/hosts.yml',
+		'cat /home/user/.env',
+		'ls ~/.kube/',
+		'echo $AMP_THREAD_IDENTITY_AUTH',
+		'cp x.ts .amp/plugins/',
+		'git clone https://ampcode.com/git/@me/-/plugins',
+	]) {
+		assert.equal((await f.check('conversation', 'shell_command', { cmd })).action, 'reject-and-continue', cmd)
+	}
+	assert.equal((await f.check('conversation', 'Read', { path: '/home/user/.config/amp/settings.json' })).action, 'reject-and-continue')
+	assert.deepEqual(await f.check('owner-thread', 'shell_command', { cmd: 'echo hi' }), { action: 'allow' })
 })
 
 test("a peer's thread is named after the peer once it has answered", async (t) => {
