@@ -7,7 +7,8 @@ mod common;
 use common::{Clock, Daemon, ask, kind, name, peer, scope, settle, signed, url};
 use cp_api::{
     Aliases, Approval, ErrorKind, ListThreadsQuery, MAX_ALIASES, NewThread, Peer, PeerInput,
-    WebhookCreate, WebhookEvents, WebhookOrigin, WebhookType, WebhookUpdate, WebhookUrl,
+    PeeringRequest, WebhookCreate, WebhookEvents, WebhookOrigin, WebhookType, WebhookUpdate,
+    WebhookUrl,
 };
 use cp_thread::{Body, Name, Title};
 
@@ -21,6 +22,32 @@ fn set(d: &mut Daemon, peer: &str, names: &[&str]) -> Result<Peer, cp_api::Error
 
 fn names(list: &[Name]) -> Vec<&str> {
     list.iter().map(Name::as_str).collect()
+}
+
+/// `asker` asks `approver` to peer, and is approved as `as_name`.
+fn approve_as(asker: &mut Daemon, approver: &mut Daemon, as_name: &str) -> Peer {
+    ask(asker, approver);
+    let id = approver.call(|c| c.requests()).unwrap().requests[0]
+        .id
+        .clone();
+    let pending = approver
+        .call(|c| {
+            c.begin_approval(
+                &id,
+                Approval {
+                    name: Some(name(as_name)),
+                },
+            )
+        })
+        .unwrap();
+    let accepted = signed(&pending.call.headers, pending.call.path, &pending.call.body);
+    asker
+        .call(|c| {
+            c.authenticate_peer(&accepted)?;
+            c.accepted(&accepted.key)
+        })
+        .unwrap();
+    approver.call(|c| c.commit_approval(&pending)).unwrap()
 }
 
 /// Alice peered with bob and carol.
@@ -39,7 +66,14 @@ fn aliases_are_sorted_once_and_bounded() {
         names(aliases(&["bobby", "b", "bobby"]).as_slice()),
         ["b", "bobby"]
     );
-    let many: Vec<Name> = (0..=MAX_ALIASES).map(|i| name(&format!("a{i}"))).collect();
+    let mut many: Vec<Name> = (0..MAX_ALIASES).map(|i| name(&format!("a{i}"))).collect();
+    many.push(name("a0"));
+    assert_eq!(
+        Aliases::try_from(many.clone()).unwrap().as_slice().len(),
+        MAX_ALIASES,
+        "a repeat counts once"
+    );
+    many.push(name("a10"));
     assert!(Aliases::try_from(many).is_err());
     assert!(serde_json::from_str::<cp_api::PeerAliases>(r#"{"aliases":["Not A Name"]}"#).is_err());
 }
@@ -256,7 +290,15 @@ fn aliases_go_with_their_peer() {
     alice.send("bob", "kept after removal");
     settle(&mut alice, &mut bob);
 
-    alice.call(|c| c.remove_peer(&name("bobby"))).unwrap();
+    // Removing takes the peer's name: an alias, perhaps meant for unalias,
+    // removes nothing.
+    let e = alice.call(|c| c.remove_peer(&name("bobby"))).unwrap_err();
+    assert!(
+        e.kind == ErrorKind::Conflict && e.detail.contains("bobby is an alias of bob"),
+        "{e:?}"
+    );
+    alice.call(|c| c.peer(&name("bob"), None)).unwrap();
+    alice.call(|c| c.remove_peer(&name("bob"))).unwrap();
     assert_eq!(
         kind(&alice.call(|c| c.peer(&name("bob"), None))),
         ErrorKind::NotFound
@@ -294,5 +336,117 @@ fn reapproving_a_peer_keeps_its_aliases() {
     assert_eq!(
         names(&alice.call(|c| c.peer(&name("bob"), None)).unwrap().aliases),
         ["bobby"]
+    );
+}
+
+#[test]
+fn a_removed_peers_name_is_never_an_alias() {
+    let clock = Clock::new();
+    let (mut alice, _bob, _carol) = three(&clock);
+    alice.send("bob", "kept after removal");
+    alice.call(|c| c.remove_peer(&name("bob"))).unwrap();
+    // Bob's daemon comes back from the same URL, approved as robert. His old
+    // name still names the old threads, so it cannot become robert's alias.
+    let mut bob = Daemon::new("bob", &clock, 5);
+    approve_as(&mut bob, &mut alice, "robert");
+    let e = set(&mut alice, "robert", &["bob"]).unwrap_err();
+    assert!(
+        e.kind == ErrorKind::Conflict && e.detail.contains("was a peer at https://bob.test"),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn a_peer_that_moved_leaves_its_old_name_to_its_threads() {
+    let clock = Clock::new();
+    let (mut alice, bob, _carol) = three(&clock);
+    set(&mut alice, "bob", &["bobby"]).unwrap();
+    let t = alice.send("bob", "queued for the old bob");
+
+    // Bob's daemon, with the same key, asks again from a new URL, and alice
+    // approves it as bob2: the old bob is forgotten as if removed.
+    let moved = PeeringRequest {
+        name: name("bob"),
+        url: url("https://bob-moved.test"),
+        key: bob.core.public_key().clone(),
+        note: None,
+    };
+    alice.call(|c| c.request_received(&moved)).unwrap();
+    let id = alice.call(|c| c.requests()).unwrap().requests[0].id.clone();
+    let pending = alice
+        .call(|c| {
+            c.begin_approval(
+                &id,
+                Approval {
+                    name: Some(name("bob2")),
+                },
+            )
+        })
+        .unwrap();
+    alice.call(|c| c.commit_approval(&pending)).unwrap();
+
+    for gone in ["bob", "bobby"] {
+        assert_eq!(
+            kind(&alice.call(|c| c.peer(&name(gone), None))),
+            ErrorKind::NotFound,
+            "{gone}"
+        );
+    }
+    let s = alice.summary(t.id.as_str());
+    assert_eq!((s.peer.as_str(), s.undelivered, s.failed), ("bob", 0, 1));
+    let e = set(&mut alice, "bob2", &["bob"]).unwrap_err();
+    assert!(
+        e.kind == ErrorKind::Conflict && e.detail.contains("was a peer at https://bob.test"),
+        "{e:?}"
+    );
+    let e = alice
+        .call(|c| {
+            c.add_peer(PeerInput {
+                name: name("bob"),
+                url: url("https://elsewhere.test"),
+                note: None,
+            })
+        })
+        .unwrap_err();
+    assert!(
+        e.kind == ErrorKind::Conflict && e.detail.contains("was a peer at"),
+        "{e:?}"
+    );
+    let q = ListThreadsQuery {
+        peer: Some(name("bob")),
+        ..ListThreadsQuery::default()
+    };
+    assert_eq!(alice.call(|c| c.threads(&q, None)).unwrap().len(), 1);
+}
+
+#[test]
+fn a_name_being_approved_cannot_become_an_alias() {
+    let clock = Clock::new();
+    let (mut alice, _bob, _carol) = three(&clock);
+    let mut dave = Daemon::new("dave", &clock, 4);
+    ask(&mut dave, &mut alice);
+    let id = alice.call(|c| c.requests()).unwrap().requests[0].id.clone();
+    let pending = alice
+        .call(|c| c.begin_approval(&id, Approval::default()))
+        .unwrap();
+    let e = set(&mut alice, "bob", &["dave"]).unwrap_err();
+    assert!(
+        e.kind == ErrorKind::Conflict && e.detail.contains("dave is being approved"),
+        "{e:?}"
+    );
+    // So the approval still commits.
+    let accepted = signed(&pending.call.headers, pending.call.path, &pending.call.body);
+    dave.call(|c| {
+        c.authenticate_peer(&accepted)?;
+        c.accepted(&accepted.key)
+    })
+    .unwrap();
+    assert_eq!(
+        alice
+            .call(|c| c.commit_approval(&pending))
+            .unwrap()
+            .name
+            .as_str(),
+        "dave"
     );
 }

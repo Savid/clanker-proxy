@@ -163,6 +163,17 @@ impl<S: Sql, R: Runtime> Core<S, R> {
 
     /// The agent a token lets in, recording its use at most once a minute.
     pub fn authenticate_agent(&mut self, token: &str) -> Result<Agent, Error> {
+        self.agent(token, false)
+    }
+
+    /// The agent a token lets in to revoke itself. An expired token still
+    /// may, so an integration whose token lapsed can remove itself and its
+    /// webhook.
+    pub fn authenticate_agent_to_revoke(&mut self, token: &str) -> Result<Agent, Error> {
+        self.agent(token, true)
+    }
+
+    fn agent(&mut self, token: &str, expired_ok: bool) -> Result<Agent, Error> {
         if !token.starts_with(prefix::AGENT) {
             return Err(Error::new(ErrorKind::Unauthorized, "not an agent token"));
         }
@@ -174,7 +185,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 &[secrets::hash(token).into()],
             )?
             .ok_or_else(|| Error::new(ErrorKind::Unauthorized, "unknown agent token"))?;
-        if r.opt_int(2)?.is_some_and(|t| now.0 >= t) {
+        if !expired_ok && r.opt_int(2)?.is_some_and(|t| now.0 >= t) {
             return Err(Error::new(ErrorKind::Unauthorized, "agent token expired"));
         }
         let name: Name = r.parse(0)?;

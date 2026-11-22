@@ -115,7 +115,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "<name> <alias>...",
         2..11,
         "give a peer other names to call them by here",
-        "Aliases are this daemon's own: every command that takes a peer accepts one (send, ls --peer, peer show, token add --peers, webhook --peers), output and threads show the peer's name, and the peer never sees them. Peers' names and aliases share one namespace, so an alias cannot be your name, a peer's name or another peer's alias, and a peer cannot be added or approved under an alias (approve --as names them differently). At most 10 per peer.",
+        "Aliases are this daemon's own: every command that takes a peer accepts one but peer rm (send, ls --peer, peer show, token add --peers, webhook --peers), output and threads show the peer's name, and the peer never sees them. Peers' names and aliases share one namespace, so an alias cannot be your name, a peer's name or another peer's alias, and a peer cannot be added or approved under an alias (approve --as names them differently). At most 10 per peer.",
         "cpctl peer alias tester bobby",
         []
     ),
@@ -133,7 +133,7 @@ pub(crate) static COMMANDS: &[Command] = &[
         "<name>",
         1..1,
         "forget a peer and their aliases; threads with them are kept",
-        "Their key stops working here and anything not yet delivered to them fails. Their name can later go only to a daemon at the same URL.",
+        "Their key stops working here and anything not yet delivered to them fails. Their name can later go only to a daemon at the same URL. Takes the peer's name, never an alias: to drop an alias, use cpctl peer unalias.",
         "cpctl peer rm bob",
         []
     ),

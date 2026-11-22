@@ -127,7 +127,7 @@ pub enum PeerStatus {
 pub struct Peer {
     pub name: Name,
     /// Other names the owner calls them by here, sorted. Operations that
-    /// take a peer's name accept these too.
+    /// take a peer's name accept these too, except removePeer.
     #[schema(max_items = 10)]
     pub aliases: Vec<Name>,
     pub url: DaemonUrl,

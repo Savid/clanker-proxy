@@ -471,11 +471,11 @@ impl TryFrom<Vec<Name>> for Aliases {
     type Error = Invalid;
 
     fn try_from(mut aliases: Vec<Name>) -> Result<Self, Invalid> {
+        aliases.sort();
+        aliases.dedup();
         if aliases.len() > MAX_ALIASES {
             return Err(Invalid(format!("at most {MAX_ALIASES} aliases")));
         }
-        aliases.sort();
-        aliases.dedup();
         Ok(Self(aliases))
     }
 }

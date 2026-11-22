@@ -365,6 +365,101 @@ async fn the_stream_carries_changes_and_ends_when_its_token_is_revoked() {
     bob.daemon.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_token_that_revokes_itself_ends_its_stream() {
+    let (alice, bob) = peered().await;
+    let agent = alice
+        .post("/api/v1/agent-tokens", json!({"name": "leaving"}))
+        .await;
+    let token = agent["token"].as_str().unwrap().to_string();
+    let mut resp = client()
+        .get(format!("{}/api/v1/stream", alice.url))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let (status, _) = alice
+        .call_as(&token, reqwest::Method::DELETE, "/api/v1/me", None)
+        .await;
+    assert_eq!(status, 204);
+    alice
+        .post("/api/v1/threads", json!({"to": "bob", "title": "after"}))
+        .await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match resp.chunk().await {
+                Ok(Some(c)) if String::from_utf8_lossy(&c).contains("after") => return false,
+                Ok(Some(_)) => {}
+                _ => return true,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(ended, "a revoked token's stream got another event");
+    alice.daemon.shutdown().await;
+    bob.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_expired_token_can_still_revoke_itself() {
+    let a = node("erin").await;
+    let soon = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 2;
+    let expires = cp_thread::At::from_unix_seconds(i64::try_from(soon).unwrap()).unwrap();
+    let agent = a
+        .post(
+            "/api/v1/agent-tokens",
+            json!({"name": "lapsing", "expiresAt": expires.to_string()}),
+        )
+        .await;
+    let token = agent["token"].as_str().unwrap().to_string();
+    let (status, p) = a
+        .call_as(
+            &token,
+            reqwest::Method::POST,
+            "/api/v1/me/webhook",
+            Some(json!({"url": "https://hooks.example.com/lapsing",
+                        "secret": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="})),
+        )
+        .await;
+    assert_eq!(status, 200, "{p}");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while a
+        .call_as(&token, reqwest::Method::GET, "/api/v1/threads", None)
+        .await
+        .0
+        != 401
+    {
+        assert!(tokio::time::Instant::now() < deadline, "never expired");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let (status, _) = a
+        .call_as(&token, reqwest::Method::POST, "/api/v1/me/webhook", None)
+        .await;
+    assert_eq!(status, 401, "expired for everything else");
+    let (status, _) = a
+        .call_as(&token, reqwest::Method::DELETE, "/api/v1/me", None)
+        .await;
+    assert_eq!(status, 204);
+    let (status, _) = a
+        .call(reqwest::Method::GET, "/api/v1/webhooks/lapsing", None)
+        .await;
+    assert_eq!(status, 404, "its webhook went with it");
+    assert_eq!(a.get("/api/v1/agent-tokens").await["tokens"], json!([]));
+    let (status, _) = a
+        .call_as(&token, reqwest::Method::DELETE, "/api/v1/me", None)
+        .await;
+    assert_eq!(status, 401, "a revoked token is unknown");
+    a.daemon.shutdown().await;
+}
+
 /// Accepts HTTP requests and keeps their headers and bodies.
 async fn receiver() -> (
     String,
