@@ -21,7 +21,7 @@ that asked gets a link to it.
 - **A daemon peers can reach**, outside the orb: native `cpd` with a public URL, or [the Worker](cloudflare.md). The orb sleeps; cpd doesn't.
 - **Amp with GitHub connected** (Settings → MCP & Integrations), so orbs can clone your repositories.
 - **A current daemon.** Orbs take the plugin from this repository's master, and [`.agents/setup`](../.agents/setup) installs the `cpctl` your daemon runs. Rerun `cloudflare.sh` (or `install.sh`) to update the daemon. A running inbox keeps the plugin it started with: ask it to pull master and reload its plugins.
-- **An agent token, never the owner token.** Anything in the orb can read `CP_TOKEN`, including code an agent runs for a peer. An agent token can send and work threads, never peer, make tokens or change your webhooks, and `cpctl token rm` revokes it and ends its streams. Unscoped, it reaches every peer, as you: [scope it](#one-inbox-per-peer) once you have peers.
+- **An agent token, never the owner token.** Your threads in the project can read `CP_TOKEN`; conversations, which read peer text, never see it. An agent token can send and work threads, never peer, make tokens or change your webhooks, and `cpctl token rm` revokes it and ends its streams. Unscoped, it reaches every peer, as you: [scope it](#one-inbox-per-peer) once you have peers.
 
 ## Setup
 
@@ -110,19 +110,22 @@ and `cp_ask_owner`: no code mode, subagents, MCP servers, or tools for other
 threads, Amp or other services.
 
 Its commands, and any script it writes, run in a sandbox: as you, but
-without privileges or a way to regain them (no `sudo`), with only `CP_URL`
-and `CP_TOKEN` in the environment, and with no other process in sight. Every
-filesystem is read-only, and your home is empty but for the checkout and the
-`bin` directories on `PATH`, read-only, and the conversation's own directory,
-its only writable place and its `/tmp`. Your credentials, Amp's and `gh`'s,
-your Amp secrets, the `amp` CLI, Amp's settings, the inbox's state and other
-conversations' work are out of reach, and the checkout's plugins and guidance
-can't change. It needs passwordless `sudo`, `unshare` and `setpriv`,
-which orbs have. The sandbox shares the orb's network.
+without privileges or a way to regain them (no `sudo`), with a clean
+environment, and with no other process in sight. Its `cpctl` reaches cpd
+through the plugin, which holds the token and passes on only reading and
+acting on the conversation's own thread; the sandbox gets a key that works
+only for that, and only inside the orb. Every filesystem is read-only, and
+your home is empty but for the checkout and the `bin` directories on `PATH`,
+read-only, and the conversation's own directory, its only writable place and
+its `/tmp`. Your credentials, Amp's and `gh`'s, your Amp secrets, the `amp`
+CLI, Amp's settings, the inbox's state and other conversations' work are out
+of reach, and the checkout's plugins and guidance can't change. It needs
+passwordless `sudo`, `unshare` and `setpriv`, which orbs have. The sandbox
+shares the orb's network.
 
 A command you approve runs outside the sandbox, since it may need your
-credentials, but still without your Amp secrets. It also runs the
-repository's git hooks and configuration, so approve a push only from a
+credentials, but still without your Amp secrets or `CP_TOKEN`. It also runs
+the repository's git hooks and configuration, so approve a push only from a
 repository you trust. The edit and read tools run outside the sandbox too:
 they write only in the conversation's directory and, in your home, read only
 that and the checkout. The plugin also checks every command and tool call:
@@ -130,9 +133,9 @@ that and the checkout. The plugin also checks every command and tool call:
 | Command | Result |
 | --- | --- |
 | `cpctl` on this conversation's thread, `help`, `me` | runs |
-| any other `cpctl` use, or `--url`/`--token` overrides | refused; new threads go through `cp_send` |
+| any other `cpctl` use | refused; new threads go through `cp_send` |
 | the `amp` CLI | refused |
-| credentials: `CP_TOKEN`, Amp's (`~/.local/share/amp`, `AMP_*` tokens), `gh`'s, `~/.env`, `~/.ssh`, `~/.kube`, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment; an unclosed quote | refused |
+| credentials: Amp's (`~/.local/share/amp`, `AMP_*` tokens), `gh`'s, `~/.env`, `~/.ssh`, `~/.kube`, `owner.token`, `/proc/*/environ`, `~/.local/state`, the environment; an unclosed quote | refused |
 | the edit tools outside its directory; the others in your home outside the checkout and its directory | refused |
 | `git push` (however wrapped, or Amp's `git_push`), git aliases, GitHub writes, uploads (`curl`, `wget`), `ssh`, `nc`, publishing, `docker push` | asks you to approve that exact command |
 | everything else | runs, in the sandbox |

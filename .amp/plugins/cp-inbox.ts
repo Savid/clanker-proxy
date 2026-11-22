@@ -10,8 +10,10 @@
 // answers go to a conversation too. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -61,6 +63,8 @@ const keepEnded = 30 * day
 const maxApprovable = 2000
 // How much of a cpd thread its dialog shows.
 const maxShown = 30_000
+// cpd's own limit on a request body.
+const maxBody = 1 << 20
 
 const states = new Set(['open', 'acked', 'needs-input', 'resolved', 'closed', 'declined', 'withdrawn'])
 const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
@@ -470,6 +474,71 @@ export default async function (amp: PluginAPI) {
 		return labels.includes('cp-peer') ? '' : undefined
 	}
 
+	// The broker is how a conversation's cpctl reaches cpd. It holds the
+	// token, so a sandbox never sees it, and passes on only reading and
+	// acting on that conversation's own thread: a key that leaks works only
+	// inside the orb, and only for that thread.
+	const subjects = new Map<string, string>()
+	const keys = new Map<string, string>()
+	const keyFor = (subject: string): string => {
+		let key = keys.get(subject)
+		if (!key) {
+			key = 'cpa_' + randomBytes(32).toString('base64url')
+			keys.set(subject, key)
+			subjects.set(key, subject)
+		}
+		return key
+	}
+	const relay = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+		const refuse = (status: number, detail: string) => {
+			res.writeHead(status, { 'content-type': 'application/problem+json' })
+			res.end(JSON.stringify({ title: 'Refused by cp-inbox', status, detail }))
+		}
+		const subject = subjects.get((req.headers.authorization ?? '').replace(/^Bearer /, ''))
+		if (subject === undefined) return refuse(401, 'unknown key')
+		const url = new URL(req.url ?? '/', 'http://broker')
+		const thread = url.pathname.match(/^\/api\/v1\/threads\/([0-9a-f-]{4,36})(\/events)?$/)
+		let path: string
+		if (req.method === 'GET' && url.pathname === '/api/v1/me') path = url.pathname
+		else if (thread && subject && subject.startsWith(thread[1]!) && req.method === (thread[2] ? 'POST' : 'GET')) path = `/api/v1/threads/${subject}${thread[2] ?? ''}`
+		else return refuse(403, subject ? `a conversation reaches only its own thread, ${subject}` : "this conversation's thread is no longer known")
+		const body: Buffer[] = []
+		let size = 0
+		for await (const chunk of req as AsyncIterable<Buffer>) {
+			size += chunk.length
+			if (size > maxBody) return refuse(413, 'the request is too large')
+			body.push(chunk)
+		}
+		let answer: Response
+		try {
+			answer = await fetch(cpURL + path + url.search, {
+				method: req.method,
+				headers: { authorization: `Bearer ${cpToken}`, accept: req.headers.accept ?? 'application/json', ...(body.length ? { 'content-type': req.headers['content-type'] ?? 'application/json' } : {}) },
+				body: body.length ? Buffer.concat(body) : undefined,
+				redirect: 'error',
+				signal: AbortSignal.timeout(30_000),
+			})
+		} catch {
+			return refuse(502, 'cpd is unreachable')
+		}
+		const headers: Record<string, string> = {}
+		for (const name of ['content-type', 'retry-after']) {
+			const value = answer.headers.get(name)
+			if (value) headers[name] = value
+		}
+		res.writeHead(answer.status, headers)
+		res.end(Buffer.from(await answer.arrayBuffer()))
+	}
+	let broker: Promise<string> | undefined
+	const brokerURL = (): Promise<string> =>
+		(broker ??= new Promise((ok, fail) => {
+			const server = createServer((req, res) => void relay(req, res).catch(() => res.destroy()))
+			server.on('error', fail)
+			// Amp keeps the plugin running; the broker alone must not.
+			server.unref()
+			server.listen(0, '127.0.0.1', () => ok(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))
+		}))
+
 	amp.registerTool({
 		name: 'cp_ask_owner',
 		title: 'Ask the owner',
@@ -565,15 +634,14 @@ export default async function (amp: PluginAPI) {
 			if (!field || command === undefined) return { action: 'allow' }
 			await mkdir(join(own, 'home'), { recursive: true, mode: 0o700 })
 			await mkdir(join(own, 'tmp'), { recursive: true, mode: 0o700 })
-			return { action: 'modify', input: { ...input, [field]: sandboxed(command, own) } }
+			return { action: 'modify', input: { ...input, [field]: sandboxed(command, own, await brokerURL(), keyFor(subject)) } }
 		}
 		// A command you approve runs outside the sandbox, since it may need your
-		// credentials, but still without the orb's secrets: Amp puts all of
-		// yours there, personal ones included.
+		// credentials, but still without the orb's secrets, which Amp puts
+		// there, personal ones included, or the agent token.
 		const approved = (): ToolCallResult => {
-			const names = secretNames()
-			if (!field || command === undefined || !names.length) return { action: 'allow' }
-			return { action: 'modify', input: { ...input, [field]: `unset ${names.join(' ')}\n${command}` } }
+			if (!field || command === undefined) return { action: 'allow' }
+			return { action: 'modify', input: { ...input, [field]: `unset ${[...new Set([...secretNames(), 'CP_TOKEN'])].join(' ')}\n${command}` } }
 		}
 		if (verdict.kind === 'forbid') {
 			return { action: 'reject-and-continue', message: `Blocked by cp-inbox: ${verdict.why}. If it is needed, call cp_ask_owner and explain.` }
@@ -903,12 +971,12 @@ function ownDir(subject: string, thread: string): string {
 }
 
 // sandboxed runs a conversation's command with sandboxScript, as root in a
-// new mount and PID namespace, which drops to you. sudo passes on only the
-// two variables cpctl needs.
-function sandboxed(command: string, own: string): string {
+// new mount and PID namespace, which drops to you. sudo passes on no
+// environment; cpctl gets the broker's URL and the conversation's key.
+function sandboxed(command: string, own: string, url: string, key: string): string {
 	const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
-	const args = [home, own, checkout(), String(process.getuid!()), String(process.getgid!()), process.env.PATH ?? '', command]
-	return `sudo -n --preserve-env=CP_URL,CP_TOKEN unshare --mount --pid --fork --kill-child --mount-proc --propagation private /bin/sh -c ${q(sandboxScript)} cp-sandbox ${args.map(q).join(' ')} "$PWD"`
+	const args = [home, own, checkout(), String(process.getuid!()), String(process.getgid!()), process.env.PATH ?? '', url, key, command]
+	return `sudo -n unshare --mount --pid --fork --kill-child --mount-proc --propagation private /bin/sh -c ${q(sandboxScript)} cp-sandbox ${args.map(q).join(' ')} "$PWD"`
 }
 
 // sandboxScript makes every filesystem read-only and replaces your home with
@@ -918,9 +986,11 @@ function sandboxed(command: string, own: string): string {
 // privileges, supplementary groups or a way to regain them (no sudo), and
 // with a clean environment. Processes outside the namespace, and so their
 // environments, are out of sight. Arguments: home, own directory, checkout,
-// uid, gid, PATH, command, working directory.
+// uid, gid, PATH, cpd's URL and token for cpctl, command, working directory.
 const sandboxScript = `set -eu
-home=$1 own=$2 checkout=$3 uid=$4 gid=$5 path=$6 cmd=$7 dir=$8
+home=$1 own=$2 checkout=$3 uid=$4 gid=$5 path=$6 url=$7 key=$8 cmd=$9
+shift 9
+dir=$1
 fail() { echo "cp-inbox sandbox: $*" >&2; exit 126; }
 [ -d /mnt ] || fail "needs /mnt"
 mount -t tmpfs -o mode=700 cp-stage /mnt
@@ -957,7 +1027,7 @@ umount -l /mnt/home
 umount -l /mnt
 case $dir in "$own" | "$own"/* | "$checkout" | "$checkout"/*) cd "$dir" 2>/dev/null || cd "$own" ;; *) cd "$own" ;; esac
 exec setpriv --reuid="$uid" --regid="$gid" --clear-groups --no-new-privs --inh-caps=-all --bounding-set=-all \\
-	env -i PATH="$path" HOME="$own/home" TMPDIR=/tmp LANG=C.UTF-8 CP_URL="\${CP_URL:-}" CP_TOKEN="\${CP_TOKEN:-}" GIT_CONFIG_GLOBAL="$home/.gitconfig" \\
+	env -i PATH="$path" HOME="$own/home" TMPDIR=/tmp LANG=C.UTF-8 CP_URL="$url" CP_TOKEN="$key" GIT_CONFIG_GLOBAL="$home/.gitconfig" \\
 	bash -c "$cmd"
 `
 
@@ -987,8 +1057,7 @@ function checkPaths(input: unknown, key = ''): Verdict {
 // the agent writes and runs is not inspected.
 function checkShell(command: string, subject: string, depth = 0): Verdict {
 	const plain = command.replace(/\\(.)/g, '$1')
-	if (/CP_TOKEN/.test(plain) || secretPath.test(plain) || ampSecret.test(plain)) return forbid('owner credentials stay with the owner')
-	if (/CP_(URL|DIR)/.test(plain)) return forbid('cpctl must reach your daemon with your settings')
+	if (secretPath.test(plain) || ampSecret.test(plain)) return forbid('owner credentials stay with the owner')
 	if (plain.includes('${!')) return forbid('indirect variable reads can expose credentials')
 	if (depth > 3) return forbid('the command nests too deeply to check')
 	const { shell, expanded } = heredocs(command)
@@ -1132,11 +1201,9 @@ const readOnlyGitHub: Record<string, Set<string> | true> = {
 
 function checkWords(all: string[], subject: string, depth: number): Verdict {
 	let i = 0
-	const assigned: string[] = []
 	while (i < all.length) {
 		const w = all[i]!
 		if (/^[A-Za-z_]\w*=/.test(w)) {
-			assigned.push(w.split('=')[0]!)
 			i++
 		} else if (keywords.has(w)) {
 			i++
@@ -1149,7 +1216,6 @@ function checkWords(all: string[], subject: string, depth: number): Verdict {
 			if (w === 'timeout') i++
 		} else break
 	}
-	if (assigned.some((a) => /^CP_(URL|TOKEN|DIR)$/.test(a))) return forbid('cpctl must reach your daemon with your settings')
 	const program = basename(all[i] ?? '')
 	const args = all.slice(i + 1)
 	const operands = args.filter((a) => !a.startsWith('-'))
@@ -1231,19 +1297,15 @@ function checkWords(all: string[], subject: string, depth: number): Verdict {
 	}
 }
 
-// checkCpctl keeps a conversation to its own thread. An agent token already
-// refuses peering, tokens and webhooks; this also keeps out other threads
-// and peers.
+// checkCpctl refuses, with a reason, what the broker would: any cpctl use
+// but help, me and this conversation's own thread.
 function checkCpctl(args: string[], subject: string): Verdict {
 	let i = 0
-	for (; i < args.length && args[i]!.startsWith('-'); i++) {
-		if (/^--?(url|token)(=|$)/.test(args[i]!)) return forbid('cpctl must reach your daemon with your settings')
-	}
+	while (i < args.length && args[i]!.startsWith('-')) i++
 	const command = args[i]
 	const operands: string[] = []
 	for (let j = i + 1; j < args.length; j++) {
 		const a = args[j]!
-		if (/^--?(url|token)(=|$)/.test(a)) return forbid('cpctl must reach your daemon with your settings')
 		if (cpctlValueFlags.test(a)) j++
 		else if (!a.startsWith('-')) operands.push(a)
 	}
