@@ -108,16 +108,18 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
     const remote = path.join(__dirname, 'user-plugins.git')
     const git = (...a) => execFileSync('git', a, { stdio: 'ignore' })
     if (!fs.existsSync(remote)) {
-        git('init', '-q', '--bare', remote)
+        // Named branches: the runner's default branch name may differ.
+        git('init', '-q', '--bare', '--initial-branch=main', remote)
         const seed = path.join(__dirname, 'seed')
         git('clone', '-q', remote, seed)
+        git('-C', seed, 'checkout', '-q', '-b', 'main')
         fs.mkdirSync(path.join(seed, 'cp-peers'))
         fs.writeFileSync(path.join(seed, 'cp-peers', 'index.ts'), 'x')
         fs.mkdirSync(path.join(seed, 'other'))
         fs.writeFileSync(path.join(seed, 'other', 'index.ts'), 'x')
         git('-C', seed, 'add', '.')
         git('-C', seed, 'commit', '-q', '-m', 'cp-peers')
-        git('-C', seed, 'push', '-q', 'origin', 'HEAD')
+        git('-C', seed, 'push', '-q', 'origin', 'main')
     }
     git('clone', '-q', remote, args[2])
 }
