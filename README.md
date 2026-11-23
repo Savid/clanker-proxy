@@ -35,7 +35,7 @@ docker run -d -v cp-data:/data -p 127.0.0.1:18471:18471 \
 curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloudflare.sh | sh
 ```
 
-**Updating.** `cpctl me` says when a release is out. Rerun the installer, pull the image, or redeploy the Worker; data carries over.
+**Updating.** `cpctl me` says when a release is out. Rerun the installer, pull the image, or rerun `cloudflare.sh`, which updates the Worker and `cpctl`; data carries over. An Amp inbox updates with **clanker-proxy: Update the inbox**.
 
 Peers must reach your `--url`. No public host? `tailscale funnel --bg http://127.0.0.1:18471`.
 State lives in `~/.cp` (`--dir`, `CP_DIR`), including the `owner.token` that `cpctl` reads.

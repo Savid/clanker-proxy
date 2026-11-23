@@ -983,6 +983,89 @@ export default async function (amp: PluginAPI) {
 	// Uninstalling removes what the plugin set up and can reach, before you
 	// delete the project, which takes the plugin with it: nothing is left to
 	// clean up after.
+	// Updating moves this orb to the release your daemon runs, so the plugin,
+	// cpctl and the daemon match: the checkout the plugins load from, cpctl
+	// through .agents/setup, and cp-peers in your personal plugins. A plugin
+	// cannot reload itself, so you reload once it is done.
+	amp.registerCommand(
+		'cp-update',
+		{
+			title: 'Update the inbox',
+			category: 'clanker-proxy',
+			description: 'Moves this orb to the release your daemon runs: the inbox plugin, cpctl, and cp-peers in your personal plugins. Then reload the plugins.',
+		},
+		async (ctx) => {
+			const res = await fetch(`${cpURL}/api/v1/me`, { headers: { authorization: `Bearer ${cpToken}` }, redirect: 'error', signal: AbortSignal.timeout(15_000) }).catch(() => undefined)
+			const version: unknown = res?.ok ? ((await res.json().catch(() => ({}))) as { version?: unknown }).version : undefined
+			if (typeof version !== 'string' || !/^v\d+\.\d+\.\d+$/.test(version)) {
+				await ctx.ui
+					.notify(`clanker-proxy: cannot read your daemon's release (${res ? `it answered ${res.status}` : 'it is unreachable'}); nothing was updated.`)
+					.catch(() => undefined)
+				return
+			}
+			const repo = checkout()
+			const ok = await ctx.ui
+				.confirm({
+					title: `Update the inbox to ${version}?`,
+					message: [
+						`Your daemon runs ${version}. This:`,
+						`- moves this orb's checkout to ${version}, the plugin and its setup included;`,
+						`- installs cpctl ${version}, with that setup;`,
+						`- updates \`cp-peers\` in your personal plugins to ${version}, if it is there.`,
+						'',
+						'Then reload the plugins: command palette, `plugins: reload`.',
+					].join('\n'),
+					confirmButtonText: 'Update',
+					requireHuman: true,
+				})
+				.catch(() => false)
+			if (!ok) return
+			const report: string[] = []
+			const step = async (what: string, act: () => Promise<string | void>) => {
+				try {
+					const note = await act()
+					report.push(`- ${what}${note ? `: ${note}` : ''}`)
+					return true
+				} catch (err) {
+					// Only the first line: a command's error quotes its output.
+					report.push(`- ${what}: failed, ${(err instanceof Error ? err.message : String(err)).split('\n')[0]}`)
+					return false
+				}
+			}
+			const moved = await step(`Moved this orb's checkout to ${version}`, async () => {
+				await run('git', ['-C', repo, 'fetch', '-q', '--tags', 'origin'], { timeout: 60_000 })
+				await run('git', ['-C', repo, 'checkout', '-q', '--detach', `refs/tags/${version}`])
+			})
+			if (moved) {
+				await step(`Installed cpctl ${version}`, async () => {
+					await run('sh', [join(repo, '.agents', 'setup')], { cwd: repo, timeout: 180_000 })
+				})
+				await step(`Updated cp-peers in your personal plugins to ${version}`, async () => {
+					const dir = await mkdtemp(join(tmpdir(), 'cp-update-'))
+					try {
+						await run(ampCLI, ['clone', 'user-plugins', dir], { timeout: 60_000 })
+						const target = join(dir, 'cp-peers', 'index.ts')
+						if (!(await lstat(target).then(() => true, () => false))) return 'it is not there'
+						const fresh = await readFile(join(repo, '.amp', 'personal', 'cp-peers', 'index.ts'), 'utf8')
+						if ((await readFile(target, 'utf8')) === fresh) return 'already current'
+						await writeFile(target, fresh)
+						await run('git', ['-C', dir, 'commit', '-q', '-am', `cp-peers: ${version}`])
+						await run('git', ['-C', dir, 'push', '-q'], { timeout: 60_000 })
+					} finally {
+						await rm(dir, { recursive: true, force: true })
+					}
+				})
+			}
+			await ctx.ui
+				.confirm({
+					title: moved ? `The inbox is at ${version}` : 'The inbox was not updated',
+					message: `${report.join('\n')}${moved ? '\n\nNow reload the plugins: command palette, `plugins: reload`. Your other threads load the new cp-peers when they start.' : ''}`,
+					confirmButtonText: 'Done',
+				})
+				.catch(() => undefined)
+		},
+	)
+
 	amp.registerCommand(
 		'cp-uninstall',
 		{
