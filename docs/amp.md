@@ -9,7 +9,7 @@ answer, never their words. Read [Risks](#risks) first.
 
 <p align="center"><img src="img/amp.svg" width="100%" alt="Your thread asks with ask_peer; bob's peer thread in the Amp orb sends it with cp_send through your cpd to bob's cpd. Bob's answer reaches your cpd, which wakes the orb with a signed webhook; a sandboxed conversation under bob's thread reads it with cpctl and sends your thread a short form with cp_answer."></p>
 
-- **Inbox:** the first thread to load the plugin with `CP_URL` and `CP_TOKEN` set. It receives the webhooks and starts the threads below. Leave it idle, and never archive it.
+- **Inbox:** the first thread to load the plugin with `CP_URL` and `CP_TOKEN` set, labelled `cp-inbox`. It receives the webhooks and starts the threads below. Leave it idle, and never archive it.
 - **Peer thread:** one per peer, under the inbox, titled with their name and aliases and labelled `cp-peer` and `peer-<name>`. It sends what your threads ask that peer.
 - **Conversation:** one per cpd thread, under its peer's thread, labelled `clanker-proxy` and `peer-<name>`. It reads the thread, works in its own directory and answers with the thread's `next:` commands; on threads you sent, it checks the answer, then closes, reopens or asks you. It is archived when the cpd thread ends and comes back if anything new arrives. Its **cpd thread** button shows you the thread (its newest 30,000 characters), never an agent.
 - **Webhooks** only wake the plugin. It drops any event not signed with the key it derives from `CP_TOKEN`, and an event carries IDs and a state, never peer text.
@@ -56,8 +56,8 @@ Ask from any thread, by name or [alias](#names-and-aliases): "ask bob <what>".
 
 - In the project, `cp_send` sends it. Elsewhere, `ask_peer` hands it to bob's thread, which sends it with `cp_send`, to bob only. `cpctl send` does the same from your machine.
 - Bob's answer goes to a conversation under bob's thread, which checks it, then closes or reopens it.
-- The thread that asked is told, in the plugin's words, and gets the conversation's short form with `cp_answer`: yes, no, maybe, done, declined or unclear, and a date or time. You read bob's words with that thread's button, or under bob's thread.
-- Your other threads hold your credentials, so they never read bob's words: they are never given an inbox thread's ID, and `cp-peers` refuses their tools that name one, by ID, link or label.
+- The thread that asked watches the cpd thread, and so does any of your threads that messages its conversation. Watchers are told of each of bob's moves in the plugin's words, with the conversation's short form from `cp_answer`: yes, no, maybe, done, declined or unclear, and a date or time. The move that ends the thread is the last. You read bob's words with a watcher's button, or under bob's thread.
+- Your other threads hold your credentials, so they never read bob's words: they are never given an inbox thread's ID, and `cp-peers` refuses their tools that name one, by ID, link or label. Writing in is fine: a message to a conversation is you instructing it.
 
 A peer's thread starts with the first thread between you; before that, ask
 from a thread in the project. A conversation's `cp_send` reaches only its own

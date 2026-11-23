@@ -63,7 +63,7 @@ test("ask_peer knows your peers by name and alias, and hands the question to the
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
 	assert.equal(
 		await f.ask({ peer: 'ally', message: 'Up for a beer?' }),
-		"Passed to alice's thread in your clanker-proxy inbox, which sends it. When alice answers, this thread is told, with a short form of the answer; never look for their words.",
+		"Passed to alice's thread in your clanker-proxy inbox, which sends it. This thread is told of each of alice's moves, with a short form; never look for their words.",
 	)
 	// The name as asked, explained: the peer's thread resolves it with cpd.
 	assert.deepEqual(f.posted, [
@@ -97,7 +97,7 @@ test('ask_peer stays out of the inbox project, and away without peers', async (t
 	assert.equal((await load(t, {})).tools.ask_peer, undefined)
 })
 
-test("your threads cannot read the inbox's threads, which hold peers' words", async (t) => {
+test("your threads can write into the inbox's threads but not read them, as they hold peers' words", async (t) => {
 	const conversation = 'T-00000000-0000-4000-8000-0000000000c1'
 	const mine = 'T-00000000-0000-4000-8000-0000000000e1'
 	const f = await load(t, {}, {}, { [conversation]: ['clanker-proxy', 'peer-alice'], [hub]: ['cp-peer'], [mine]: ['work'] })
@@ -108,7 +108,7 @@ test("your threads cannot read the inbox's threads, which hold peers' words", as
 		['read_thread', { threadID: hub.toUpperCase().replace(/^T-/, 'T-') }],
 		['shell_command', { cmd: `amp threads markdown https://ampcode.com/threads/${conversation}` }],
 		['code_exec', { code: `await read_thread({ threadID: '${conversation}' })` }],
-		['send_thread_message', { threadID: hub, message: 'hi' }],
+		['get_thread_status', { threadID: conversation }],
 		['find_thread', { query: 'label:clanker-proxy beer' }],
 		['read_thread', { threadID: 'T-00000000-0000-4000-8000-0000000000f9' }],
 	]) {
@@ -117,4 +117,7 @@ test("your threads cannot read the inbox's threads, which hold peers' words", as
 		assert.match(v.message, /^Blocked by cp-peers: /)
 	}
 	assert.deepEqual(await f.call('ask_peer', { peer: 'alice', message: `see ${conversation}` }), allow)
+	// Writing in is the owner instructing.
+	assert.deepEqual(await f.call('send_thread_message', { threadID: conversation, message: 'go with option (b)' }), allow)
+	assert.deepEqual(await f.call('send_thread_message', { threadID: hub, message: 'hi' }), allow)
 })
