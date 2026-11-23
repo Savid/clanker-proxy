@@ -916,6 +916,16 @@ test("a peer's thread follows up for one of your threads, which then watches the
 })
 
 test("updating moves the orb's checkout, cpctl and cp-peers to the release the daemon runs", async (t) => {
+	// CI has no git identity; commits need one.
+	const vars = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' }
+	const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+	Object.assign(process.env, vars)
+	t.after(() => {
+		for (const [k, v] of Object.entries(previous)) {
+			if (v === undefined) delete process.env[k]
+			else process.env[k] = v
+		}
+	})
 	const f = await fixture(t)
 	const git = (...a) => execFileSync('git', ['-C', f.checkout, ...a], { encoding: 'utf8' }).trim()
 	await mkdir(join(f.checkout, '.agents'), { recursive: true })
@@ -924,12 +934,12 @@ test("updating moves the orb's checkout, cpctl and cp-peers to the release the d
 	await writeFile(join(f.checkout, '.amp', 'personal', 'cp-peers', 'index.ts'), 'released')
 	git('init', '-q')
 	git('add', '.')
-	git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'release')
+	git('commit', '-q', '-m', 'release')
 	git('tag', 'v9.9.9')
 	const released = git('rev-parse', 'HEAD')
 	await writeFile(join(f.checkout, 'later'), 'x')
 	git('add', '.')
-	git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'later')
+	git('commit', '-q', '-m', 'later')
 	git('remote', 'add', 'origin', f.checkout)
 
 	f.answerConfirm(false)
