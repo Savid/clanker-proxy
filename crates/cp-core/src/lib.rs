@@ -25,7 +25,7 @@ pub use peering::{
     CONFIRM_TTL, Call, MAX_PENDING_REQUESTS, PendingApproval, REQUEST_TTL, REQUESTS_PER_MINUTE,
 };
 pub use runtime::{Millis, Runtime};
-pub use schema::{MIGRATIONS, SCHEMA_VERSION, STATEMENTS, UPGRADES_FROM};
+pub use schema::{BASE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS, UPGRADES_FROM};
 pub use secrets::token_hash;
 pub use signing::SignedCall;
 pub use sql::{Row, Sql, SqlError, Value};

@@ -5,7 +5,7 @@ mod common;
 
 use common::{Clock, Daemon, name, peer, runtime, url};
 use cp_api::{ErrorKind, Version};
-use cp_core::{Config, Core, MIGRATIONS, SCHEMA_VERSION, STATEMENTS, Sql, UPGRADES_FROM};
+use cp_core::{BASE, Config, Core, MIGRATIONS, SCHEMA_VERSION, STATEMENTS, Sql, UPGRADES_FROM};
 use cp_sqlite::Sqlite;
 use sha2::{Digest as _, Sha256};
 
@@ -25,15 +25,14 @@ fn stored_version(sql: &Sqlite) -> String {
         .to_string()
 }
 
-/// Storage at the oldest schema this build upgrades, with an owner and a
-/// peer.
+/// Storage at schema `BASE`, with an owner and a peer.
 fn oldest() -> Sqlite {
     let sql = Sqlite::memory().unwrap();
     for s in STATEMENTS {
         sql.execute(s, &[]).unwrap();
     }
     for (k, v) in [
-        ("schema_version", UPGRADES_FROM.to_string()),
+        ("schema_version", BASE.to_string()),
         ("name", "alice".into()),
     ] {
         sql.execute(
@@ -57,7 +56,7 @@ fn empty_storage_starts_at_the_latest_version() {
     assert_eq!(stored_version(core.sql()), SCHEMA_VERSION.to_string());
     assert_eq!(
         SCHEMA_VERSION,
-        UPGRADES_FROM + u32::try_from(MIGRATIONS.len()).unwrap()
+        BASE + u32::try_from(MIGRATIONS.len()).unwrap()
     );
 }
 
@@ -108,10 +107,7 @@ fn the_stored_version_reads_without_changing_anything() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(
-        cp_core::stored_version(&oldest()).unwrap(),
-        Some(UPGRADES_FROM)
-    );
+    assert_eq!(cp_core::stored_version(&oldest()).unwrap(), Some(BASE));
 }
 
 /// Shipped storage never changes: deployed data has run it, so an edit
@@ -129,9 +125,13 @@ fn shipped_storage_is_frozen() {
             })
     }
     assert_eq!(
+        BASE, 7,
+        "deployed data is stamped with BASE, and MIGRATIONS count from it"
+    );
+    assert_eq!(
         hash(STATEMENTS),
         "3e465fb7e21654a179c9b6665632dcecd1eec289f5dfc50bf8472185561c911b",
-        "STATEMENTS create schema {UPGRADES_FROM}, which deployed data has: put the change in a new migration"
+        "STATEMENTS create schema {BASE}, which deployed data has: put the change in a new migration"
     );
     let pinned: [&str; 0] = [];
     assert_eq!(

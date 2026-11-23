@@ -22,6 +22,8 @@ pub use server::SHUTDOWN_GRACE;
 pub const TOKEN_FILE: &str = "owner.token";
 /// The database's file in the data directory.
 pub const DB_FILE: &str = "cp.db";
+/// Held locked while a daemon uses the data directory.
+pub const LOCK_FILE: &str = "cpd.lock";
 
 /// How to start a daemon.
 #[derive(Clone, Debug)]
@@ -42,26 +44,34 @@ pub struct Daemon {
     pub url: Option<DaemonUrl>,
     stop: watch::Sender<bool>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    _lock: std::fs::File,
 }
 
 impl Daemon {
     /// Opens the data directory and starts serving.
     pub async fn start(opts: Options) -> Result<Self, String> {
         create_dir(&opts.dir)?;
+        // One daemon per directory: a second would migrate data the first
+        // still serves under the old schema.
+        let lock = lock(&opts.dir)?;
+        // Bound before storage is touched, so a daemon that cannot serve
+        // (its port still held by the one it replaces) changes nothing.
+        let listener = TcpListener::bind(opts.listen)
+            .await
+            .map_err(|e| format!("listen on {}: {e}", opts.listen))?;
         // The token file is the owner's credential for cpctl; the daemon keeps
         // only its hash.
         let owner_hash = cp_core::token_hash(&owner_token(&opts.dir.join(TOKEN_FILE))?);
         let sql = Sqlite::open(&opts.dir.join(DB_FILE)).map_err(|e| e.to_string())?;
         // A migration cannot be undone in place, and an earlier release
-        // refuses migrated data: keep the data as it was, which that release
-        // still reads. A copy left by an earlier attempt is the original.
+        // refuses migrated data: keep a copy as the data is now, which that
+        // release still reads. Made afresh on every attempt, so it is never
+        // older than the data it stands for.
         if let Some(v) = cp_core::stored_version(&sql).map_err(|e| e.detail)?
             && (cp_core::UPGRADES_FROM..cp_core::SCHEMA_VERSION).contains(&v)
         {
-            let copy = opts.dir.join(format!("{DB_FILE}.schema-{v}"));
-            if !copy.exists() {
-                sql.copy_to(&copy).map_err(|e| e.to_string())?;
-            }
+            sql.copy_to(&opts.dir.join(format!("{DB_FILE}.schema-{v}")))
+                .map_err(|e| e.to_string())?;
         }
         // One transaction, so a migration applies whole or not at all; on
         // failure the dropped connection rolls it back.
@@ -79,9 +89,6 @@ impl Daemon {
         let (name, url) = (core.me().clone(), core.url().cloned());
         let host = NativeHost::start(core, owner_hash, opts.version)?;
 
-        let listener = TcpListener::bind(opts.listen)
-            .await
-            .map_err(|e| format!("listen on {}: {e}", opts.listen))?;
         let addr = listener.local_addr().map_err(|e| e.to_string())?;
         let (stop, stopped) = watch::channel(false);
         let tasks = vec![
@@ -98,6 +105,7 @@ impl Daemon {
             url,
             stop,
             tasks,
+            _lock: lock,
         })
     }
 
@@ -108,6 +116,23 @@ impl Daemon {
             let _ = t.await;
         }
     }
+}
+
+fn lock(dir: &Path) -> Result<std::fs::File, String> {
+    let path = dir.join(LOCK_FILE);
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    f.try_lock().map_err(|e| match e {
+        std::fs::TryLockError::WouldBlock => {
+            format!("another cpd is using {}", dir.display())
+        }
+        std::fs::TryLockError::Error(e) => format!("lock {}: {e}", path.display()),
+    })?;
+    Ok(f)
 }
 
 fn create_dir(dir: &Path) -> Result<(), String> {

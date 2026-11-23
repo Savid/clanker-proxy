@@ -330,6 +330,23 @@ share() {
     note "cpctl requests, approve it: cpctl approve <id>."
 }
 
+# The new release cannot start on the Worker's data, which it left as it
+# was: put back the release that ran before, and stop.
+refused() { # refused <why>
+    heads_up "$version cannot start on $worker's data: $1."
+    if wr rollback --name "$worker" --message "cloudflare.sh: $version cannot start on this data" --yes >"$tmp/rollback.log" 2>&1; then
+        done_ "$worker is back on the release it ran before; its data is as it was."
+    else
+        tail -n 5 "$tmp/rollback.log" >&2
+        note "Put back the release it ran before with: npx wrangler rollback --name $worker"
+    fi
+    case $1 in
+        *"older than this release upgrades from"*)
+            note "To start fresh instead: npx wrangler delete --name $worker, then run this again." ;;
+    esac
+    fail "$worker was not updated"
+}
+
 if [ -n "$existing" ]; then
     step "Updating $worker; its settings stay as they are."
     deploy
@@ -345,24 +362,29 @@ if [ -n "$existing" ]; then
     elif [ -s "$config/login" ] && grep -qxF "url=$url" "$config/login"; then
         (umask 077 && sed -n 's/^token=/Authorization: Bearer /p' "$config/login" >"$tmp/auth")
     fi
-    if [ -s "$tmp/auth" ]; then
-        # Until the new release answers, or refuses the stored data: data
-        # from a newer release, or older than this one upgrades from.
-        i=0
-        while :; do
+    # Until the new release answers, or cannot start on the stored data:
+    # data from a newer release, older than it upgrades from, or a
+    # migration that failed and rolled back. Health needs no token; the
+    # owner's view also says which release answers.
+    i=0
+    while :; do
+        curl -sS "$url/api/v1/health" >"$tmp/health.json" 2>/dev/null || :
+        if grep -q '"detail":"the daemon cannot start: ' "$tmp/health.json"; then
+            refused "$(node -e 'try { process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).detail).replace(/^the daemon cannot start: /, "")) } catch {}' <"$tmp/health.json")"
+        fi
+        if [ -s "$tmp/auth" ]; then
             curl -sS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
-            if grep -q '"detail":"stored data is schema version' "$tmp/me.json"; then
-                fail "$url cannot read its data: $(sed -n 's/.*"detail":"\([^"]*\)".*/\1/p' "$tmp/me.json")"
-            fi
             if grep -q '"name":' "$tmp/me.json" && { [ "$version" = local ] || grep -q "\"version\":\"$version\"" "$tmp/me.json"; }; then
                 owner=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$tmp/me.json")
                 break
             fi
-            i=$((i + 1))
-            [ "$i" -lt 30 ] || break
-            sleep 2
-        done
-    fi
+        elif [ "$i" -ge 4 ]; then
+            break
+        fi
+        i=$((i + 1))
+        [ "$i" -lt 30 ] || break
+        sleep 2
+    done
     if [ -n "$owner" ]; then
         done_ "Updated: $url now runs $version."
     elif [ -s "$tmp/auth" ]; then

@@ -16,7 +16,7 @@ struct Node {
     daemon: Daemon,
     token: String,
     url: String,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 /// A directory removed when dropped.
@@ -60,7 +60,7 @@ async fn node(name: &str) -> Node {
         daemon,
         token,
         url,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -565,4 +565,34 @@ async fn webhooks_reach_a_receiver_signed() {
     .await;
     alice.daemon.shutdown().await;
     bob.daemon.shutdown().await;
+}
+
+/// Two daemons on one directory would migrate data under each other, and a
+/// daemon that cannot serve must not touch storage at all.
+#[tokio::test]
+async fn one_daemon_per_directory_and_nothing_stored_without_a_port() {
+    let alice = node("alice").await;
+    let opts = |dir: std::path::PathBuf, listen| Options {
+        dir,
+        name: Some(cp_thread::Name::try_from("alice").unwrap()),
+        url: None,
+        listen,
+        version: "test".into(),
+    };
+    let free = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let Err(e) = Daemon::start(opts(alice.dir.0.clone(), free)).await else {
+        panic!("a second daemon started on the same directory");
+    };
+    assert!(e.contains("another cpd is using"), "{e}");
+
+    let fresh = temp_dir("taken");
+    let Err(e) = Daemon::start(opts(fresh.0.clone(), alice.daemon.addr)).await else {
+        panic!("started on a port in use");
+    };
+    assert!(e.contains("listen on"), "{e}");
+    assert!(!fresh.0.join(cpd::DB_FILE).exists());
+    assert!(!fresh.0.join(cpd::TOKEN_FILE).exists());
 }

@@ -38,6 +38,7 @@ case $1 in
         done
         echo "Deployed"
         echo "  https://cp-test.fake.workers.dev" ;;
+    rollback) [ -z "${FAKE_ROLLBACK_FAILS:-}" ] || exit 1 ;;
     *) exit 1 ;;
 esac
 FAKE
@@ -56,7 +57,7 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body.encode())
     def do_GET(self):
         if os.path.exists(os.path.join(work, "stale")):
-            self.answer('{"status":503,"detail":"stored data is schema version 5, older than this release upgrades from (schema 7)"}', 503)
+            self.answer('{"title":"Service Unavailable","status":503,"detail":"the daemon cannot start: stored data is schema version 5, older than this release upgrades from (schema 7)"}', 503)
             return
         with open(os.path.join(work, "auth-seen"), "w") as f:
             f.write(self.headers.get("authorization", ""))
@@ -231,13 +232,26 @@ if grep -q 'cpo_' "$work/out"; then fail "the login's token reached the output";
 rm -f "$login"
 mv "$work/token.away" "$token_file"
 
-# Data the new release refuses: the update fails with the daemon's reason,
-# and there is no starting over on empty storage.
+# Data the new release cannot start on: the update puts back the release
+# before, and fails with the daemon's reason. There is no starting over.
 : >"$work/stale"
+: >"$work/calls"
 run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "updated over data it cannot read"
-grep -q 'cannot read its data: stored data is schema version 5, older than this release upgrades from (schema 7)$' "$work/out" ||
-    fail "no reason for the refusal"
-run_existing --worker cp-test --url "http://127.0.0.1:$port" --start-over && fail "accepted --start-over"
+grep -q "cannot start on cp-test.s data: stored data is schema version 5, older than this release upgrades from (schema 7)\.\$" "$work/out" ||
+    fail "refused: no reason"
+grep -q '^rollback --name cp-test ' "$work/calls" || fail "refused: not rolled back"
+grep -q 'cp-test is back on the release it ran before' "$work/out" || fail "refused: no word of the rollback"
+grep -q 'npx wrangler delete --name cp-test' "$work/out" || fail "refused: no way to start fresh"
+grep -q 'cp-test was not updated' "$work/out" || fail "refused: no failure line"
+(export FAKE_ROLLBACK_FAILS=1; run_existing --worker cp-test --url "http://127.0.0.1:$port") && fail "updated over data it cannot read"
+grep -q 'npx wrangler rollback --name cp-test$' "$work/out" || fail "refused: no way back when the rollback fails"
+rm "$work/token.away" 2>/dev/null || :
+mv "$token_file" "$work/token.away"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "updated over data it cannot read, unchecked"
+grep -q 'cp-test is back on the release it ran before' "$work/out" || fail "refused without a token: not noticed"
+mv "$work/token.away" "$token_file"
+run_existing --worker cp-test --start-over && fail "accepted --start-over"
+grep -q 'unknown option --start-over' "$work/out" || fail "--start-over: wrong reason"
 rm "$work/stale"
 
 echo "cloudflare setup tests passed"

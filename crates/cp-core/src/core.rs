@@ -4,7 +4,7 @@ use cp_api::{DaemonUrl, Error, ErrorKind, PublicKey};
 use cp_thread::{Id, Name};
 
 use crate::runtime::{Millis, Runtime};
-use crate::schema::{MIGRATIONS, SCHEMA_VERSION, STATEMENTS, UPGRADES_FROM};
+use crate::schema::{BASE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS, UPGRADES_FROM};
 use crate::signing::Identity;
 use crate::sql::{Sql, Value, text};
 
@@ -126,7 +126,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 ));
             }
             Some(v) => MIGRATIONS
-                .get(usize::try_from(v - UPGRADES_FROM).unwrap_or(usize::MAX)..)
+                .get(usize::try_from(v - BASE).unwrap_or(usize::MAX)..)
                 .unwrap_or_default(),
         };
         for migration in pending {

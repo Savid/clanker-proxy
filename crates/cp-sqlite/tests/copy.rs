@@ -5,7 +5,7 @@ use cp_core::Sql as _;
 use cp_sqlite::Sqlite;
 
 #[test]
-fn a_copy_holds_the_data_privately_and_never_overwrites() {
+fn a_copy_holds_the_data_privately_and_a_new_one_replaces_it() {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -15,23 +15,41 @@ fn a_copy_holds_the_data_privately_and_never_overwrites() {
     let sql = Sqlite::open(&dir.join("cp.db")).unwrap();
     sql.execute("CREATE TABLE t (v TEXT NOT NULL) STRICT", &[])
         .unwrap();
-    sql.execute("INSERT INTO t (v) VALUES ('kept')", &[])
+    sql.execute("INSERT INTO t (v) VALUES ('first')", &[])
         .unwrap();
-
     let copy = dir.join("cp.db.schema-7");
+    let rows = || {
+        Sqlite::open(&copy)
+            .unwrap()
+            .query_one("SELECT count(*) FROM t", &[])
+            .unwrap()
+            .unwrap()
+            .int(0)
+            .unwrap()
+    };
+
+    // An interrupted copy left these; they never stand in for a copy.
+    std::fs::write(dir.join("cp.db.schema-7.tmp"), b"partial").unwrap();
+    std::fs::write(dir.join("cp.db.schema-7.tmp-journal"), b"partial").unwrap();
     sql.copy_to(&copy).unwrap();
-    let row = Sqlite::open(&copy)
-        .unwrap()
-        .query_one("SELECT v FROM t", &[])
-        .unwrap()
-        .unwrap();
-    assert_eq!(row.text(0).unwrap(), "kept");
+    assert_eq!(rows(), 1);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         let mode = std::fs::metadata(&copy).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
-    assert!(sql.copy_to(&copy).is_err());
+
+    sql.execute("INSERT INTO t (v) VALUES ('second')", &[])
+        .unwrap();
+    sql.copy_to(&copy).unwrap();
+    assert_eq!(rows(), 2);
+    let mut left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.starts_with("cp.db.schema-7"))
+        .collect();
+    left.sort();
+    assert_eq!(left, ["cp.db.schema-7"]);
     std::fs::remove_dir_all(&dir).unwrap();
 }

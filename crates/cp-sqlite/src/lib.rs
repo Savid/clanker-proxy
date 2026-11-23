@@ -33,17 +33,47 @@ impl Sqlite {
         Ok(Self { conn })
     }
 
-    /// Writes a consistent copy of the database to `path`, a file that must
-    /// not exist yet, readable only by its owner like the database.
+    /// Writes a consistent copy of the database to `path`, replacing any
+    /// there, readable only by its owner like the database. The copy is
+    /// written beside `path` and renamed into place once it is on disk, so
+    /// `path` only ever holds a whole copy.
     pub fn copy_to(&self, path: &Path) -> Result<(), SqlError> {
-        create_private(path).map_err(|e| SqlError(format!("create {}: {e}", path.display())))?;
-        let to = path
+        let fs = |what: &str, p: &Path, e: std::io::Error| {
+            SqlError(format!("{what} {}: {e}", p.display()))
+        };
+        let tmp = with_suffix(path, ".tmp");
+        // What an interrupted copy left behind.
+        for stale in [tmp.clone(), with_suffix(&tmp, "-journal")] {
+            match std::fs::remove_file(&stale) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(fs("remove", &stale, e));
+                }
+                _ => {}
+            }
+        }
+        create_private(&tmp).map_err(|e| fs("create", &tmp, e))?;
+        let to = tmp
             .to_str()
-            .ok_or_else(|| SqlError(format!("{} is not UTF-8", path.display())))?;
+            .ok_or_else(|| SqlError(format!("{} is not UTF-8", tmp.display())))?;
         self.conn
             .execute("VACUUM INTO ?1", [to])
-            .map(drop)
-            .map_err(|e| sql_err(&e))
+            .map_err(|e| sql_err(&e))?;
+        // SQLite does not sync what VACUUM INTO writes.
+        std::fs::File::open(&tmp)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| fs("sync", &tmp, e))?;
+        std::fs::rename(&tmp, path).map_err(|e| fs("rename", &tmp, e))?;
+        #[cfg(unix)]
+        {
+            let dir = path
+                .parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            std::fs::File::open(dir)
+                .and_then(|d| d.sync_all())
+                .map_err(|e| fs("sync", dir, e))?;
+        }
+        Ok(())
     }
 
     /// A database in memory, for tests.
@@ -99,6 +129,12 @@ fn create_private(path: &Path) -> std::io::Result<()> {
         .mode(0o600)
         .open(path)
         .map(drop)
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(suffix);
+    s.into()
 }
 
 #[cfg(not(unix))]

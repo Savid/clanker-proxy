@@ -65,9 +65,14 @@ test-setup: ## Offline tests of the Cloudflare setup script (needs Node and pyth
 test-amp: ## Node tests for the Amp plugin
 	node --test .amp/*.test.mjs
 
+# The oldest release whose data this build upgrades: it stores schema
+# UPGRADES_FROM (crates/cp-core/src/schema.rs), and moves with it.
+OLDEST := v0.8.0
+
 .PHONY: upgrade-test
-upgrade-test: ## Upgrade the latest release's data to this build, then conformance against that release (downloads it)
+upgrade-test: ## Upgrade release data to this build, from the release it is built on and from the oldest; conformance against the first (downloads them)
 	sh scripts/upgrade_test.sh
+	CP_PREVIOUS=$(OLDEST) sh scripts/upgrade_test.sh --no-conformance
 
 .PHONY: image
 image: ## Build the clanker-proxy:local container image for this machine (needs Docker and musl-tools)
