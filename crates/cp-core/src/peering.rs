@@ -292,7 +292,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             if let Some(peer) = peer {
                 return Err(err(
                     ErrorKind::Conflict,
-                    format!("{alias} names the peer {peer} here; give peers aliases on the peer"),
+                    format!("{alias} already names the peer {peer} here"),
                 ));
             }
         }
