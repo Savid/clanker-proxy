@@ -205,9 +205,13 @@ wr() {
 # ---- Cloudflare login ----
 
 if ! wr whoami 2>/dev/null | grep -q 'Account ID'; then
-    if [ -z "$tty" ] || [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
-        fail "not logged in to Cloudflare: run 'npx wrangler login', or set CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID"
+    # Wrangler uses a token in the environment over a browser login.
+    if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+        fail "CLOUDFLARE_API_TOKEN is set in your environment, but Cloudflare finds no account for it. Use a token from the Edit Cloudflare Workers template, or log in through the browser instead:
+  curl -fsSL $repo/releases/latest/download/cloudflare.sh | env -u CLOUDFLARE_API_TOKEN sh"
     fi
+    [ -n "$tty" ] ||
+        fail "not logged in to Cloudflare: run 'npx wrangler login', or set CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID"
     step "Log in to Cloudflare in the browser that opens."
     # shellcheck disable=SC2094 # the terminal, read and written by design
     wr login <"$tty" >"$tty" 2>&1 || fail "Cloudflare login failed"

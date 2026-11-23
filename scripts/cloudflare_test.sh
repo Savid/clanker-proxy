@@ -97,6 +97,11 @@ run --bogus && fail "an unknown option was accepted"
 grep -q 'unknown option --bogus' "$work/out" || fail "unknown option message"
 # Subshells keep these settings to one run: bash, macOS's sh, keeps an
 # assignment made before a function call after the call returns.
+# shellcheck disable=SC2030 # each run's settings stay in its subshell
+(export FAKE_LOGGED_OUT=1 CLOUDFLARE_API_TOKEN=x; run --name tester) && fail "ran with a token Cloudflare rejects"
+grep -q 'CLOUDFLARE_API_TOKEN is set in your environment, but Cloudflare finds no account for it' "$work/out" || fail "token message"
+grep -q 'cloudflare.sh | env -u CLOUDFLARE_API_TOKEN sh$' "$work/out" || fail "token message: no rerun line"
+# shellcheck disable=SC2031 # each run's settings stay in its subshell
 (export FAKE_LOGGED_OUT=1; run --name tester) && fail "ran without a Cloudflare login"
 grep -q 'not logged in to Cloudflare' "$work/out" || fail "login message"
 run --worker cp-test && fail "ran without --name and no terminal"
