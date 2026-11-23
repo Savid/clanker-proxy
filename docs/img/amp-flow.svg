@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="548" viewBox="0 0 960 548" role="img" aria-labelledby="t d">
+<title id="t">A round trip through the Amp inbox</title>
+<desc id="d">1: your thread asks with ask_peer, which hands the question to bob's thread in the inbox orb. 2: bob's thread sends it with cp_send; your cpd delivers it to bob's cpd. 3: the plugin tells your thread it was sent and that it is watching. 4: bob answers; your cpd wakes the orb with a signed webhook carrying IDs only. 5: the sandboxed conversation reads bob's words with cpctl. 6: your thread gets the plugin's notice and a button for you, then the conversation's checked short form. 7: to follow up, your thread asks bob's thread, which passes it on with cp_follow_up. 8: when the thread ends, on either side, your thread gets a last notice and stops watching.</desc>
+<defs>
+  <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28"/></pattern>
+  <marker id="mc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#22d3ee" stroke-width="1.6"/></marker>
+  <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#f472b6" stroke-width="1.6"/></marker>
+  <marker id="ma" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#fbbf24" stroke-width="1.6"/></marker>
+  <marker id="mw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#e2e8f0" stroke-width="1.6"/></marker>
+</defs>
+<style>
+  text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;fill:#e2e8f0}
+  .h{font-size:15px;font-weight:700}.s{font-size:12px;fill:#7c8aa0}.e{font-size:12px}.n{font-size:13px;font-weight:700}
+  .xs{font-size:11px;fill:#7c8aa0;letter-spacing:.2em;font-weight:700}
+  .c{fill:#22d3ee}.p{fill:#f472b6}.a{fill:#fbbf24}
+  .box{fill:#0b1220}
+  .f{fill:none;stroke-width:1.6;stroke-dasharray:3 5}
+  .life{stroke:#334155;stroke-dasharray:2 6}
+  .m{animation:march 1.2s linear infinite}
+  @keyframes march{to{stroke-dashoffset:-16}}
+  .an{animation-duration:16s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+  @keyframes s1{0%,11%{opacity:1}13%,98%{opacity:.28}100%{opacity:1}}
+  @keyframes s2{0%,12%{opacity:.28}14%,24%{opacity:1}26%,100%{opacity:.28}}
+  @keyframes s3{0%,24%{opacity:.28}26%,36%{opacity:1}38%,100%{opacity:.28}}
+  @keyframes s4{0%,37%{opacity:.28}39%,49%{opacity:1}51%,100%{opacity:.28}}
+  @keyframes s5{0%,49%{opacity:.28}51%,61%{opacity:1}63%,100%{opacity:.28}}
+  @keyframes s6{0%,62%{opacity:.28}64%,74%{opacity:1}76%,100%{opacity:.28}}
+  @keyframes s7{0%,74%{opacity:.28}76%,86%{opacity:1}88%,100%{opacity:.28}}
+  @keyframes s8{0%,87%{opacity:.28}89%,98%{opacity:1}100%{opacity:.28}}
+  @media (prefers-reduced-motion:reduce){.an,.m{animation:none!important}}
+</style>
+<rect width="960" height="548" rx="18" fill="#070a10"/>
+<rect width="960" height="548" rx="18" fill="url(#grid)"/>
+<rect x=".5" y=".5" width="959" height="547" rx="18" fill="none" stroke="#1d2635"/>
+
+<!-- the inbox orb -->
+<rect x="246" y="14" width="378" height="476" rx="16" fill="none" stroke="#fbbf24" stroke-opacity=".4" stroke-dasharray="4 6"/>
+<text x="260" y="484" class="xs a">INBOX ORB</text>
+
+<!-- lanes -->
+<rect x="50" y="24" width="140" height="46" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
+<text x="120" y="52" class="h c" text-anchor="middle">your thread</text>
+<rect x="260" y="24" width="140" height="46" rx="12" class="box" stroke="#475569" stroke-width="1.4"/>
+<text x="330" y="52" class="h" text-anchor="middle">bob's thread</text>
+<rect x="470" y="24" width="140" height="46" rx="12" class="box" stroke="#e2e8f0" stroke-opacity=".7" stroke-width="1.4"/>
+<text x="540" y="45" class="h" text-anchor="middle">conversation</text>
+<text x="540" y="62" class="s" text-anchor="middle">sandbox</text>
+<rect x="665" y="24" width="130" height="46" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
+<text x="730" y="52" class="h c" text-anchor="middle">your cpd</text>
+<rect x="815" y="24" width="130" height="46" rx="12" class="box" stroke="#f472b6" stroke-width="1.6"/>
+<text x="880" y="52" class="h p" text-anchor="middle">bob's cpd</text>
+<path d="M120 72V478M330 72V478M540 72V478M730 72V478M880 72V478" class="life"/>
+
+<!-- 1 ask -->
+<g class="an" style="animation-name:s1">
+  <text x="22" y="108" class="n c">1</text>
+  <path d="M122 104H324" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="224" y="97" class="e c" text-anchor="middle">ask_peer</text>
+</g>
+<!-- 2 send -->
+<g class="an" style="animation-name:s2">
+  <text x="22" y="142" class="n c">2</text>
+  <path d="M332 138H724" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="436" y="131" class="e c" text-anchor="middle">cp_send</text>
+  <path d="M732 160H874" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="805" y="153" class="e c" text-anchor="middle">deliver</text>
+</g>
+<!-- 3 told -->
+<g class="an" style="animation-name:s3">
+  <text x="22" y="198" class="n a">3</text>
+  <path d="M328 194H126" class="f m" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <text x="224" y="187" class="e a" text-anchor="middle">sent · you're watching</text>
+</g>
+<!-- 4 answer and webhook -->
+<g class="an" style="animation-name:s4">
+  <text x="22" y="234" class="n p">4</text>
+  <path d="M878 230H736" class="f m" stroke="#f472b6" marker-end="url(#mp)"/>
+  <text x="805" y="223" class="e p" text-anchor="middle">answer</text>
+  <path d="M728 254H546" class="f m" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <text x="635" y="247" class="e a" text-anchor="middle">webhook</text>
+  <text x="635" y="270" class="s" text-anchor="middle">IDs only</text>
+</g>
+<!-- 5 the conversation reads -->
+<g class="an" style="animation-name:s5">
+  <text x="22" y="304" class="n">5</text>
+  <rect x="468" y="288" width="144" height="24" rx="12" class="box" stroke="#f472b6" stroke-width="1.4"/>
+  <text x="540" y="304" class="e p" text-anchor="middle">reads bob's words</text>
+  <path d="M546 330H724" class="f m" stroke="#e2e8f0" marker-end="url(#mw)"/>
+  <text x="635" y="323" class="e" text-anchor="middle">cpctl show</text>
+</g>
+<!-- 6 notice and short form -->
+<g class="an" style="animation-name:s6">
+  <text x="22" y="366" class="n a">6</text>
+  <path d="M536 362H126" class="f m" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <text x="224" y="355" class="e a" text-anchor="middle">notice + button</text>
+  <path d="M536 390H126" class="f m" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <text x="224" y="383" class="e a" text-anchor="middle">short form: yes, Sat 16:00</text>
+</g>
+<!-- 7 follow up -->
+<g class="an" style="animation-name:s7">
+  <text x="22" y="426" class="n c">7</text>
+  <path d="M122 422H324" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="224" y="415" class="e c" text-anchor="middle">follow up</text>
+  <path d="M332 444H534" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="436" y="437" class="e c" text-anchor="middle">cp_follow_up</text>
+</g>
+<!-- 8 the end -->
+<g class="an" style="animation-name:s8">
+  <text x="22" y="474" class="n a">8</text>
+  <path d="M536 470H126" class="f m" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <text x="224" y="463" class="e a" text-anchor="middle">ended: last notice</text>
+</g>
+
+<text x="40" y="514" class="s">your thread gets the plugin's words only: never bob's, never the conversation's ID</text>
+<text x="40" y="534" class="s">notices: at most one per cpd thread every 10 minutes and 24 a day; the end always</text>
+</svg>
