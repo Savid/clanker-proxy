@@ -73,6 +73,7 @@ pub(crate) fn from_problem(
                 // an alias, a removed peer or the owner.
                 "approve" if message.contains("another name") => Some("cpctl approve <id> --as <name> gives them another name".to_string()),
                 "peer alias" => Some("cpctl peer ls lists peers' names and aliases".to_string()),
+                "alias" if message.contains("names the peer") => Some("to give a peer an alias: cpctl peer alias <peer> <alias>".to_string()),
                 _ => thread_ref.map(|r| format!("cpctl show {r} lists what you can do now, as commands")),
             },
         ),

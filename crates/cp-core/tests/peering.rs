@@ -15,6 +15,7 @@ fn request(n: u32) -> PeeringRequest {
         url: url(&format!("https://p{n}.test")),
         key: PublicKey::try_from(format!("{n:043}")).unwrap(),
         note: None,
+        aliases: cp_api::Aliases::default(),
     }
 }
 

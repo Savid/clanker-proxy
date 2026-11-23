@@ -99,6 +99,7 @@ macro_rules! operations {
 operations! {
     GetHealth => "getHealth", Get, "/api/v1/health", Public, false;
     GetMe => "getMe", Get, "/api/v1/me", OwnerOrAgent, false;
+    SetOwnAliases => "setOwnAliases", Put, "/api/v1/me/aliases", Owner, true;
     RequestPeering => "requestPeering", Post, "/api/v1/peering-requests", Public, true;
     ListRequests => "listRequests", Get, "/api/v1/peering-requests", Owner, false;
     DenyRequest => "denyRequest", Delete, "/api/v1/peering-requests/{id}", Owner, false;
@@ -114,7 +115,7 @@ operations! {
     ActOnThread => "actOnThread", Post, "/api/v1/threads/{ref}/events", OwnerOrAgent, true;
     StreamEvents => "streamEvents", Get, "/api/v1/stream", OwnerOrAgent, false;
     DeliverEvent => "deliverEvent", Post, "/api/v1/federation/events", Peer, true;
-    NotifyPeeringAccepted => "notifyPeeringAccepted", Post, "/api/v1/federation/accepted", Peer, false;
+    NotifyPeeringAccepted => "notifyPeeringAccepted", Post, "/api/v1/federation/accepted", Peer, true;
     ListAgentTokens => "listAgentTokens", Get, "/api/v1/agent-tokens", Owner, false;
     CreateAgentToken => "createAgentToken", Post, "/api/v1/agent-tokens", Owner, true;
     DeleteAgentToken => "deleteAgentToken", Delete, "/api/v1/agent-tokens/{name}", Owner, false;

@@ -1,6 +1,7 @@
 //! A daemon on each host working a thread with the other: peering, delivery
 //! both ways, the event stream, webhooks, agent tokens and errors; then
-//! peer aliases and agent tokens revoking themselves.
+//! peer aliases, the aliases owners offer, and agent tokens revoking
+//! themselves.
 //!
 //! The far daemon is native unless `CP_CONFORMANCE_URL` and
 //! `CP_CONFORMANCE_TOKEN` name another one; the near daemon is always native.
@@ -812,5 +813,62 @@ async fn aliases_name_peers_and_agent_tokens_revoke_themselves() {
     assert_eq!(status, 404);
     other.stop().await;
     near.stop().await;
+    far.stop().await;
+}
+
+/// Sets the aliases `node`'s owner offers peers.
+async fn offer(node: &Node, aliases: Value) -> (u16, Value) {
+    let body = json!({ "aliases": aliases });
+    node.call(Method::PUT, "/api/v1/me/aliases", Some(body))
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn peering_either_way_gives_the_aliases_each_owner_offers() {
+    let far = far().await;
+    let run = free_port().port().to_string();
+    let near = native(&format!("near{run}")).await;
+    let other = native(&format!("other{run}")).await;
+    let (near_alias, other_alias) = (format!("n{run}"), format!("o{run}"));
+
+    let (status, me) = offer(&near, json!([near_alias, near_alias])).await;
+    assert_eq!(status, 200, "{me}");
+    assert_eq!(me["aliases"], json!([near_alias]), "each once");
+    assert_eq!(near.get("/api/v1/me").await["aliases"], json!([near_alias]));
+    let (status, p) = offer(&near, json!([format!("near{run}")])).await;
+    assert_eq!(status, 409, "the owner's own name: {p}");
+    offer(&other, json!([other_alias])).await;
+
+    // Asking carries the asker's aliases; approving carries the approver's.
+    near.post("/api/v1/peers", json!({"name": "other", "url": other.url}))
+        .await;
+    let requests = other.get("/api/v1/peering-requests").await;
+    assert_eq!(requests["requests"][0]["aliases"], json!([near_alias]));
+    let (status, p) = approve(&other, &near.url, json!({})).await;
+    assert_eq!(status, 201, "{p}");
+    assert_eq!(p["aliases"], json!([near_alias]));
+    assert_eq!(
+        near.get("/api/v1/peers/other").await["aliases"],
+        json!([other_alias])
+    );
+    let (status, p) = offer(&near, json!([other_alias])).await;
+    assert_eq!(status, 409, "a peer's alias here: {p}");
+
+    // Across hosts.
+    near.post("/api/v1/peers", json!({"name": "far", "url": far.url}))
+        .await;
+    let near_as = format!("near{run}");
+    let (status, p) = approve(&far, &near.url, json!({"name": near_as})).await;
+    assert_eq!(status, 201, "{p}");
+    assert_eq!(p["aliases"], json!([near_alias]));
+    eventually("near hears far approved", || {
+        let near = &near;
+        async move { near.get("/api/v1/peers/far").await["status"] == "active" }
+    })
+    .await;
+    far.ok(Method::DELETE, &format!("/api/v1/peers/{near_as}"), None)
+        .await;
+    near.stop().await;
+    other.stop().await;
     far.stop().await;
 }

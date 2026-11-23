@@ -32,6 +32,11 @@ pub struct Health {
 #[serde(rename_all = "camelCase")]
 pub struct Me {
     pub name: Name,
+    /// Other names the owner offers peers, sorted. Peering in either
+    /// direction gives them to the peer, which keeps those still free there
+    /// as aliases.
+    #[schema(max_items = 10)]
+    pub aliases: Vec<Name>,
     /// Where peers reach this daemon, if it has a public URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<DaemonUrl>,
@@ -54,6 +59,20 @@ pub struct PeeringRequest {
     pub key: PublicKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<Note>,
+    /// Other names the requester offers; approving keeps those still free
+    /// as their aliases.
+    #[serde(default, skip_serializing_if = "Aliases::is_empty")]
+    pub aliases: Aliases,
+}
+
+/// What an approving daemon tells the requester.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeeringAccepted {
+    /// Other names the approver offers; the requester keeps those still
+    /// free as their aliases.
+    #[serde(default)]
+    pub aliases: Aliases,
 }
 
 /// Always `pending`.
@@ -79,6 +98,10 @@ pub struct RequestReceipt {
 pub struct Request {
     pub id: RequestRef,
     pub name: Name,
+    /// Other names they offer, sorted; approving keeps those still free as
+    /// their aliases.
+    #[schema(max_items = 10)]
+    pub aliases: Vec<Name>,
     pub url: DaemonUrl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<Note>,
@@ -139,7 +162,7 @@ pub struct Peer {
     pub version: Option<Version>,
 }
 
-/// A peer's aliases, replacing the ones it has.
+/// Aliases, replacing the ones there are.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PeerAliases {

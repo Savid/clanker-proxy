@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{Clock, Daemon, ask, kind, name, peer, scope, settle, signed, url};
+use common::{Clock, Daemon, ask, kind, name, offered, peer, scope, settle, signed, url};
 use cp_api::{
     Aliases, Approval, ErrorKind, ListThreadsQuery, MAX_ALIASES, NewThread, Peer, PeerInput,
     PeeringRequest, WebhookCreate, WebhookEvents, WebhookOrigin, WebhookType, WebhookUpdate,
@@ -27,6 +27,11 @@ fn names(list: &[Name]) -> Vec<&str> {
 /// `asker` asks `approver` to peer, and is approved as `as_name`.
 fn approve_as(asker: &mut Daemon, approver: &mut Daemon, as_name: &str) -> Peer {
     ask(asker, approver);
+    approve_asked(asker, approver, as_name)
+}
+
+/// `approver` approves the request `asker` sent as `as_name`.
+fn approve_asked(asker: &mut Daemon, approver: &mut Daemon, as_name: &str) -> Peer {
     let id = approver.call(|c| c.requests()).unwrap().requests[0]
         .id
         .clone();
@@ -44,7 +49,7 @@ fn approve_as(asker: &mut Daemon, approver: &mut Daemon, as_name: &str) -> Peer 
     asker
         .call(|c| {
             c.authenticate_peer(&accepted)?;
-            c.accepted(&accepted.key)
+            c.accepted(&accepted.key, &offered(&pending.call.body))
         })
         .unwrap();
     approver.call(|c| c.commit_approval(&pending)).unwrap()
@@ -167,7 +172,7 @@ fn a_peer_cannot_be_added_or_approved_under_an_alias() {
     let accepted = signed(&pending.call.headers, pending.call.path, &pending.call.body);
     dave.call(|c| {
         c.authenticate_peer(&accepted)?;
-        c.accepted(&accepted.key)
+        c.accepted(&accepted.key, &offered(&pending.call.body))
     })
     .unwrap();
     let p = alice.call(|c| c.commit_approval(&pending)).unwrap();
@@ -370,6 +375,7 @@ fn a_peer_that_moved_leaves_its_old_name_to_its_threads() {
         url: url("https://bob-moved.test"),
         key: bob.core.public_key().clone(),
         note: None,
+        aliases: cp_api::Aliases::default(),
     };
     alice.call(|c| c.request_received(&moved)).unwrap();
     let id = alice.call(|c| c.requests()).unwrap().requests[0].id.clone();
@@ -438,7 +444,7 @@ fn a_name_being_approved_cannot_become_an_alias() {
     let accepted = signed(&pending.call.headers, pending.call.path, &pending.call.body);
     dave.call(|c| {
         c.authenticate_peer(&accepted)?;
-        c.accepted(&accepted.key)
+        c.accepted(&accepted.key, &offered(&pending.call.body))
     })
     .unwrap();
     assert_eq!(
@@ -449,4 +455,85 @@ fn a_name_being_approved_cannot_become_an_alias() {
             .as_str(),
         "dave"
     );
+}
+
+fn offer(d: &mut Daemon, names: &[&str]) -> Result<Aliases, cp_api::Error> {
+    d.call(|c| c.set_own_aliases(&aliases(names)))
+}
+
+#[test]
+fn peering_gives_each_side_the_aliases_the_other_offers() {
+    let clock = Clock::new();
+    let mut alice = Daemon::new("alice", &clock, 1);
+    let mut bob = Daemon::new("bob", &clock, 2);
+    offer(&mut alice, &["ally", "al"]).unwrap();
+    offer(&mut bob, &["bobby"]).unwrap();
+    assert_eq!(
+        names(alice.call(|c| c.own_aliases()).unwrap().as_slice()),
+        ["al", "ally"]
+    );
+
+    ask(&mut alice, &mut bob);
+    assert_eq!(
+        names(&bob.call(|c| c.requests()).unwrap().requests[0].aliases),
+        ["al", "ally"]
+    );
+    let p = approve_asked(&mut alice, &mut bob, "alice");
+    assert_eq!(
+        names(&p.aliases),
+        ["al", "ally"],
+        "the asker's, on approval"
+    );
+    assert_eq!(
+        names(&alice.call(|c| c.peer(&name("bob"), None)).unwrap().aliases),
+        ["bobby"],
+        "the approver's, with the acceptance"
+    );
+    // Later offers reach only new peers.
+    offer(&mut alice, &["alf"]).unwrap();
+    assert_eq!(
+        names(&bob.call(|c| c.peer(&name("ally"), None)).unwrap().aliases),
+        ["al", "ally"]
+    );
+}
+
+#[test]
+fn an_offered_alias_taken_here_is_skipped() {
+    let clock = Clock::new();
+    let (mut alice, _bob, _carol) = three(&clock);
+    set(&mut alice, "bob", &["bobby"]).unwrap();
+    let mut dave = Daemon::new("dave", &clock, 4);
+    offer(
+        &mut dave,
+        &[
+            "alice", "bob", "bobby", "carol", "d0", "d1", "d2", "d3", "d4", "d5",
+        ],
+    )
+    .unwrap();
+
+    let p = approve_as(&mut dave, &mut alice, "dave");
+    // Taken here: the owner's name, peers' names, another peer's alias.
+    assert_eq!(names(&p.aliases), ["d0", "d1", "d2", "d3", "d4", "d5"]);
+}
+
+#[test]
+fn the_owner_offers_neither_their_name_nor_a_peers() {
+    let clock = Clock::new();
+    let (mut alice, _bob, _carol) = three(&clock);
+    set(&mut alice, "bob", &["bobby"]).unwrap();
+    for (alias, says) in [
+        ("alice", "already the owner's name"),
+        ("carol", "names the peer carol"),
+        ("bobby", "names the peer bob"),
+    ] {
+        let e = offer(&mut alice, &["al", alias]).unwrap_err();
+        assert!(
+            e.kind == ErrorKind::Conflict && e.detail.contains(says),
+            "{alias}: {e:?}"
+        );
+    }
+    assert!(alice.call(|c| c.own_aliases()).unwrap().is_empty());
+    offer(&mut alice, &["al"]).unwrap();
+    offer(&mut alice, &[]).unwrap();
+    assert!(alice.call(|c| c.own_aliases()).unwrap().is_empty());
 }

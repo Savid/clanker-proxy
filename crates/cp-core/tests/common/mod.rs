@@ -202,10 +202,17 @@ pub fn peer(a: &mut Daemon, b: &mut Daemon) {
     let accepted = signed(&pending.call.headers, pending.call.path, &pending.call.body);
     a.call(|c| {
         c.authenticate_peer(&accepted)?;
-        c.accepted(&accepted.key)
+        c.accepted(&accepted.key, &offered(&pending.call.body))
     })
     .unwrap();
     b.call(|c| c.commit_approval(&pending)).unwrap();
+}
+
+/// The aliases an approval's acceptance offers.
+pub fn offered(body: &[u8]) -> cp_api::Aliases {
+    serde_json::from_slice::<cp_api::PeeringAccepted>(body)
+        .unwrap()
+        .aliases
 }
 
 /// The signed call a request with these headers makes, as the receiving

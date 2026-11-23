@@ -187,6 +187,15 @@ fn now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
+/// The owner's name, with the other names they offer.
+fn called(me: &Me) -> String {
+    if me.aliases.is_empty() {
+        return me.name.to_string();
+    }
+    let all: Vec<&str> = me.aliases.iter().map(Name::as_str).collect();
+    format!("{} (also {})", me.name, all.join(", "))
+}
+
 fn name(s: &str) -> Result<Name, Failure> {
     Name::normalize(s).map_err(|e| Failure::usage(e.to_string()))
 }
@@ -281,6 +290,7 @@ impl App {
         }
         match command {
             "me" => self.me().await,
+            "alias" | "unalias" => self.own_alias(&p.args, command == "alias").await,
             "peer add" => self.peer_add(&arg(0), &arg(1), p).await,
             "peer ls" => self.peer_ls().await,
             "peer show" => self.peer_show(&arg(0)).await,
@@ -348,7 +358,7 @@ impl App {
                     || "every peer".to_string(),
                     |p| p.as_slice().iter().map(Name::as_str).collect::<Vec<_>>().join(", "),
                 );
-                let _ = writeln!(w, "{} (agent token: reaches {scope})", me.name);
+                let _ = writeln!(w, "{} (agent token: reaches {scope})", called(&me));
                 next(
                     w,
                     &[
@@ -360,13 +370,55 @@ impl App {
             }
             match &me.url {
                 None => {
-                    let _ = writeln!(w, "{}; this daemon has no public URL, so nobody can connect to it", me.name);
+                    let _ = writeln!(w, "{}; this daemon has no public URL, so nobody can connect to it", called(&me));
                     next(w, &[step("restart cpd with --url https://<where peers reach it>", "then they can connect")]);
                 }
                 Some(u) => {
-                    let _ = writeln!(w, "{} at {u}\nFor someone to connect, their agent runs: cpctl peer add {} {u}", me.name, me.name);
+                    let _ = writeln!(w, "{} at {u}\nFor someone to connect, their agent runs: cpctl peer add {} {u}", called(&me), me.name);
                     next(w, &[step("cpctl requests", "see who has asked to connect")]);
                 }
+            }
+        });
+        Ok(())
+    }
+
+    async fn own_alias(&mut self, given: &[String], add: bool) -> Result<(), Failure> {
+        let given: Vec<Name> = given.iter().map(|a| name(a)).collect::<Result<_, _>>()?;
+        let (me, _): (Me, _) = self.client.get("/api/v1/me").await?;
+        let mut aliases = me.aliases;
+        if add {
+            for a in given {
+                if !aliases.contains(&a) {
+                    aliases.push(a);
+                }
+            }
+        } else {
+            for a in &given {
+                if !aliases.contains(a) {
+                    return Err(
+                        Failure::new(EXIT_NOT_FOUND, format!("you do not offer {a}"))
+                            .hint("cpctl me lists the names you offer"),
+                    );
+                }
+            }
+            aliases.retain(|a| !given.contains(a));
+        }
+        let body = cp_api::PeerAliases {
+            aliases: cp_api::Aliases::try_from(aliases)
+                .map_err(|e| Failure::usage(e.to_string()))?,
+        };
+        let (me, raw): (Me, _) = self.client.put("/api/v1/me/aliases", &body).await?;
+        self.print(&raw, |w| {
+            if me.aliases.is_empty() {
+                let _ = writeln!(w, "you offer peers no other names");
+                next(w, &[step("cpctl alias <alias>", "offer one")]);
+            } else {
+                let _ = writeln!(
+                    w,
+                    "{}; peers you connect with from now on get these as aliases for you",
+                    called(&me)
+                );
+                next(w, &[step("cpctl unalias <alias>", "stop offering one")]);
             }
         });
         Ok(())
@@ -619,6 +671,10 @@ impl App {
                 "{} is now a peer ({}). Threads they sent while waiting arrive within seconds.",
                 peer.name, peer.url
             );
+            if !peer.aliases.is_empty() {
+                let all: Vec<&str> = peer.aliases.iter().map(Name::as_str).collect();
+                let _ = writeln!(w, "{} is also called {} here.", peer.name, all.join(", "));
+            }
             next(
                 w,
                 &[

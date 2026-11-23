@@ -64,6 +64,11 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers.get("content-length", 0)))
         self.answer('{"name":"amp-inbox","token":"cpa_' + "A" * 43 + '"}')
+    def do_PUT(self):
+        body = self.rfile.read(int(self.headers.get("content-length", 0))).decode()
+        with open(os.path.join(work, "put"), "w") as f:
+            f.write(self.path + " " + body)
+        self.answer('{"name":"tester"}')
     def log_message(self, *a):
         pass
 http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
@@ -116,6 +121,15 @@ const ok = s.CP_NAME === "tester" && s.CP_URL === "http://127.0.0.1:18519" && s.
   && !JSON.stringify(s).includes(process.env.TOKEN);
 process.exit(ok ? 0 : 1);
 ' "$work/secrets.json" || fail "settings file does not match"
+
+# No alias unless one is given; one given is offered to peers.
+[ ! -e "$work/put" ] || fail "set an alias nobody asked for"
+rm -f "$token_file"
+run --name tester --alias tess --worker cp-test --url "http://127.0.0.1:$port" || fail "setup with an alias failed"
+grep -q 'owner tester (also tess)' "$work/out" || fail "alias: summary"
+grep -q '^/api/v1/me/aliases {"aliases":\["tess"\]}$' "$work/put" || fail "alias: not offered"
+run --name tester --alias tester --worker cp-test && fail "accepted the name as an alias"
+run --name tester --alias Bad_Alias --worker cp-test && fail "accepted an invalid alias"
 
 # Amp: the prompt for the orb and the two values; with no terminal, the
 # token appears as the file that holds it.

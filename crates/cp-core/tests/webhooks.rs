@@ -251,6 +251,7 @@ fn pending_notifications_coalesce_and_peering_is_capped() {
             url: cp_api::DaemonUrl::try_from(format!("https://p{n}.test")).unwrap(),
             key: cp_api::PublicKey::try_from(format!("{n:043}")).unwrap(),
             note: None,
+            aliases: cp_api::Aliases::default(),
         };
         alice.call(|c| c.request_received(&req)).unwrap();
     }

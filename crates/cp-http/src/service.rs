@@ -312,13 +312,24 @@ impl<H: Host> Service<H> {
                     },
                 )
             }
-            Op::GetMe => {
+            Op::GetMe | Op::SetOwnAliases => {
+                let set = if op == Op::SetOwnAliases {
+                    let a: cp_api::PeerAliases = decode(req)?;
+                    Some(a.aliases)
+                } else {
+                    None
+                };
                 let version = h.version().to_string();
                 let peers = scope.clone();
                 let me = h
                     .core(move |c| {
+                        let aliases = match set {
+                            Some(a) => c.set_own_aliases(&a)?,
+                            None => c.own_aliases()?,
+                        };
                         Ok(Me {
                             name: c.me().clone(),
+                            aliases: aliases.into(),
                             url: c.url().cloned(),
                             version,
                             peers,
@@ -406,7 +417,8 @@ impl<H: Host> Service<H> {
                 let Caller::Peer { key } = caller else {
                     return Err(unauthorized());
                 };
-                h.core(move |c| c.accepted(&key)).await?;
+                let a: cp_api::PeeringAccepted = decode(req)?;
+                h.core(move |c| c.accepted(&key, &a.aliases)).await?;
                 empty()
             }
             Op::SetOwnWebhook | Op::DeleteOwnWebhook => {

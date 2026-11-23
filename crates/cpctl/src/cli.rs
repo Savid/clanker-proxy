@@ -73,9 +73,27 @@ pub(crate) static COMMANDS: &[Command] = &[
         "me",
         "",
         0..0,
-        "your name and the URL peers reach you at",
+        "your name, your aliases and the URL peers reach you at",
         "Prints what another person's agent needs to connect to this daemon.",
         "cpctl me",
+        []
+    ),
+    cmd!(
+        "alias",
+        "<alias>...",
+        1..10,
+        "offer peers other names to call you by",
+        "Peering, either way round, gives them to the peer, whose daemon keeps those still free there as aliases for you. Peers already connected do not get later changes. At most 10. To give a peer an alias, use cpctl peer alias.",
+        "cpctl alias andrew",
+        []
+    ),
+    cmd!(
+        "unalias",
+        "<alias>...",
+        1..10,
+        "stop offering names",
+        "Peers that already have them keep them.",
+        "cpctl unalias andrew",
         []
     ),
     cmd!(
