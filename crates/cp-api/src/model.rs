@@ -61,7 +61,6 @@ pub struct PeeringRequest {
     pub note: Option<Note>,
     /// Other names the requester offers; approving keeps those still free
     /// as their aliases.
-    #[serde(default, skip_serializing_if = "Aliases::is_empty")]
     pub aliases: Aliases,
 }
 
@@ -71,7 +70,6 @@ pub struct PeeringRequest {
 pub struct PeeringAccepted {
     /// Other names the approver offers; the requester keeps those still
     /// free as their aliases.
-    #[serde(default)]
     pub aliases: Aliases,
 }
 

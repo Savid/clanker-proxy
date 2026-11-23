@@ -2245,6 +2245,9 @@
       "PeeringAccepted": {
         "type": "object",
         "description": "What an approving daemon tells the requester.",
+        "required": [
+          "aliases"
+        ],
         "properties": {
           "aliases": {
             "$ref": "#/components/schemas/Aliases",
@@ -2259,7 +2262,8 @@
         "required": [
           "name",
           "url",
-          "key"
+          "key",
+          "aliases"
         ],
         "properties": {
           "aliases": {

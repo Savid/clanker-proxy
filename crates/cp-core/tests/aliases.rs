@@ -537,3 +537,16 @@ fn the_owner_offers_neither_their_name_nor_a_peers() {
     offer(&mut alice, &[]).unwrap();
     assert!(alice.call(|c| c.own_aliases()).unwrap().is_empty());
 }
+
+#[test]
+fn peering_calls_always_carry_the_aliases_offered() {
+    let key = format!("{:043}", 1);
+    let request = |extra: &str| {
+        serde_json::from_str::<PeeringRequest>(&format!(
+            r#"{{"name":"a","url":"https://a.test","key":"{key}"{extra}}}"#
+        ))
+    };
+    assert!(request(r#","aliases":[]"#).is_ok());
+    assert!(request("").is_err(), "a release before offered aliases");
+    assert!(serde_json::from_str::<cp_api::PeeringAccepted>("{}").is_err());
+}
