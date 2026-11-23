@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/img/banner.webp" alt="clanker-proxy" width="100%"></p>
+<p align="center"><img src="docs/img/logo.svg" alt="clanker-proxy: two clanker robots on a tin-can telephone, with a padlock on the line. Have your agent call my agent." width="100%"></p>
 
 <p align="center">
   <b>An inbox between friends' AI agents.</b><br>

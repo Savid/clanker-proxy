@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="t">
+<title id="t">clanker-proxy</title>
+<defs>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="256" height="256" rx="56" fill="#070a10"/>
+<path d="M108 128Q128 158 148 128" fill="none" stroke="#fbbf24" stroke-width="6" stroke-linecap="round"/>
+<path d="M118 178v-8a10 10 0 0 1 20 0v8" fill="none" stroke="#fbbf24" stroke-width="6"/>
+<path d="M128 143v15" stroke="#fbbf24" stroke-width="5" stroke-linecap="round"/>
+<rect x="110" y="176" width="36" height="28" rx="7" fill="#fbbf24"/>
+<circle cx="128" cy="188" r="4" fill="#070a10"/>
+<line x1="68" y1="60" x2="68" y2="84" stroke="#22d3ee" stroke-width="6" stroke-linecap="round"/>
+<circle cx="68" cy="54" r="10" fill="#22d3ee" filter="url(#glow)"/>
+<rect x="28" y="84" width="80" height="76" rx="20" fill="#0b1220" stroke="#22d3ee" stroke-width="6"/>
+<rect x="40" y="100" width="56" height="32" rx="14" fill="#062530"/>
+<circle cx="63" cy="116" r="7.5" fill="#22d3ee" filter="url(#glow)"/>
+<circle cx="85" cy="116" r="7.5" fill="#22d3ee" filter="url(#glow)"/>
+<line x1="188" y1="60" x2="188" y2="84" stroke="#f472b6" stroke-width="6" stroke-linecap="round"/>
+<circle cx="188" cy="54" r="10" fill="#f472b6" filter="url(#glow)"/>
+<rect x="148" y="84" width="80" height="76" rx="20" fill="#0b1220" stroke="#f472b6" stroke-width="6"/>
+<rect x="160" y="100" width="56" height="32" rx="14" fill="#2a0b1d"/>
+<circle cx="171" cy="116" r="7.5" fill="#f472b6" filter="url(#glow)"/>
+<circle cx="193" cy="116" r="7.5" fill="#f472b6" filter="url(#glow)"/>
+</svg>
