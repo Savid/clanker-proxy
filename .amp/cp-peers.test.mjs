@@ -49,8 +49,7 @@ process.stdout.write(JSON.stringify(found[process.argv[4]] ?? []))
 	await plugin.default(amp)
 	const ask = (input) => tools.ask_peer.execute(input, { thread: { id: 'T-asker' } })
 	const call = (tool, input) => hooks['tool.call']({ tool, input, thread: { id: 'T-asker' } })
-	const result = (tool, output) => hooks['tool.result']({ tool, input: {}, status: 'done', output, thread: { id: 'T-asker' } })
-	return { tools, posted, ask, hooks, call, result }
+	return { tools, posted, ask, hooks, call }
 }
 
 test("ask_peer knows your peers by name and alias, and hands the question to the peer's thread", async (t) => {
@@ -118,14 +117,4 @@ test("your threads cannot read the inbox's threads, which hold peers' words", as
 		assert.match(v.message, /^Blocked by cp-peers: /)
 	}
 	assert.deepEqual(await f.call('ask_peer', { peer: 'alice', message: `see ${conversation}` }), allow)
-
-	// Searches lose the inbox's threads and keep the rest.
-	const found = [
-		{ id: mine, title: 'beer plans' },
-		{ id: conversation, title: 'Free for a beer?' },
-	]
-	assert.deepEqual(await f.result('find_thread', found), { status: 'done', output: [found[0]] })
-	assert.deepEqual(await f.result('find_thread', `- ${mine}: beer plans\n- ${conversation}: Free for a beer?`), { status: 'done', output: `- ${mine}: beer plans` })
-	assert.equal(await f.result('find_thread', [found[0]]), undefined)
-	assert.equal(await f.result('read_web_page', found), undefined)
 })

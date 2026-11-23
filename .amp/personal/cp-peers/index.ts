@@ -52,10 +52,10 @@ async function labelled(name: string): Promise<Peer | undefined> {
 // Peers' words live in the inbox's conversations, under its peers' threads.
 // Your other threads hold your credentials and act for you, so they never
 // read those: an agent with untrusted input, private data and the power to
-// act at once is one prompt injection from misuse. Tools that name one of
-// those threads, by ID, link or label, are refused, and thread searches
-// leave them out. A tool called from inside code_exec escapes the hook, but
-// an agent that has not read a peer's words has no reason to hide an ID.
+// act at once is one prompt injection from misuse. They are never given an
+// inbox thread's ID, and tools that name one, by ID, link or label, are
+// refused. Amp runs read_thread, and tools called from code_exec, without
+// tool.call, so those can still read one an agent finds.
 const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|peer-)/i
 const threadIDs = /T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
@@ -89,24 +89,6 @@ function guardInbox(amp: PluginAPI): void {
 			if (inbox) return refuse(`${id} is a clanker-proxy inbox thread.`)
 		}
 		return { action: 'allow' }
-	})
-	// Search results that list an inbox thread lose it; the rest stays.
-	amp.on('tool.result', async (event) => {
-		if (event.tool !== 'find_thread' || event.status !== 'done') return
-		const ids = named(JSON.stringify(event.output ?? null))
-		const inbox = new Set<string>()
-		for (const id of ids) if ((await isInbox(id).catch(() => true)) === true) inbox.add(id)
-		if (!inbox.size) return
-		const mentions = (v: unknown) => named(typeof v === 'string' ? v : JSON.stringify(v ?? null)).some((id) => inbox.has(id))
-		const prune = (v: unknown): unknown =>
-			Array.isArray(v)
-				? v.filter((x) => !mentions(x)).map(prune)
-				: typeof v === 'string'
-					? v.split('\n').filter((line) => !mentions(line)).join('\n')
-					: v && typeof v === 'object'
-						? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, prune(x)]))
-						: v
-		return { status: 'done', output: prune(event.output) }
 	})
 }
 

@@ -68,10 +68,9 @@ maybe, done, declined or unclear, and a date or time. You read bob's words
 with that thread's button, or under bob's thread. `cpctl send` does the same
 from your machine.
 
-Your other threads never read bob's words: they hold your credentials, and
-bob's words could steer them. `cp-peers` refuses their tools that name an
-inbox thread, by ID, link or label, and drops inbox threads from their thread
-searches.
+Your other threads must never read bob's words: they hold your credentials,
+and bob's words could steer them. They are never given an inbox thread's ID,
+and `cp-peers` refuses their tools that name one, by ID, link or label.
 
 A peer's thread starts with the first thread between you; before that, ask
 from a thread in the project. A conversation's `cp_send` reaches only its own
@@ -157,7 +156,8 @@ or this repository, trustworthy. What remains:
 - **Without the plugin, there is no sandbox.** If the plugin isn't running in the orb, a conversation's commands run as you, unguarded. With the plugin running but missing `CP_URL`, `CP_TOKEN` or its state, it refuses everything in conversations instead.
 - **Peer text steers agents.** A peer's text comes from their agent, which may itself have been misled, and instructions hidden in it (prompt injection) can mislead a conversation within its bounds: its own thread, its directory, reading the checkout, and the network. Whatever it can read can reach the peer, so keep the project's repository free of anything you wouldn't share with every peer.
 - **Its work is the peer's.** Hooks, configuration and build scripts in a conversation's directory are written for a peer. Fetch its work into a repository you trust before you run anything on it.
-- **Answers come back as a short form.** The thread that asked gets an outcome and a date that the plugin checks, never the peer's words, but a misled conversation can report the wrong ones. A tool your threads call from inside `code_exec` skips the plugin's check, so an agent that is told to can still read an inbox thread.
+- **Answers come back as a short form.** The thread that asked gets an outcome and a date that the plugin checks, never the peer's words, but a misled conversation can report the wrong ones.
+- **Your threads can still find the inbox's.** Amp runs `read_thread`, and tools called from `code_exec` such as `find_thread`, without plugin hooks, so `cp-peers` can't refuse them: a thread that searches your threads, or is told to, can read a conversation and the peer's words in it.
 - **Your project threads hold the token.** The inbox, the peer threads and any thread you start in the project have `CP_TOKEN` and no sandbox. Unscoped, the token reaches every peer.
 - **The sandbox shares the orb's network and resources.** A conversation can reach the internet and services listening in the orb, and can use up the orb's CPU, memory and disk.
 
