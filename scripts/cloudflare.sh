@@ -35,15 +35,10 @@ Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
                      peers, threads and agent tokens stay behind
 
 Environment: CP_VERSION picks a release (default: the latest);
-CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID log in without a browser.
+CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID log in without a browser;
+NO_COLOR turns color off, FORCE_COLOR turns it on without a terminal.
 Needs Node.js 20+ and curl.
 EOF
-}
-
-say() { printf '%s\n' "$*"; }
-fail() {
-    printf 'clanker-proxy: %s\n' "$*" >&2
-    exit 1
 }
 
 # A terminal to ask on and show secrets to, even though this script
@@ -54,6 +49,53 @@ if [ -z "${CP_NO_TTY:-}" ] && (: </dev/tty >/dev/tty) 2>/dev/null; then
     tty=/dev/tty
 fi
 
+# Color, per stream: only on a terminal that is not TERM=dumb, or with
+# FORCE_COLOR, and never with NO_COLOR (no-color.org). Otherwise every style
+# below is empty and the output is plain, byte for byte, for agents, logs
+# and pipes. Lines to copy are colored after their indent, never marked.
+styled() { # styled <yes when the stream is a terminal>
+    [ -z "${NO_COLOR:-}" ] || return 1
+    case ${FORCE_COLOR:-} in '' | 0 | false) ;; *) return 0 ;; esac
+    [ -n "$1" ] && [ "${TERM:-dumb}" != dumb ]
+}
+esc=$(printf '\033')
+mark_ok='+' mark_go='>' mark_bad='x'
+case ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} in
+    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) mark_ok='✓' mark_go='›' mark_bad='✗' ;;
+esac
+out_tty='' err_tty=''
+[ ! -t 1 ] || out_tty=yes
+[ ! -t 2 ] || err_tty=yes
+# Standard output: bold, dim, cyan for what to copy, reset, and the marks
+# for a finished step, a step under way, and a warning.
+b='' d='' c='' x='' ok='' go='' warn=''
+if styled "$out_tty"; then
+    b="${esc}[1m" d="${esc}[2m" c="${esc}[36m" x="${esc}[0m"
+    ok="${esc}[32m$mark_ok$x " go="$d$mark_go$x " warn="${esc}[33m!$x "
+fi
+# The terminal, where questions and secrets go.
+tb='' td='' tc='' tx='' ty='' tq=''
+if [ -n "$tty" ] && styled yes; then
+    tb="${esc}[1m" td="${esc}[2m" tc="${esc}[36m" tx="${esc}[0m" ty="${esc}[1;33m" tq="${esc}[36m?${esc}[0m "
+fi
+# Standard error.
+eb='' ex=''
+if styled "$err_tty"; then
+    eb="${esc}[1;31m$mark_bad " ex="${esc}[0m"
+fi
+
+say() { printf '%s\n' "$*"; }
+title() { printf '%s%s%s\n' "$b" "$*" "$x"; }
+note() { printf '%s%s%s\n' "$d" "$*" "$x"; }
+step() { printf '%s%s\n' "$go" "$*"; }
+done_() { printf '%s%s\n' "$ok" "$*"; }
+heads_up() { printf '%s%s\n' "$warn" "$*"; }
+copy() { printf '%s%s%s%s\n' "$1" "$c" "$2" "$x"; } # copy <indent> <text>
+fail() {
+    printf '%sclanker-proxy:%s %s\n' "$eb" "$ex" "$*" >&2
+    exit 1
+}
+
 # ask <prompt> <default>: the answer, or the default without a terminal.
 ask() {
     if [ -z "$tty" ]; then
@@ -61,9 +103,9 @@ ask() {
         return
     fi
     if [ -n "$2" ]; then
-        printf '%s [%s]: ' "$1" "$2" >"$tty"
+        printf '%s%s%s%s %s[%s]%s: ' "$tq" "$tb" "$1" "$tx" "$td" "$2" "$tx" >"$tty"
     else
-        printf '%s: ' "$1" >"$tty"
+        printf '%s%s%s%s: ' "$tq" "$tb" "$1" "$tx" >"$tty"
     fi
     answer=
     IFS= read -r answer <"$tty" || true
@@ -146,7 +188,9 @@ else
         fail "checksum mismatch; nothing was deployed"
     fi
 fi
-say "clanker-proxy $version for Cloudflare"
+say "${b}clanker-proxy${x} $version ${d}for Cloudflare${x}"
+# Up to a minute of quiet; said only on a terminal, where someone waits.
+[ -z "$go" ] || step "Preparing wrangler..."
 rm -rf "$dir/build"
 tar -xzf "$tmp/worker.tar.gz" -C "$dir" || fail "cannot unpack the Worker"
 (cd "$dir" && npm ci --no-audit --no-fund --loglevel=error >"$tmp/npm.log" 2>&1) || {
@@ -164,7 +208,7 @@ if ! wr whoami 2>/dev/null | grep -q 'Account ID'; then
     if [ -z "$tty" ] || [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
         fail "not logged in to Cloudflare: run 'npx wrangler login', or set CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID"
     fi
-    say "Log in to Cloudflare in the browser that opens."
+    step "Log in to Cloudflare in the browser that opens."
     # shellcheck disable=SC2094 # the terminal, read and written by design
     wr login <"$tty" >"$tty" 2>&1 || fail "Cloudflare login failed"
 fi
@@ -187,8 +231,8 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
         CLOUDFLARE_ACCOUNT_ID=$(cut -d' ' -f1 "$tmp/accounts")
     elif [ "$count" -gt 1 ]; then
         [ -n "$tty" ] || fail "several Cloudflare accounts: set CLOUDFLARE_ACCOUNT_ID to the one to use"
-        printf '\nWhich Cloudflare account?\n' >"$tty"
-        awk '{ id = $1; $1 = ""; printf "  %d)%s\n", NR, $0 }' "$tmp/accounts" >"$tty"
+        printf '\n%sWhich Cloudflare account?%s\n' "$tb" "$tx" >"$tty"
+        awk -v c="$tc" -v x="$tx" '{ id = $1; $1 = ""; printf "  %s%d)%s%s\n", c, NR, x, $0 }' "$tmp/accounts" >"$tty"
         pick=$(ask "Choose" 1)
         CLOUDFLARE_ACCOUNT_ID=$(sed -n "${pick}p" "$tmp/accounts" | cut -d' ' -f1)
         [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || fail "no account $pick"
@@ -240,7 +284,7 @@ deploy() {
             return
         fi
         if [ "$i" -lt 8 ] && grep -qE 'code: (10007|10079)' "$tmp/deploy.log"; then
-            say "Cloudflare is still registering the new Worker; trying again in 20 seconds."
+            note "Cloudflare is still registering the new Worker; trying again in 20 seconds."
             sleep 20
             continue
         fi
@@ -258,14 +302,14 @@ deploy() {
 # What to send someone so they can connect: the command they run.
 share() {
     say ""
-    say "Share this with anyone you want to connect with:"
-    say "  cpctl peer add $1 $2"
-    say "They run it and send you the code it prints. If it matches the one in"
-    say "cpctl requests, approve it: cpctl approve <id>."
+    title "Share this with anyone you want to connect with:"
+    copy "  " "cpctl peer add $1 $2"
+    note "They run it and send you the code it prints. If it matches the one in"
+    note "cpctl requests, approve it: cpctl approve <id>."
 }
 
 if [ -n "$existing" ]; then
-    say "Updating $worker; its settings stay as they are."
+    step "Updating $worker; its settings stay as they are."
     deploy
     found=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
     url=${url:-$found}
@@ -294,8 +338,8 @@ if [ -n "$existing" ]; then
         done
     fi
     if [ -z "$stale" ]; then
-        say "Updated: $url now runs $version."
-        [ -z "$alias" ] || say "Aliases change with: cpctl alias $alias"
+        done_ "Updated: $url now runs $version."
+        [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
         [ -z "$owner" ] || share "$owner" "$url"
         exit 0
     fi
@@ -307,7 +351,7 @@ if [ -n "$existing" ]; then
         fail "$worker's data is from an earlier release, which $version cannot read; rerun with --start-over to start on empty storage (its peers, threads and agent tokens stay behind, and you peer again)"
     # A new name for the Durable Object; the old one keeps its data, unreachable.
     storage=owner-$(date +%s)
-    say "Starting $worker over on empty storage."
+    heads_up "Starting $worker over on empty storage."
 fi
 
 [ -n "$name" ] || [ -n "$tty" ] || fail "pass --name <your name>: there is no terminal to ask on"
@@ -327,7 +371,7 @@ if [ ! -s "$token_file" ]; then
     choice=$(ask "Owner token: (g)enerate a new one or (e)nter your own" g)
     (umask 077 && : >"$token_file")
     if [ "$choice" = e ] && [ -n "$tty" ]; then
-        printf 'Owner token (input hidden): ' >"$tty"
+        printf '%s%sOwner token (input hidden)%s: ' "$tq" "$tb" "$tx" >"$tty"
         stty -echo <"$tty"
         IFS= read -r entered <"$tty" || entered=
         stty echo <"$tty"
@@ -341,7 +385,7 @@ if [ ! -s "$token_file" ]; then
 fi
 grep -Eq '^cpo_[A-Za-z0-9_-]{43}$' "$token_file" || fail "$token_file does not hold an owner token"
 
-say "Deploying $worker..."
+step "Deploying $worker..."
 deploy
 if [ -z "$url" ]; then
     url=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
@@ -356,7 +400,7 @@ const hash = require("crypto").createHash("sha256").update(process.env.TOKEN.tri
 const storage = process.env.STORAGE ? { CP_STORAGE: process.env.STORAGE } : {};
 process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash, ...storage }));
 ' >"$tmp/secrets.json")
-say "Storing settings..."
+step "Storing settings..."
 deploy --secrets-file "$tmp/secrets.json"
 
 # The header goes through a file, so the token never appears in a process list.
@@ -375,21 +419,22 @@ if [ -n "$alias" ]; then
         -d "{\"aliases\":[\"$alias\"]}" "$url/api/v1/me/aliases" >/dev/null 2>&1; then
         called="$name (also $alias)"
     else
-        say "Could not set the alias; set it later with: cpctl alias $alias"
+        heads_up "Could not set the alias; set it later with: cpctl alias $alias"
     fi
 fi
 
 say ""
-say "clanker-proxy is running at $url, owner $called."
-say "Owner token saved to $token_file (only you can read it)."
+done_ "clanker-proxy is running at $url, owner $called."
+note "Owner token saved to $token_file (only you can read it)."
 show ""
-show "OWNER TOKEN: full control of your daemon. Save it in your password"
+show "${ty}OWNER TOKEN:${tx} full control of your daemon. Save it in your password"
 show "manager, and never give it to an agent:"
-show "  $(cat "$token_file")"
+show "  ${tc}$(cat "$token_file")${tx}"
 
 if [ -z "$agent" ]; then
     if [ -n "$tty" ]; then
-        printf '\nHow do your agents run?\n  1) Amp (orbs)\n  2) On this machine: Claude Code, Codex, any CLI agent\n  3) Not sure yet\n' >"$tty"
+        printf '\n%sHow do your agents run?%s\n  %s1)%s Amp (orbs)\n  %s2)%s On this machine: Claude Code, Codex, any CLI agent\n  %s3)%s Not sure yet\n' \
+            "$tb" "$tx" "$tc" "$tx" "$tc" "$tx" "$tc" "$tx" >"$tty"
         case $(ask "Choose" 1) in
             1) agent=amp ;;
             2) agent=local ;;
@@ -412,14 +457,14 @@ if [ "$version" != local ]; then
     elif curl -fsSL -o "$tmp/install.sh" "$base/install.sh" &&
         CP_VERSION=$version CP_INSTALL_DIR=$bin sh "$tmp/install.sh" >"$tmp/install.log" 2>&1; then
         cli=$bin/cpctl
-        say "Installed cpctl $version in $bin."
+        done_ "Installed cpctl $version in $bin."
     else
-        say "Could not install cpctl here; the install line below does it."
+        heads_up "Could not install cpctl here; the install line below does it."
     fi
     if [ -n "$cli" ]; then
         case :${PATH:-}: in
             *:"$bin":*) ;;
-            *) say "Add $bin to your PATH." ;;
+            *) heads_up "Add $bin to your PATH." ;;
         esac
     fi
 fi
@@ -428,15 +473,15 @@ fi
 # with where the value is saved, so it stays out of logs and transcripts.
 secret_line() { # secret_line <label> <file>
     if [ -n "$tty" ]; then
-        printf '     %-9s %s   secret\n' "$1" "$(cat "$2")" >"$tty"
+        printf '     %s%-9s%s %s%s%s   %ssecret%s\n' "$tb" "$1" "$tx" "$tc" "$(cat "$2")" "$tx" "$td" "$tx" >"$tty"
     else
-        printf '     %-9s secret, in %s\n' "$1" "$2"
+        printf '     %s%-9s%s %ssecret, in %s%s\n' "$b" "$1" "$x" "$d" "$2" "$x"
     fi
 }
 
 use_here() {
-    [ -n "$cli" ] || say "     curl -fsSL $repo/releases/latest/download/install.sh | sh"
-    say "     export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\""
+    [ -n "$cli" ] || copy "     " "curl -fsSL $repo/releases/latest/download/install.sh | sh"
+    copy "     " "export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\""
 }
 
 if [ "$agent" = amp ]; then
@@ -452,27 +497,27 @@ if [ "$agent" = amp ]; then
     docs=$repo/blob/$version/docs/amp.md
     [ "$version" != local ] || docs=$repo/blob/master/docs/amp.md
     say ""
-    say "In Amp, create a new thread and paste this in:"
+    title "In Amp, create a new thread and paste this in:"
     say ""
-    say "     Add the project ${repo#https://github.com/} on Amp's a1.tiny orbs, then"
-    say "     follow steps 2-5 of"
-    say "     $docs."
-    say "     Ask me for CP_URL and CP_TOKEN and save them as that project's"
-    say "     secrets, never personal ones. Start the inbox as a new thread in"
-    say "     that project, not this one."
+    copy "     " "Add the project ${repo#https://github.com/} on Amp's a1.tiny orbs, then"
+    copy "     " "follow steps 2-5 of"
+    copy "     " "$docs."
+    copy "     " "Ask me for CP_URL and CP_TOKEN and save them as that project's"
+    copy "     " "secrets, never personal ones. Start the inbox as a new thread in"
+    copy "     " "that project, not this one."
     say ""
-    say "When it asks, enter these (CP_TOKEN is an agent token for Amp, not"
-    say "your owner token):"
-    say "     $(printf '%-9s %s' CP_URL "$url")"
+    title "When it asks, enter these (CP_TOKEN is an agent token for Amp, not"
+    title "your owner token):"
+    printf '     %s%-9s%s %s%s%s\n' "$b" CP_URL "$x" "$c" "$url" "$x"
     secret_line CP_TOKEN "$agent_file"
     say ""
-    say "The inbox registers itself with your daemon; nothing else to do."
+    note "The inbox registers itself with your daemon; nothing else to do."
     say ""
-    say "To approve peers, use cpctl from this machine:"
+    title "To approve peers, use cpctl from this machine:"
     use_here
 else
     say ""
-    say "Use it from this machine:"
+    title "Use it from this machine:"
     use_here
     if [ "$agent" = local ]; then
         say ""
@@ -481,4 +526,4 @@ else
 fi
 share "$name" "$url"
 say ""
-say "Run this script again any time to update."
+note "Run this script again any time to update."

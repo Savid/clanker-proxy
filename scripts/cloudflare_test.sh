@@ -148,6 +148,28 @@ grep -q 'export CP_URL=http://127.0.0.1:18519 CP_TOKEN=' "$work/out" || fail "am
 if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi
 grep -q '^cpa_' "$work/home/.config/clanker-proxy/cp-test.amp-inbox.token" || fail "amp: agent token not saved"
 
+# Color only on a terminal or with FORCE_COLOR, and never with NO_COLOR.
+# Lines to copy are colored around their text, never inside it.
+esc=$(printf '\033')
+if grep -q "$esc" "$work/out"; then fail "color in piped output"; fi
+cp "$work/out" "$work/plain"
+# run_colored <NO_COLOR> <option>...: a run with FORCE_COLOR set.
+run_colored() { (no_color=$1; shift; export FORCE_COLOR=1 NO_COLOR="$no_color" LANG=C.UTF-8; run "$@"); }
+rm -f "$token_file"
+run_colored '' --name tester --worker cp-test --url "http://127.0.0.1:$port" --agent amp ||
+    fail "FORCE_COLOR setup failed"
+grep -q "$esc" "$work/out" || fail "FORCE_COLOR gave no color"
+grep -q "^     ${esc}\[36mAdd the project Savid/clanker-proxy on Amp's a1.tiny orbs, then${esc}\[0m\$" "$work/out" ||
+    fail "the Amp prompt is not paste-clean"
+grep -q "^  ${esc}\[36mcpctl peer add tester http://127.0.0.1:18519${esc}\[0m\$" "$work/out" ||
+    fail "the share line is not paste-clean"
+rm -f "$token_file"
+run_colored 1 --name tester --worker cp-test --url "http://127.0.0.1:$port" --agent amp ||
+    fail "NO_COLOR setup failed"
+cmp -s "$work/plain" "$work/out" || fail "NO_COLOR output is not the plain output"
+run_colored '' --bogus && fail "an unknown option was accepted"
+grep -q "^${esc}\[1;31m.*clanker-proxy:${esc}\[0m unknown option --bogus" "$work/out" || fail "FORCE_COLOR gave no colored error"
+
 before=$(cat "$token_file")
 run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "update failed"
 grep -q 'Updating cp-test; its settings stay as they are' "$work/out" || fail "update message"
