@@ -1124,8 +1124,10 @@ export default async function (amp: PluginAPI) {
 			const subject = await conversationFor(event.thread.id)
 			const c = subject ? state.conversations[subject] : undefined
 			if (subject && c && endedStates.has(await currentState(subject, c.peer, AbortSignal.timeout(15_000)))) {
-				await archive(c.amp)
+				// Released first: archiving a conversation stops the plugin
+				// running in it.
 				await inbox.release(subject, c.peer, undefined, false)
+				await archive(c.amp)
 			}
 		} catch {
 			// Unreadable state leaves it as it is.
