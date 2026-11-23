@@ -8,7 +8,7 @@ import test from 'node:test'
 const hub = 'T-00000000-0000-4000-8000-0000000000a1'
 
 // load runs the plugin with an amp CLI whose searches answer from found, by query.
-async function load(t, found, env = {}) {
+async function load(t, found, env = {}, labels = {}) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-peers-test-'))
 	const ampCLI = join(dir, 'amp')
 	await writeFile(ampCLI, `#!/usr/bin/env node
@@ -30,15 +30,26 @@ process.stdout.write(JSON.stringify(found[process.argv[4]] ?? []))
 	})
 	const tools = {}
 	const posted = []
+	const hooks = {}
 	const amp = {
 		logger: { log() {} },
 		registerTool: (tool) => { tools[tool.name] = tool },
-		threads: { get: (id) => ({ appendUserMessage: async ({ content }) => posted.push({ thread: id, content }) }) },
+		on: (name, fn) => { hooks[name] = fn },
+		threads: {
+			get: (id) => ({
+				appendUserMessage: async ({ content }) => posted.push({ thread: id, content }),
+				labels: async () => {
+					if (!(id in labels)) throw new Error('not found')
+					return labels[id]
+				},
+			}),
+		},
 	}
 	const plugin = await import(`./personal/cp-peers/index.ts?fixture=${randomUUID()}`)
 	await plugin.default(amp)
 	const ask = (input) => tools.ask_peer.execute(input, { thread: { id: 'T-asker' } })
-	return { tools, posted, ask }
+	const call = (tool, input) => hooks['tool.call']({ tool, input, thread: { id: 'T-asker' } })
+	return { tools, posted, ask, hooks, call }
 }
 
 test("ask_peer knows your peers by name and alias, and hands the question to the peer's thread", async (t) => {
@@ -50,12 +61,22 @@ test("ask_peer knows your peers by name and alias, and hands the question to the
 		],
 	})
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
-	assert.equal(await f.ask({ peer: 'ally', message: 'Up for a beer?' }), `Passed to alice's thread, https://ampcode.com/threads/${hub}, which sends it. When alice answers, this thread gets a link to the conversation that handles it.`)
-	// The name as asked: the peer's thread resolves it with cpd.
-	assert.deepEqual(f.posted, [{ thread: hub, content: 'My thread T-asker asks you to send ally this, with replyTo T-asker:\n\nUp for a beer?' }])
+	assert.equal(
+		await f.ask({ peer: 'ally', message: 'Up for a beer?' }),
+		"Passed to alice's thread in your clanker-proxy inbox, which sends it. When alice answers, this thread is told, with a short form of the answer; never look for their words.",
+	)
+	// The name as asked, explained: the peer's thread resolves it with cpd.
+	assert.deepEqual(f.posted, [
+		{
+			thread: hub,
+			content: 'My thread T-asker asks you to send ally this, with replyTo T-asker. ally is my alias for alice: give cp_send "ally", and it checks that with cpd.\n\nUp for a beer?',
+		},
+	])
+	await f.ask({ peer: 'alice', message: 'hi' })
+	assert.equal(f.posted[1].content, 'My thread T-asker asks you to send alice this, with replyTo T-asker.\n\nhi')
 	assert.match(await f.ask({ peer: 'carol', message: 'hi' }), /carol has no thread in your clanker-proxy inbox yet/)
 	assert.match(await f.ask({ peer: 'Not A Name', message: 'hi' }), /peer must be a peer name or alias/)
-	assert.equal(f.posted.length, 1)
+	assert.equal(f.posted.length, 2)
 })
 
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
@@ -74,4 +95,26 @@ test('ask_peer stays out of the inbox project, and away without peers', async (t
 	const peers = { 'label:cp-peer archived:false': [{ id: hub, title: 'alice' }] }
 	assert.equal((await load(t, peers, { CP_TOKEN: 'cpa_x' })).tools.ask_peer, undefined)
 	assert.equal((await load(t, {})).tools.ask_peer, undefined)
+})
+
+test("your threads cannot read the inbox's threads, which hold peers' words", async (t) => {
+	const conversation = 'T-00000000-0000-4000-8000-0000000000c1'
+	const mine = 'T-00000000-0000-4000-8000-0000000000e1'
+	const f = await load(t, {}, {}, { [conversation]: ['clanker-proxy', 'peer-alice'], [hub]: ['cp-peer'], [mine]: ['work'] })
+	const allow = { action: 'allow' }
+	assert.deepEqual(await f.call('read_thread', { threadID: mine, goal: 'x' }), allow)
+	for (const [tool, input] of [
+		['read_thread', { threadID: conversation }],
+		['read_thread', { threadID: hub.toUpperCase().replace(/^T-/, 'T-') }],
+		['shell_command', { cmd: `amp threads markdown https://ampcode.com/threads/${conversation}` }],
+		['code_exec', { code: `await read_thread({ threadID: '${conversation}' })` }],
+		['send_thread_message', { threadID: hub, message: 'hi' }],
+		['find_thread', { query: 'label:clanker-proxy beer' }],
+		['read_thread', { threadID: 'T-00000000-0000-4000-8000-0000000000f9' }],
+	]) {
+		const v = await f.call(tool, input)
+		assert.equal(v.action, 'reject-and-continue', `${tool} ${JSON.stringify(input)}`)
+		assert.match(v.message, /^Blocked by cp-peers: /)
+	}
+	assert.deepEqual(await f.call('ask_peer', { peer: 'alice', message: `see ${conversation}` }), allow)
 })
