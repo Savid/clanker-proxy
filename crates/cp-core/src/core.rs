@@ -4,7 +4,7 @@ use cp_api::{DaemonUrl, Error, ErrorKind, PublicKey};
 use cp_thread::{Id, Name};
 
 use crate::runtime::{Millis, Runtime};
-use crate::schema::{BASELINE, MIGRATIONS, SCHEMA_VERSION, STATEMENTS};
+use crate::schema::{MIGRATIONS, SCHEMA_VERSION, STATEMENTS, UPGRADES_FROM};
 use crate::signing::Identity;
 use crate::sql::{Sql, Value, text};
 
@@ -66,6 +66,27 @@ fn identity(
     Ok(identity)
 }
 
+/// The schema version of stored data, or `None` on empty storage, changing
+/// nothing: a host reads it to back up data before `Core::open` migrates it.
+pub fn stored_version<S: Sql>(sql: &S) -> Result<Option<u32>, Error> {
+    let has_meta = sql
+        .query_one(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+            &[],
+        )?
+        .is_some();
+    if !has_meta {
+        return Ok(None);
+    }
+    sql.query_one("SELECT value FROM meta WHERE key = 'schema_version'", &[])?
+        .map(|r| {
+            r.text(0)?.parse::<u32>().map_err(|_| {
+                Error::new(ErrorKind::Internal, "stored schema version is not a number")
+            })
+        })
+        .transpose()
+}
+
 impl<S: Sql, R: Runtime> Core<S, R> {
     /// Opens the daemon's storage: creates the schema on empty storage,
     /// migrates older data forward, refuses data from a newer release, and
@@ -80,13 +101,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 .map(|r| r.text(0).map(str::to_string))
                 .transpose()
         };
-        let stored = meta("schema_version")?
-            .map(|v| {
-                v.parse::<u32>().map_err(|_| {
-                    Error::new(ErrorKind::Internal, "stored schema version is not a number")
-                })
-            })
-            .transpose()?;
+        let stored = stored_version(&sql)?;
         let pending: &[&[&str]] = match stored {
             None => {
                 for statement in STATEMENTS {
@@ -102,16 +117,16 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                     ),
                 ));
             }
-            Some(v) if v < BASELINE => {
+            Some(v) if v < UPGRADES_FROM => {
                 return Err(Error::new(
                     ErrorKind::Internal,
                     format!(
-                        "stored data is schema version {v}, from an earlier release this one cannot migrate; start from empty storage"
+                        "stored data is schema version {v}, older than this release upgrades from (schema {UPGRADES_FROM})"
                     ),
                 ));
             }
             Some(v) => MIGRATIONS
-                .get(usize::try_from(v - BASELINE).unwrap_or(usize::MAX)..)
+                .get(usize::try_from(v - UPGRADES_FROM).unwrap_or(usize::MAX)..)
                 .unwrap_or_default(),
         };
         for migration in pending {

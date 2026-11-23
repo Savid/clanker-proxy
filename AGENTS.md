@@ -13,6 +13,7 @@ make worker-smoke   # cpd-worker under wrangler dev, plus conformance against it
 make check          # everything CI runs
 make fmt
 make test-amp       # node tests for the Amp plugin; run when changing it
+make upgrade-test   # the latest release's data upgraded to this build, and conformance against that release
 make generate       # write api/openapi.json from cp-api
 make image          # clanker-proxy:local for this machine (needs Docker, musl-tools)
 cargo xtask deps    # the pure-crate dependency rule
@@ -101,9 +102,16 @@ all of it except publishing.
   table test; `cp-core/tests/simulation.rs` must keep converging.
 - Never log or print tokens or the daemon's private key; hold secrets as
   `secrecy::SecretString`.
-- Before 1.0, a storage change bumps `BASELINE` in `cp-core/src/schema.rs`
-  and earlier data is refused (hard cutover); `MIGRATIONS` starts at 1.0,
-  append-only. Patch releases change neither storage nor the wire format.
+- A storage change appends a migration to `MIGRATIONS` in
+  `cp-core/src/schema.rs`, pins it in `cp-core/tests/schema.rs`, and tests
+  opening data from before it. `STATEMENTS` and shipped migrations never
+  change; `UPGRADES_FROM` rises only to a release owners were told to
+  upgrade through.
+- Peers may run other releases. What daemons send each other ignores
+  unknown fields; a new field is optional, and nothing is renamed or
+  removed. Send a peer something it must understand (a new action, say)
+  only once its reported release does. Patch releases change neither
+  storage nor the wire format.
 - Comments say what the code cannot: why, constraints, non-obvious
   consequences. No restating code, no history, no references to plans,
   reviews or tickets.

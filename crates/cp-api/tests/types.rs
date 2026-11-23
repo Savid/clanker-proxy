@@ -78,11 +78,12 @@ fn wire_events() {
             "{case}"
         );
     }
+    // A field from another release is ignored: it cannot change who wrote
+    // the event, or anything else about it.
+    let extra: WireEvent =
+        serde_json::from_str(&open.replace(r#""body""#, r#""from":"mallory","body""#)).unwrap();
+    assert_eq!(extra, wire);
     for (case, json) in [
-        (
-            "unknown field",
-            open.replace(r#""body""#, r#""from":"mallory","body""#),
-        ),
         ("fractional time", open.replace("00:00:00Z", "00:00:00.5Z")),
         ("offset time", open.replace("00:00:00Z", "10:00:00+10:00")),
     ] {

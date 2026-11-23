@@ -52,6 +52,17 @@ impl Daemon {
         // only its hash.
         let owner_hash = cp_core::token_hash(&owner_token(&opts.dir.join(TOKEN_FILE))?);
         let sql = Sqlite::open(&opts.dir.join(DB_FILE)).map_err(|e| e.to_string())?;
+        // A migration cannot be undone in place, and an earlier release
+        // refuses migrated data: keep the data as it was, which that release
+        // still reads. A copy left by an earlier attempt is the original.
+        if let Some(v) = cp_core::stored_version(&sql).map_err(|e| e.detail)?
+            && (cp_core::UPGRADES_FROM..cp_core::SCHEMA_VERSION).contains(&v)
+        {
+            let copy = opts.dir.join(format!("{DB_FILE}.schema-{v}"));
+            if !copy.exists() {
+                sql.copy_to(&copy).map_err(|e| e.to_string())?;
+            }
+        }
         // One transaction, so a migration applies whole or not at all; on
         // failure the dropped connection rolls it back.
         sql.begin().map_err(|e| e.to_string())?;

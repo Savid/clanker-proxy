@@ -5,8 +5,9 @@ mod common;
 
 use common::{Clock, Daemon, name, peer, runtime, url};
 use cp_api::{ErrorKind, Version};
-use cp_core::{BASELINE, Config, Core, MIGRATIONS, SCHEMA_VERSION, STATEMENTS, Sql};
+use cp_core::{Config, Core, MIGRATIONS, SCHEMA_VERSION, STATEMENTS, Sql, UPGRADES_FROM};
 use cp_sqlite::Sqlite;
+use sha2::{Digest as _, Sha256};
 
 fn config() -> Config {
     Config {
@@ -24,14 +25,15 @@ fn stored_version(sql: &Sqlite) -> String {
         .to_string()
 }
 
-/// Storage at the baseline schema, with an owner and a peer.
-fn baseline() -> Sqlite {
+/// Storage at the oldest schema this build upgrades, with an owner and a
+/// peer.
+fn oldest() -> Sqlite {
     let sql = Sqlite::memory().unwrap();
     for s in STATEMENTS {
         sql.execute(s, &[]).unwrap();
     }
     for (k, v) in [
-        ("schema_version", BASELINE.to_string()),
+        ("schema_version", UPGRADES_FROM.to_string()),
         ("name", "alice".into()),
     ] {
         sql.execute(
@@ -55,14 +57,14 @@ fn empty_storage_starts_at_the_latest_version() {
     assert_eq!(stored_version(core.sql()), SCHEMA_VERSION.to_string());
     assert_eq!(
         SCHEMA_VERSION,
-        BASELINE + u32::try_from(MIGRATIONS.len()).unwrap()
+        UPGRADES_FROM + u32::try_from(MIGRATIONS.len()).unwrap()
     );
 }
 
 #[test]
 fn older_data_migrates_and_keeps_everything() {
     let clock = Clock::new();
-    let core = Core::open(baseline(), runtime(&clock, 1), config()).unwrap();
+    let core = Core::open(oldest(), runtime(&clock, 1), config()).unwrap();
     assert_eq!(stored_version(core.sql()), SCHEMA_VERSION.to_string());
     let peers = core.peers(None).unwrap().peers;
     assert_eq!(
@@ -76,13 +78,13 @@ fn older_data_migrates_and_keeps_everything() {
 }
 
 #[test]
-fn data_from_a_newer_release_or_a_pre_release_build_is_refused() {
+fn data_from_a_newer_release_or_before_the_oldest_upgrade_is_refused() {
     let clock = Clock::new();
     for (stored, says) in [
         (SCHEMA_VERSION + 1, "newer release"),
-        (BASELINE - 1, "earlier release this one cannot migrate"),
+        (UPGRADES_FROM - 1, "older than this release upgrades from"),
     ] {
-        let sql = baseline();
+        let sql = oldest();
         sql.execute(
             "UPDATE meta SET value = ? WHERE key = 'schema_version'",
             &[stored.to_string().into()],
@@ -93,6 +95,56 @@ fn data_from_a_newer_release_or_a_pre_release_build_is_refused() {
         };
         assert_eq!(e.kind, ErrorKind::Internal);
         assert!(e.detail.contains(says), "{}", e.detail);
+    }
+}
+
+#[test]
+fn the_stored_version_reads_without_changing_anything() {
+    let empty = Sqlite::memory().unwrap();
+    assert_eq!(cp_core::stored_version(&empty).unwrap(), None);
+    assert!(
+        empty
+            .query_one("SELECT 1 FROM sqlite_master", &[])
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        cp_core::stored_version(&oldest()).unwrap(),
+        Some(UPGRADES_FROM)
+    );
+}
+
+/// Shipped storage never changes: deployed data has run it, so an edit
+/// would split installs. A storage change appends a migration, and pins it
+/// here in the same change.
+#[test]
+fn shipped_storage_is_frozen() {
+    fn hash(statements: &[&str]) -> String {
+        use std::fmt::Write as _;
+        Sha256::digest(statements.join("\0"))
+            .iter()
+            .fold(String::new(), |mut hex, b| {
+                let _ = write!(hex, "{b:02x}");
+                hex
+            })
+    }
+    assert_eq!(
+        hash(STATEMENTS),
+        "3e465fb7e21654a179c9b6665632dcecd1eec289f5dfc50bf8472185561c911b",
+        "STATEMENTS create schema {UPGRADES_FROM}, which deployed data has: put the change in a new migration"
+    );
+    let pinned: [&str; 0] = [];
+    assert_eq!(
+        MIGRATIONS.len(),
+        pinned.len(),
+        "pin each new migration's hash here"
+    );
+    for (i, (m, want)) in MIGRATIONS.iter().zip(pinned).enumerate() {
+        assert_eq!(
+            hash(m),
+            want,
+            "migration {i} has shipped: put the change in a new migration"
+        );
     }
 }
 

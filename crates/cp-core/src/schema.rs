@@ -1,23 +1,24 @@
 //! The schema both hosts use, verbatim. Times are Unix milliseconds unless
 //! a column says seconds; an event's `at` is seconds, as on the wire.
 
-/// The version `STATEMENTS` create. Before 1.0 a storage change bumps
-/// this instead of adding a migration: earlier data is refused, and its
-/// owner starts again from empty storage.
-pub const BASELINE: u32 = 7;
+/// The version `STATEMENTS` create, and the oldest stored data this build
+/// upgrades. Raising it drops every upgrade path from earlier releases, so
+/// it moves only to a release owners were told to upgrade through.
+pub const UPGRADES_FROM: u32 = 7;
 
-/// Changes since the baseline, in order: entry `i` moves stored data from
-/// version `BASELINE + i` to the next. Append only: deployed data has
+/// Every storage change, in order: entry `i` moves stored data from
+/// version `UPGRADES_FROM + i` to the next. Append only: deployed data has
 /// already run every shipped entry, so editing one would split installs.
+/// `tests/schema.rs` pins each entry.
 pub const MIGRATIONS: &[&[&str]] = &[];
 
 /// The version this build stores data at.
 #[allow(clippy::cast_possible_truncation)] // a handful of migrations
-pub const SCHEMA_VERSION: u32 = BASELINE + MIGRATIONS.len() as u32;
+pub const SCHEMA_VERSION: u32 = UPGRADES_FROM + MIGRATIONS.len() as u32;
 
-/// Statements creating the baseline schema on empty storage. Frozen: later
-/// changes go in `MIGRATIONS`. The first creates `meta`, which records the
-/// version.
+/// Statements creating schema `UPGRADES_FROM` on empty storage, before
+/// `MIGRATIONS` run. Frozen: changes go in `MIGRATIONS`. The first creates
+/// `meta`, which records the version.
 pub const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,

@@ -50,9 +50,9 @@ fn gate() -> &'static Gate {
     GATE.get_or_init(Gate::new)
 }
 
-/// The Durable Object holding the daemon. `CP_STORAGE` names it, so an
-/// owner can start from empty storage by changing it; the old object is
-/// left as it was.
+/// The Durable Object holding the daemon, named by `CP_STORAGE` (default
+/// `owner`). Changing the name reaches a different object; the old one
+/// keeps its data.
 fn daemon(env: &Env) -> Result<worker::Stub> {
     let name = env
         .var("CP_STORAGE")

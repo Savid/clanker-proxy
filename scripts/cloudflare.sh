@@ -30,9 +30,6 @@ Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
                      token an Amp inbox needs), local (on this machine), or
                      none (decide later)
   --bundle <file>    deploy this Worker bundle instead of downloading one
-  --start-over       when this release cannot read the daemon's data (one
-                     that changed storage), start on empty storage: its
-                     peers, threads and agent tokens stay behind
 
 Environment: CP_VERSION picks a release (default: the latest);
 CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID log in without a browser;
@@ -123,11 +120,10 @@ valid_name() { # valid_name <value> <max length>
     [ "${#1}" -le "$2" ] && printf '%s' "$1" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
 }
 
-name='' alias='' worker='' url='' token_file='' agent='' bundle='' start_over='' storage=''
+name='' alias='' worker='' url='' token_file='' agent='' bundle=''
 while [ "$#" -gt 0 ]; do
     case $1 in
         -h | --help) usage; exit 0 ;;
-        --start-over) start_over=yes; shift; continue ;;
         --name | --alias | --worker | --url | --token-file | --bundle | --agent) ;;
         *) fail "unknown option $1 (see --help)" ;;
     esac
@@ -343,21 +339,20 @@ if [ -n "$existing" ]; then
     # can name the owner. A setup made on another machine leaves no token
     # file here, only the login cpctl saved for this URL.
     saved=${token_file:-$config/$worker.token}
-    stale='' owner=''
+    owner=''
     if [ -s "$saved" ]; then
         (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$saved")" >"$tmp/auth")
     elif [ -s "$config/login" ] && grep -qxF "url=$url" "$config/login"; then
         (umask 077 && sed -n 's/^token=/Authorization: Bearer /p' "$config/login" >"$tmp/auth")
     fi
     if [ -s "$tmp/auth" ]; then
-        # Until the new release answers. A release that changed storage
-        # refuses the daemon's earlier data.
+        # Until the new release answers, or refuses the stored data: data
+        # from a newer release, or older than this one upgrades from.
         i=0
         while :; do
             curl -sS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
-            if grep -q 'start from empty storage' "$tmp/me.json"; then
-                stale=yes
-                break
+            if grep -q '"detail":"stored data is schema version' "$tmp/me.json"; then
+                fail "$url cannot read its data: $(sed -n 's/.*"detail":"\([^"]*\)".*/\1/p' "$tmp/me.json")"
             fi
             if grep -q '"name":' "$tmp/me.json" && { [ "$version" = local ] || grep -q "\"version\":\"$version\"" "$tmp/me.json"; }; then
                 owner=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$tmp/me.json")
@@ -368,34 +363,23 @@ if [ -n "$existing" ]; then
             sleep 2
         done
     fi
-    if [ -z "$stale" ]; then
-        if [ -n "$owner" ]; then
-            done_ "Updated: $url now runs $version."
-        elif [ -s "$tmp/auth" ]; then
-            heads_up "Deployed $version, but $url did not answer as $version within a minute."
-        else
-            done_ "Deployed $version to $url."
-        fi
-        install_cpctl
-        # A setup from before cpctl login: log it in, unless it is logged in
-        # elsewhere.
-        if [ -n "$cli" ] && [ -n "$owner" ] && [ -s "$saved" ] && [ ! -e "$config/login" ] &&
-            "$cli" login "$url" --token-file "$saved" >/dev/null 2>&1; then
-            done_ "cpctl here is logged in to your daemon."
-        fi
-        [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
-        [ -z "$owner" ] || share "$owner" "$url"
-        exit 0
+    if [ -n "$owner" ]; then
+        done_ "Updated: $url now runs $version."
+    elif [ -s "$tmp/auth" ]; then
+        heads_up "Deployed $version, but $url did not answer as $version within a minute."
+    else
+        done_ "Deployed $version to $url."
     fi
-    if [ -z "$start_over" ] && [ -n "$tty" ] &&
-        [ "$(ask "$worker's data is from an earlier release, which $version cannot read. Start over on empty storage? Its peers, threads and agent tokens stay behind (y/n)" n)" = y ]; then
-        start_over=yes
+    install_cpctl
+    # A setup from before cpctl login: log it in, unless it is logged in
+    # elsewhere.
+    if [ -n "$cli" ] && [ -n "$owner" ] && [ -s "$saved" ] && [ ! -e "$config/login" ] &&
+        "$cli" login "$url" --token-file "$saved" >/dev/null 2>&1; then
+        done_ "cpctl here is logged in to your daemon."
     fi
-    [ -n "$start_over" ] ||
-        fail "$worker's data is from an earlier release, which $version cannot read; rerun with --start-over to start on empty storage (its peers, threads and agent tokens stay behind, and you peer again)"
-    # A new name for the Durable Object; the old one keeps its data, unreachable.
-    storage=owner-$(date +%s)
-    heads_up "Starting $worker over on empty storage."
+    [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
+    [ -z "$owner" ] || share "$owner" "$url"
+    exit 0
 fi
 
 [ -n "$name" ] || [ -n "$tty" ] || fail "pass --name <your name>: there is no terminal to ask on"
@@ -439,10 +423,9 @@ fi
 # All three settings go out in one deploy, so no version ever runs with only
 # some of them. The Worker gets only the owner token's SHA-256: the token
 # stays in the file on this machine.
-(umask 077 && NAME=$name URL=$url STORAGE=$storage TOKEN=$(cat "$token_file") node -e '
+(umask 077 && NAME=$name URL=$url TOKEN=$(cat "$token_file") node -e '
 const hash = require("crypto").createHash("sha256").update(process.env.TOKEN.trim()).digest("hex");
-const storage = process.env.STORAGE ? { CP_STORAGE: process.env.STORAGE } : {};
-process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash, ...storage }));
+process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash }));
 ' >"$tmp/secrets.json")
 step "Storing settings..."
 deploy --secrets-file "$tmp/secrets.json"

@@ -12,7 +12,7 @@ build: ## Build the native workspace (release)
 	$(CARGO) build --workspace --release --locked
 
 .PHONY: check
-check: lint test worker-smoke test-amp ## Everything CI runs
+check: lint test worker-smoke test-amp upgrade-test ## Everything CI runs
 
 .PHONY: lint
 lint: lint-rust lint-deps lint-api lint-install ## All linters
@@ -64,6 +64,10 @@ test-setup: ## Offline tests of the Cloudflare setup script (needs Node and pyth
 .PHONY: test-amp
 test-amp: ## Node tests for the Amp plugin
 	node --test .amp/*.test.mjs
+
+.PHONY: upgrade-test
+upgrade-test: ## Upgrade the latest release's data to this build, then conformance against that release (downloads it)
+	sh scripts/upgrade_test.sh
 
 .PHONY: image
 image: ## Build the clanker-proxy:local container image for this machine (needs Docker and musl-tools)

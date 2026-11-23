@@ -33,6 +33,19 @@ impl Sqlite {
         Ok(Self { conn })
     }
 
+    /// Writes a consistent copy of the database to `path`, a file that must
+    /// not exist yet, readable only by its owner like the database.
+    pub fn copy_to(&self, path: &Path) -> Result<(), SqlError> {
+        create_private(path).map_err(|e| SqlError(format!("create {}: {e}", path.display())))?;
+        let to = path
+            .to_str()
+            .ok_or_else(|| SqlError(format!("{} is not UTF-8", path.display())))?;
+        self.conn
+            .execute("VACUUM INTO ?1", [to])
+            .map(drop)
+            .map_err(|e| sql_err(&e))
+    }
+
     /// A database in memory, for tests.
     pub fn memory() -> Result<Self, SqlError> {
         Ok(Self {

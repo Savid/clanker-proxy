@@ -44,7 +44,7 @@ FAKE
 chmod 755 "$work/wrangler"
 
 # The Worker: answers /api/v1/me, and makes agent tokens. With a "stale"
-# file, it refuses its storage until a deploy names new storage.
+# file, it refuses its stored data.
 cat >"$work/worker.py" <<'PY'
 import http.server, os, sys
 work = sys.argv[2]
@@ -55,10 +55,8 @@ class H(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body.encode())
     def do_GET(self):
-        secrets = os.path.join(work, "secrets.json")
-        moved = os.path.exists(secrets) and "CP_STORAGE" in open(secrets).read()
-        if os.path.exists(os.path.join(work, "stale")) and not moved:
-            self.answer('{"status":503,"detail":"stored data is schema version 5, from an earlier release this one cannot migrate; start from empty storage"}', 503)
+        if os.path.exists(os.path.join(work, "stale")):
+            self.answer('{"status":503,"detail":"stored data is schema version 5, older than this release upgrades from (schema 7)"}', 503)
             return
         with open(os.path.join(work, "auth-seen"), "w") as f:
             f.write(self.headers.get("authorization", ""))
@@ -233,17 +231,13 @@ if grep -q 'cpo_' "$work/out"; then fail "the login's token reached the output";
 rm -f "$login"
 mv "$work/token.away" "$token_file"
 
-# A release that cannot read the daemon's data: refused without --start-over,
-# then a fresh setup on new storage that keeps the owner token.
+# Data the new release refuses: the update fails with the daemon's reason,
+# and there is no starting over on empty storage.
 : >"$work/stale"
-rm -f "$work/secrets.json"
 run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "updated over data it cannot read"
-grep -q 'rerun with --start-over' "$work/out" || fail "no start-over advice"
-run_existing --worker cp-test --url "http://127.0.0.1:$port" --name tester --start-over || fail "start over failed"
-grep -q 'Starting cp-test over on empty storage' "$work/out" || fail "start over message"
-grep -q 'running at http://127.0.0.1:18519, owner tester' "$work/out" || fail "no summary after starting over"
-grep -q '"CP_STORAGE":"owner-[0-9]*"' "$work/secrets.json" || fail "start over sent no new storage name"
-[ "$(cat "$token_file")" = "$before" ] || fail "starting over changed the owner token"
+grep -q 'cannot read its data: stored data is schema version 5, older than this release upgrades from (schema 7)$' "$work/out" ||
+    fail "no reason for the refusal"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" --start-over && fail "accepted --start-over"
 rm "$work/stale"
 
 echo "cloudflare setup tests passed"

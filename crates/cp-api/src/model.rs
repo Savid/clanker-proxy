@@ -48,9 +48,11 @@ pub struct Me {
 
 // ---- peering ----
 
-/// One daemon asking another to become peers.
+/// One daemon asking another to become peers. Like everything daemons send
+/// each other, it may come from another release: fields this one does not
+/// know are ignored, so a release can add optional ones.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct PeeringRequest {
     /// The name the requester asks to be known by.
     pub name: Name,
@@ -64,9 +66,10 @@ pub struct PeeringRequest {
     pub aliases: Aliases,
 }
 
-/// What an approving daemon tells the requester.
+/// What an approving daemon tells the requester. Unknown fields are
+/// ignored, as in `PeeringRequest`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct PeeringAccepted {
     /// Other names the approver offers; the requester keeps those still
     /// free as their aliases.
@@ -366,8 +369,10 @@ pub struct GetThreadQuery {
 
 /// One step in a thread, as daemons exchange it. Who sent it is the peer
 /// whose secret delivered it; it is for the receiving daemon's owner.
+/// Unknown fields are ignored, as in `PeeringRequest`, and never change
+/// who wrote it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[schema(as = Event)]
 pub struct WireEvent {
     pub id: Id,
