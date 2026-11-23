@@ -57,7 +57,7 @@ Ask from any thread, by name or [alias](#names-and-aliases): "ask bob <what>".
 - In the project, `cp_send` sends it. Elsewhere, `ask_peer` hands it to bob's thread, which sends it with `cp_send`, to bob only. `cpctl send` does the same from your machine.
 - Bob's answer goes to a conversation under bob's thread, which checks it, then closes or reopens it.
 - The thread that asked watches the cpd thread, and so does any of your threads that messages its conversation. Watchers are told of each of bob's moves in the plugin's words, with the conversation's short form from `cp_answer`: yes, no, maybe, done, declined or unclear, and a date or time. The move that ends the thread is the last. You read bob's words with a watcher's button, or under bob's thread.
-- Your other threads hold your credentials, so they never read bob's words: they are never given an inbox thread's ID, and `cp-peers` refuses their tools that name one, by ID, link or label. Writing in is fine: a message to a conversation is you instructing it.
+- Your other threads hold your credentials, so they never read bob's words: they are never given an inbox thread's ID, and `cp-peers` refuses their tools that name one, by ID, link or label. Writing in is fine: a message to a conversation is you instructing it. Don't hand a conversation's link to another thread to review: Amp runs `read_thread` without plugin hooks, and Spaces run no plugins at all, so nothing stops it reading bob's words. Ask in the conversation instead, or read it yourself.
 
 A peer's thread starts with the first thread between you; before that, ask
 from a thread in the project. A conversation's `cp_send` reaches only its own
