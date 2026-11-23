@@ -35,6 +35,7 @@ async function fixture(t, base) {
 	let peerList = []
 	const revoked = []
 	let revokeStatus = 204
+	let daemonVersion = 'v9.9.9'
 	globalThis.fetch = async (url, init = {}) => {
 		if (String(url).endsWith('/api/v1/me/webhook')) registrations.push({ url, init })
 		else if (String(url).endsWith('/api/v1/peers')) return Response.json({ peers: peerList })
@@ -43,7 +44,8 @@ async function fixture(t, base) {
 			return new Response(null, { status: revokeStatus })
 		}
 		else forwarded.push({ method: init.method, url: String(url), authorization: init.headers.authorization, body: init.body && Buffer.from(init.body).toString() })
-		return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+		const body = String(url).endsWith('/api/v1/me') ? JSON.stringify({ name: 'savid', version: daemonVersion }) : '{}'
+		return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
 	}
 	t.after(() => { globalThis.fetch = realFetch })
 	const previous = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]))
@@ -106,16 +108,18 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
     const remote = path.join(__dirname, 'user-plugins.git')
     const git = (...a) => execFileSync('git', a, { stdio: 'ignore' })
     if (!fs.existsSync(remote)) {
-        git('init', '-q', '--bare', remote)
+        // Named branches: the runner's default branch name may differ.
+        git('init', '-q', '--bare', '--initial-branch=main', remote)
         const seed = path.join(__dirname, 'seed')
         git('clone', '-q', remote, seed)
+        git('-C', seed, 'checkout', '-q', '-b', 'main')
         fs.mkdirSync(path.join(seed, 'cp-peers'))
         fs.writeFileSync(path.join(seed, 'cp-peers', 'index.ts'), 'x')
         fs.mkdirSync(path.join(seed, 'other'))
         fs.writeFileSync(path.join(seed, 'other', 'index.ts'), 'x')
         git('-C', seed, 'add', '.')
         git('-C', seed, 'commit', '-q', '-m', 'cp-peers')
-        git('-C', seed, 'push', '-q', 'origin', 'HEAD')
+        git('-C', seed, 'push', '-q', 'origin', 'main')
     }
     git('clone', '-q', remote, args[2])
 }
@@ -247,6 +251,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		home, checkout, own: join(home, 'cp-work', subject), forwarded, httpFetch: realFetch, revoked, dir, stateFile,
 		setPeers: (list) => { peerList = list },
 		revokeAnswers: (status) => { revokeStatus = status },
+		daemonRuns: (version) => { daemonVersion = version },
 		renames: async () => (await ampCalls()).filter((c) => c[1] === 'rename'),
 		until: async (check) => {
 			for (let i = 0; i < 100 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 20))
@@ -908,4 +913,53 @@ test("a peer's thread follows up for one of your threads, which then watches the
 	assert.match(await follow({ thread: 'not an id', message: 'x' }), /thread is a cpd thread ID/)
 	f.failing.add(conversation)
 	assert.match(await follow({ thread: other, message: 'x' }), /could not reach the conversation for .*If its cpd thread has ended/)
+})
+
+test("updating moves the orb's checkout, cpctl and cp-peers to the release the daemon runs", async (t) => {
+	// CI has no git identity; commits need one.
+	const vars = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' }
+	const previous = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+	Object.assign(process.env, vars)
+	t.after(() => {
+		for (const [k, v] of Object.entries(previous)) {
+			if (v === undefined) delete process.env[k]
+			else process.env[k] = v
+		}
+	})
+	const f = await fixture(t)
+	const git = (...a) => execFileSync('git', ['-C', f.checkout, ...a], { encoding: 'utf8' }).trim()
+	await mkdir(join(f.checkout, '.agents'), { recursive: true })
+	await mkdir(join(f.checkout, '.amp', 'personal', 'cp-peers'), { recursive: true })
+	await writeFile(join(f.checkout, '.agents', 'setup'), `echo ran > '${join(f.home, 'setup.ran')}'\n`)
+	await writeFile(join(f.checkout, '.amp', 'personal', 'cp-peers', 'index.ts'), 'released')
+	git('init', '-q')
+	git('add', '.')
+	git('commit', '-q', '-m', 'release')
+	git('tag', 'v9.9.9')
+	const released = git('rev-parse', 'HEAD')
+	await writeFile(join(f.checkout, 'later'), 'x')
+	git('add', '.')
+	git('commit', '-q', '-m', 'later')
+	git('remote', 'add', 'origin', f.checkout)
+
+	f.answerConfirm(false)
+	await f.command('cp-update', 'inbox')
+	assert.match(f.confirms.at(-1).title, /^Update the inbox to v9\.9\.9\?$/)
+	assert.notEqual(git('rev-parse', 'HEAD'), released, 'declined: nothing moves')
+
+	f.answerConfirm(true)
+	await f.command('cp-update', 'inbox')
+	assert.equal(git('rev-parse', 'HEAD'), released)
+	assert.equal(await readFile(join(f.home, 'setup.ran'), 'utf8'), 'ran\n')
+	const peers = execFileSync('git', ['--git-dir', join(f.dir, 'user-plugins.git'), 'show', 'HEAD:cp-peers/index.ts'], { encoding: 'utf8' })
+	assert.equal(peers, 'released')
+	assert.match(f.confirms.at(-1).message, /Moved this orb's checkout to v9\.9\.9\n- Installed cpctl v9\.9\.9\n- Updated cp-peers in your personal plugins to v9\.9\.9\n\nNow reload the plugins/)
+	await f.command('cp-update', 'inbox')
+	assert.match(f.confirms.at(-1).message, /Updated cp-peers in your personal plugins to v9\.9\.9: already current/)
+
+	f.daemonRuns(undefined)
+	const before = f.confirms.length
+	await f.command('cp-update', 'inbox')
+	assert.equal(f.confirms.length, before)
+	assert.match(f.notices.at(-1), /cannot read your daemon's release; nothing was updated|cannot read your daemon's release \(/)
 })

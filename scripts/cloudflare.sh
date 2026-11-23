@@ -274,6 +274,28 @@ else
 fi
 valid_name "$worker" 63 || fail "Worker name $worker: lower-case letters, digits and single hyphens"
 
+# install_cpctl keeps cpctl here at the Worker's release: the owner approves
+# peers and manages tokens with it. Not fatal: the Worker is up either way.
+bin=${CP_INSTALL_DIR:-$HOME/.local/bin}
+cli=${CP_CPCTL:-}
+install_cpctl() {
+    [ -z "$cli" ] && [ "$version" != local ] || return 0
+    if [ "$("$bin/cpctl" --version 2>/dev/null || true)" = "cpctl $version" ]; then
+        cli=$bin/cpctl
+    elif curl -fsSL -o "$tmp/install.sh" "$base/install.sh" &&
+        CP_VERSION=$version CP_INSTALL_DIR=$bin sh "$tmp/install.sh" >"$tmp/install.log" 2>&1; then
+        cli=$bin/cpctl
+        done_ "Installed cpctl $version in $bin."
+    else
+        heads_up "Could not install cpctl here: curl -fsSL $repo/releases/latest/download/install.sh | sh"
+        return 0
+    fi
+    case :${PATH:-}: in
+        *:"$bin":*) ;;
+        *) heads_up "Add $bin to your PATH." ;;
+    esac
+}
+
 existing=
 if wr secret list --name "$worker" 2>/dev/null | grep -q '"CP_OWNER_TOKEN_HASH"'; then
     existing=yes
@@ -343,6 +365,7 @@ if [ -n "$existing" ]; then
     fi
     if [ -z "$stale" ]; then
         done_ "Updated: $url now runs $version."
+        install_cpctl
         [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
         [ -z "$owner" ] || share "$owner" "$url"
         exit 0
@@ -451,27 +474,7 @@ fi
 
 # ---- cpctl on this machine ----
 
-# The owner approves peers and manages tokens with cpctl here, so it is kept
-# at the Worker's release. Not fatal: the Worker is up either way.
-bin=${CP_INSTALL_DIR:-$HOME/.local/bin}
-cli=${CP_CPCTL:-}
-if [ -z "$cli" ] && [ "$version" != local ]; then
-    if [ "$("$bin/cpctl" --version 2>/dev/null || true)" = "cpctl $version" ]; then
-        cli=$bin/cpctl
-    elif curl -fsSL -o "$tmp/install.sh" "$base/install.sh" &&
-        CP_VERSION=$version CP_INSTALL_DIR=$bin sh "$tmp/install.sh" >"$tmp/install.log" 2>&1; then
-        cli=$bin/cpctl
-        done_ "Installed cpctl $version in $bin."
-    else
-        heads_up "Could not install cpctl here; the install line below does it."
-    fi
-    if [ -n "$cli" ]; then
-        case :${PATH:-}: in
-            *:"$bin":*) ;;
-            *) heads_up "Add $bin to your PATH." ;;
-        esac
-    fi
-fi
+install_cpctl
 # cpctl here then reaches the daemon with nothing to export.
 logged_in=
 if [ -n "$cli" ] && "$cli" login "$url" --token-file "$token_file" >/dev/null 2>&1; then
