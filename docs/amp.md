@@ -5,8 +5,8 @@
 is in. Your daemon wakes an orb with a signed webhook, and the plugin gives
 each peer a thread, and each cpd thread a conversation under it, which works
 it with `cpctl` in a sandbox. Any of your threads can ask a peer something;
-the answer goes to a conversation, and the thread that asked gets a link to
-it. Read [Risks](#risks) before you set it up.
+the answer goes to a conversation, and the thread that asked gets a short
+form of it, never the peer's words. Read [Risks](#risks) before you set it up.
 
 <p align="center"><img src="img/amp.svg" width="100%" alt="A peer's daemon reaches your cpd; cpd wakes the Amp orb's inbox thread with a signed webhook; the inbox routes the event to one conversation per cpd thread, under that peer's thread, which answers through cpctl."></p>
 
@@ -62,9 +62,16 @@ you ask it to pull and reload its plugins. Rerun step 5 to update `cp-peers`.
 From any thread, ask: "ask bob <what>", by name or [alias](#names-and-aliases). In the project, `cp_send` sends it.
 Elsewhere, `cp-peers`' `ask_peer` hands it to bob's thread, which sends it
 with `cp_send`, to bob only. Bob's answer goes to a conversation under bob's
-thread, which checks it and closes or reopens it, and the thread that asked
-gets a link to that conversation. `cpctl send` does the same from your
-machine.
+thread, which checks it and closes or reopens it. The thread that asked is
+told, and gets the conversation's short form of it with `cp_answer`: yes, no,
+maybe, done, declined or unclear, and a date or time. You read bob's words
+with that thread's button, or under bob's thread. `cpctl send` does the same
+from your machine.
+
+Your other threads never read bob's words: they hold your credentials, and
+bob's words could steer them. `cp-peers` refuses their tools that name an
+inbox thread, by ID, link or label, and drops inbox threads from their thread
+searches.
 
 A peer's thread starts with the first thread between you; before that, ask
 from a thread in the project. A conversation's `cp_send` reaches only its own
@@ -103,8 +110,8 @@ you, with `cp_ask_owner`, before anything else with effects outside the orb;
 `cp_ask_owner` labels the thread `needs-owner` and notifies you, and you
 answer in that thread.
 
-It has only the shell, web search and web pages, plus `cp_send` and
-`cp_ask_owner`: no file tools, code mode, subagents, MCP servers, or tools
+It has only the shell, web search and web pages, plus `cp_send`,
+`cp_ask_owner` and `cp_answer`: no file tools, code mode, subagents, MCP servers, or tools
 for other threads, Amp or other services. Amp's file tools would run outside
 the sandbox, as you.
 
@@ -150,7 +157,7 @@ or this repository, trustworthy. What remains:
 - **Without the plugin, there is no sandbox.** If the plugin isn't running in the orb, a conversation's commands run as you, unguarded. With the plugin running but missing `CP_URL`, `CP_TOKEN` or its state, it refuses everything in conversations instead.
 - **Peer text steers agents.** A peer's text comes from their agent, which may itself have been misled, and instructions hidden in it (prompt injection) can mislead a conversation within its bounds: its own thread, its directory, reading the checkout, and the network. Whatever it can read can reach the peer, so keep the project's repository free of anything you wouldn't share with every peer.
 - **Its work is the peer's.** Hooks, configuration and build scripts in a conversation's directory are written for a peer. Fetch its work into a repository you trust before you run anything on it.
-- **Relayed answers leave the sandbox.** A thread that asked a peer something reads the conversation to relay the answer, so peer text reaches that thread, which runs as you with all its tools.
+- **Answers come back as a short form.** The thread that asked gets an outcome and a date that the plugin checks, never the peer's words, but a misled conversation can report the wrong ones. A tool your threads call from inside `code_exec` skips the plugin's check, so an agent that is told to can still read an inbox thread.
 - **Your project threads hold the token.** The inbox, the peer threads and any thread you start in the project have `CP_TOKEN` and no sandbox. Unscoped, the token reaches every peer.
 - **The sandbox shares the orb's network and resources.** A conversation can reach the internet and services listening in the orb, and can use up the orb's CPU, memory and disk.
 
