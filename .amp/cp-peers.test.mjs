@@ -51,11 +51,18 @@ test("ask_peer knows your peers by name and alias, and hands the question to the
 	})
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
 	assert.equal(await f.ask({ peer: 'ally', message: 'Up for a beer?' }), `Passed to alice's thread, https://ampcode.com/threads/${hub}, which sends it. When alice answers, this thread gets a link to the conversation that handles it.`)
-	// The name as asked: the peer's thread resolves it with cpd.
-	assert.deepEqual(f.posted, [{ thread: hub, content: 'My thread T-asker asks you to send ally this, with replyTo T-asker:\n\nUp for a beer?' }])
+	// The name as asked, explained: the peer's thread resolves it with cpd.
+	assert.deepEqual(f.posted, [
+		{
+			thread: hub,
+			content: 'My thread T-asker asks you to send ally this, with replyTo T-asker. ally is my alias for alice: give cp_send "ally", and it checks that with cpd.\n\nUp for a beer?',
+		},
+	])
+	await f.ask({ peer: 'alice', message: 'hi' })
+	assert.equal(f.posted[1].content, 'My thread T-asker asks you to send alice this, with replyTo T-asker.\n\nhi')
 	assert.match(await f.ask({ peer: 'carol', message: 'hi' }), /carol has no thread in your clanker-proxy inbox yet/)
 	assert.match(await f.ask({ peer: 'Not A Name', message: 'hi' }), /peer must be a peer name or alias/)
-	assert.equal(f.posted.length, 1)
+	assert.equal(f.posted.length, 2)
 })
 
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {

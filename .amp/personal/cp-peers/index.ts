@@ -91,9 +91,11 @@ export default async function (amp: PluginAPI) {
 			const { name, thread } = found
 			// The name as asked: the peer's thread resolves it with cpd, and
 			// refuses any peer but its own, so a stale title cannot misroute it.
+			// Its agent knows the peer by name only, so an alias is explained.
+			const alias = peer === name ? '' : ` ${peer} is my alias for ${name}: give cp_send "${peer}", and it checks that with cpd.`
 			await amp.threads.get(thread).appendUserMessage({
 				type: 'user-message',
-				content: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}:\n\n${message}`,
+				content: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`,
 			})
 			return `Passed to ${name}'s thread, https://ampcode.com/threads/${thread}, which sends it. When ${name} answers, this thread gets a link to the conversation that handles it.`
 		},
