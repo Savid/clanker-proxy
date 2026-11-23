@@ -447,14 +447,19 @@ if [ "$agent" = amp ]; then
     elif [ ! -s "$agent_file" ]; then
         fail "could not make the amp-inbox agent token; if one exists, revoke it with: cpctl token rm amp-inbox"
     fi
+    # The docs of this release: a branch's page can reach an agent from a
+    # stale cache, and a tag's cannot change.
+    docs=$repo/blob/$version/docs/amp.md
+    [ "$version" != local ] || docs=$repo/blob/master/docs/amp.md
     say ""
     say "In Amp, create a new thread and paste this in:"
     say ""
-    say "     Add the project ${repo#https://github.com/}, then follow steps 2-5"
-    say "     of $repo/blob/master/docs/amp.md. Prompt me for CP_URL and"
-    say "     CP_TOKEN and save them to that project, not as personal secrets."
-    say "     Start the inbox as a new thread in that project; this thread is"
-    say "     not the inbox."
+    say "     Add the project ${repo#https://github.com/} on Amp's a1.tiny orbs, then"
+    say "     follow steps 2-5 of"
+    say "     $docs."
+    say "     Ask me for CP_URL and CP_TOKEN and save them as that project's"
+    say "     secrets, never personal ones. Start the inbox as a new thread in"
+    say "     that project, not this one."
     say ""
     say "When it asks, enter these (CP_TOKEN is an agent token for Amp, not"
     say "your owner token):"

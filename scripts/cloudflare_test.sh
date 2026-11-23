@@ -141,6 +141,8 @@ grep -q 'CP_URL  *http://127.0.0.1:18519' "$work/out" || fail "amp: no CP_URL"
 grep -q 'CP_TOKEN  *secret, in .*cp-test.amp-inbox.token' "$work/out" || fail "amp: CP_TOKEN"
 if grep -q 'CP_WEBHOOK_SECRET\|webhook add' "$work/out"; then fail "amp: a webhook step is left"; fi
 grep -q 'Add the project Savid/clanker-proxy' "$work/out" || fail "amp: no prompt for the orb"
+grep -q "on Amp's a1.tiny orbs" "$work/out" || fail "amp: the prompt names no orb size"
+grep -q '^     https://github.com/Savid/clanker-proxy/blob/master/docs/amp.md\.$' "$work/out" || fail "amp: a local bundle's prompt names master's docs"
 grep -q 'registers itself with your daemon' "$work/out" || fail "amp: no closing line"
 grep -q 'export CP_URL=http://127.0.0.1:18519 CP_TOKEN=' "$work/out" || fail "amp: no cpctl line for the owner"
 if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi

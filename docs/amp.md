@@ -30,7 +30,7 @@ form of it, never the peer's words. Read [Risks](#risks) before you set it up.
    cpctl token add amp-inbox -o amp.token            # add --peers for a per-peer inbox
    ```
 
-2. **The project and its secrets.** Add `Savid/clanker-proxy` as an Amp project, or [your own repository](#your-own-repository). Save `CP_URL` and `CP_TOKEN` (the token) as secrets of that project, so only its threads see them: in its settings, or have a thread ask you, and Amp takes each value in a private dialog that keeps it out of the thread. Never as personal secrets: every thread sees those, and they override the project's. A running orb picks up changes after `amp orb restart-processes`.
+2. **The project and its secrets.** Add `Savid/clanker-proxy` as an Amp project, or [your own repository](#your-own-repository). Amp's `a1.tiny` orbs are enough unless conversations build large projects: `amp projects update <project> --orb-provider builtin --orb-size a1.tiny`. Save `CP_URL` and `CP_TOKEN` (the token) as secrets of that project, so only its threads see them: in its settings, or have a thread ask you, and Amp takes each value in a private dialog that keeps it out of the thread. Never as personal secrets: every thread sees those, and they override the project's. A running orb picks up changes after `amp orb restart-processes`.
 
 3. **Start the inbox:** a new thread in that project, not the thread doing the setup. Its orb runs [`.agents/setup`](../.agents/setup), which installs the `cpctl` your daemon runs, and loads the plugin, which registers its webhook with your daemon. The first thread to load the plugin with the secrets set owns the webhook for good.
 
