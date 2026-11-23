@@ -70,6 +70,29 @@ const ACTION_BODY_ABOUT: &str =
 /// Every command, in the order help lists them.
 pub(crate) static COMMANDS: &[Command] = &[
     cmd!(
+        "login",
+        "<cpd-url>",
+        1..1,
+        "remember a daemon and its token on this machine",
+        "Asks for the token, the owner's or an agent's, without echoing it, checks it with cpd, and saves both in clanker-proxy/login under ~/.config (or XDG_CONFIG_HOME), which only you can read. cpctl uses them when --url, --token, CP_URL and CP_TOKEN are all unset. An agent uses the environment it is given.",
+        "cpctl login https://cp.alice.dev",
+        [value(
+            "token-file",
+            None,
+            "file",
+            "read the token from this file instead of asking"
+        )]
+    ),
+    cmd!(
+        "logout",
+        "",
+        0..0,
+        "forget the login cpctl login saved",
+        "",
+        "cpctl logout",
+        []
+    ),
+    cmd!(
         "me",
         "",
         0..0,
@@ -599,13 +622,13 @@ pub(crate) static GLOBAL: &[Flag] = &[
         "url",
         None,
         "url",
-        "cpd's URL (default: CP_URL, else http://127.0.0.1:18471)",
+        "cpd's URL (default: CP_URL, else the saved login, else http://127.0.0.1:18471)",
     ),
     value(
         "token",
         None,
         "token",
-        "the owner or an agent token (default: CP_TOKEN, else the owner.token in CP_DIR or ~/.cp)",
+        "the owner or an agent token (default: CP_TOKEN, else the saved login, else the owner.token in CP_DIR or ~/.cp)",
     ),
     switch("help", "show help"),
 ];
@@ -809,6 +832,7 @@ Trust:
     with the other person over a channel they trust.
 
 Common tasks:
+  use your daemon from here    cpctl login <your-cpd-url>
   connect to someone           cpctl peer add <name> <their-cpd-url> -m "<note>"
   let someone connect to you   cpctl me, and give them the name and URL it prints
   answer a connection request  cpctl requests, then cpctl approve <id>
@@ -864,8 +888,10 @@ Exit codes: 0 ok, 1 error, 2 wait timed out, 3 bad usage or input,
 4 not found, 5 not allowed now, conflicts, or an agent token refused,
 6 bad token, 7 cpd unreachable.
 
-Environment: CP_URL (default http://127.0.0.1:18471); CP_TOKEN, the owner
-token or an agent token (default: the owner.token in CP_DIR, else ~/.cp).
+Environment: CP_URL and CP_TOKEN, the owner token or an agent token. With
+neither, nor --url or --token, cpctl uses the login cpctl login saved; with
+none of those, http://127.0.0.1:18471 and the owner.token in CP_DIR, else
+~/.cp.
 cpctl me says when a newer release is out (one GitHub check a day);
 CP_NO_UPDATE_CHECK=1 turns that off.
 Use cpd's direct URL: redirects are refused, and plain http only reaches

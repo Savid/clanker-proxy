@@ -149,7 +149,8 @@ grep -q 'Add the project Savid/clanker-proxy' "$work/out" || fail "amp: no promp
 grep -q "on Amp's a1.tiny orbs" "$work/out" || fail "amp: the prompt names no orb size"
 grep -q '^     https://github.com/Savid/clanker-proxy/blob/master/docs/amp.md\.$' "$work/out" || fail "amp: a local bundle's prompt names master's docs"
 grep -q 'registers itself with your daemon' "$work/out" || fail "amp: no closing line"
-grep -q 'export CP_URL=http://127.0.0.1:18519 CP_TOKEN=' "$work/out" || fail "amp: no cpctl line for the owner"
+grep -q "cpctl login http://127.0.0.1:18519 --token-file $token_file\$" "$work/out" || fail "amp: no cpctl login line for the owner"
+if grep -q 'export CP_' "$work/out"; then fail "amp: export guidance is left"; fi
 if grep -qE 'cpa_|cpo_' "$work/out"; then fail "a secret reached the output"; fi
 grep -q '^cpa_' "$work/home/.config/clanker-proxy/cp-test.amp-inbox.token" || fail "amp: agent token not saved"
 
@@ -174,6 +175,26 @@ run_colored 1 --name tester --worker cp-test --url "http://127.0.0.1:$port" --ag
 cmp -s "$work/plain" "$work/out" || fail "NO_COLOR output is not the plain output"
 run_colored '' --bogus && fail "an unknown option was accepted"
 grep -q "^${esc}\[1;31m.*clanker-proxy:${esc}\[0m unknown option --bogus" "$work/out" || fail "FORCE_COLOR gave no colored error"
+
+# With cpctl here, the setup logs it in, and the output says how to log in
+# from elsewhere.
+cat >"$work/cpctl" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_DIR/cpctl-calls"
+[ -z "${FAKE_LOGIN_FAILS:-}" ]
+FAKE
+chmod 755 "$work/cpctl"
+run_cpctl() { (export CP_CPCTL="$work/cpctl"; run "$@"); }
+rm -f "$token_file" "$work/cpctl-calls"
+run_cpctl --name tester --worker cp-test --url "http://127.0.0.1:$port" --agent amp || fail "setup with cpctl failed"
+grep -qx "login http://127.0.0.1:18519 --token-file $token_file" "$work/cpctl-calls" || fail "cpctl not logged in"
+grep -q 'cpctl here is logged in' "$work/out" || fail "logged in: no line saying so"
+grep -q '^     cpctl login http://127.0.0.1:18519$' "$work/out" || fail "logged in: no line for another machine"
+if grep -q -- '--token-file' "$work/out"; then fail "logged in: still shows the token file"; fi
+rm -f "$token_file"
+(export FAKE_LOGIN_FAILS=1; run_cpctl --name tester --worker cp-test --url "http://127.0.0.1:$port") ||
+    fail "setup with a failing login failed"
+grep -q "cpctl login http://127.0.0.1:18519 --token-file $token_file\$" "$work/out" || fail "failed login: no login line"
 
 before=$(cat "$token_file")
 run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "update failed"

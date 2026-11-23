@@ -652,3 +652,147 @@ async fn owners_hear_about_newer_releases_and_peers() {
     alice.daemon.shutdown().await;
     bob.daemon.shutdown().await;
 }
+
+/// An environment with only a configuration directory: what a second
+/// machine has before and after `cpctl login`.
+fn bare(config: &std::path::Path) -> Env {
+    Env {
+        config: Some(config.to_string_lossy().into()),
+        ..Env::default()
+    }
+}
+
+fn mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[tokio::test]
+async fn login_saves_a_daemon_that_flags_and_the_environment_override() {
+    let (alice, bob) = (node("alice").await, node("bob").await);
+    let config = alice.dir.0.join("config");
+    let env = bare(&config);
+    let token_file = alice.dir.0.join(cpd::TOKEN_FILE);
+    let token = std::fs::read_to_string(&token_file).unwrap();
+    let file = config.join("clanker-proxy").join("login");
+
+    // A token cpd refuses saves nothing.
+    let wrong = alice.dir.0.join("wrong.token");
+    std::fs::write(&wrong, format!("cpo_{}\n", "x".repeat(43))).unwrap();
+    let o = cp_in(
+        &env,
+        &["login", &alice.url, "--token-file", wrong.to_str().unwrap()],
+        "",
+    )
+    .await;
+    assert_eq!(o.exit, cpctl::EXIT_AUTH, "{}", o.stderr);
+    assert!(o.stderr.contains("nothing was saved"), "{}", o.stderr);
+    assert!(!file.exists());
+
+    let o = cp_in(
+        &env,
+        &[
+            "login",
+            &alice.url,
+            "--token-file",
+            token_file.to_str().unwrap(),
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(o.exit, 0, "{}{}", o.stdout, o.stderr);
+    assert!(
+        o.stdout.starts_with(&format!(
+            "logged in to alice with the owner token at {}",
+            alice.url
+        )),
+        "{}",
+        o.stdout
+    );
+    assert!(!o.stdout.contains(token.trim()) && !o.stderr.contains(token.trim()));
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(mode(file.parent().unwrap()), 0o700);
+
+    // Later commands use it, with nothing in the environment.
+    let o = cp_in(&env, &["me"], "").await;
+    assert_eq!(o.exit, 0, "{}", o.stderr);
+    assert!(
+        o.stdout.starts_with(&format!("alice at {}", alice.url)),
+        "{}",
+        o.stdout
+    );
+
+    // A URL or token from the environment or a flag replaces the login
+    // whole: the saved token never goes to another daemon.
+    let mut elsewhere = bare(&config);
+    elsewhere.url = Some(bob.url.clone());
+    elsewhere.dir = Some(bob.dir.0.to_string_lossy().into());
+    let o = cp_in(&elsewhere, &["me"], "").await;
+    assert!(o.stdout.starts_with("bob at"), "{}{}", o.stdout, o.stderr);
+    let o = cp_in(&env, &["--url", &bob.url, "me"], "").await;
+    assert_eq!(
+        o.exit,
+        cpctl::EXIT_AUTH,
+        "only bob's own token reaches bob: {}",
+        o.stdout
+    );
+
+    let o = cp_in(&env, &["logout"], "").await;
+    assert!(
+        o.stdout
+            .starts_with(&format!("logged out of {}: removed ", alice.url)),
+        "{}",
+        o.stdout
+    );
+    assert!(!file.exists());
+    let o = cp_in(&env, &["logout"], "").await;
+    assert!(o.stdout.starts_with("no saved login"), "{}", o.stdout);
+    alice.daemon.shutdown().await;
+    bob.daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn login_refuses_what_it_cannot_use_safely() {
+    let alice = node("alice").await;
+    let config = alice.dir.0.join("config");
+    let env = bare(&config);
+
+    // No terminal and no file: nowhere to read the token from.
+    let o = cp_in(&env, &["login", &alice.url], "").await;
+    assert_eq!(o.exit, cpctl::EXIT_USAGE, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("needs a terminal") && o.stderr.contains("--token-file"),
+        "{}",
+        o.stderr
+    );
+
+    // A token on the command line would stay in shell history.
+    let o = cp_in(&env, &["login", &alice.url, "--token", "cpo_x"], "").await;
+    assert_eq!(o.exit, cpctl::EXIT_USAGE);
+    assert!(o.stderr.contains("takes no --token"), "{}", o.stderr);
+
+    // A file without a token is refused without showing what it holds.
+    let junk = alice.dir.0.join("junk");
+    std::fs::write(&junk, "hunter2\n").unwrap();
+    let o = cp_in(
+        &env,
+        &["login", &alice.url, "--token-file", junk.to_str().unwrap()],
+        "",
+    )
+    .await;
+    assert_eq!(o.exit, cpctl::EXIT_USAGE);
+    assert!(!o.stderr.contains("hunter2"), "{}", o.stderr);
+
+    // An unreadable saved login is an error, not a quiet fall back; logout
+    // still clears it.
+    let file = config.join("clanker-proxy").join("login");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "nonsense\n").unwrap();
+    let o = cp_in(&env, &["me"], "").await;
+    assert_eq!(o.exit, cpctl::EXIT_ERROR);
+    assert!(o.stderr.contains("unreadable"), "{}", o.stderr);
+    let o = cp_in(&env, &["logout"], "").await;
+    assert_eq!(o.exit, 0);
+    assert!(!file.exists());
+    alice.daemon.shutdown().await;
+}
