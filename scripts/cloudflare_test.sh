@@ -60,6 +60,8 @@ class H(http.server.BaseHTTPRequestHandler):
         if os.path.exists(os.path.join(work, "stale")) and not moved:
             self.answer('{"status":503,"detail":"stored data is schema version 5, from an earlier release this one cannot migrate; start from empty storage"}', 503)
             return
+        with open(os.path.join(work, "auth-seen"), "w") as f:
+            f.write(self.headers.get("authorization", ""))
         self.answer('{"name":"tester"}')
     def do_POST(self):
         self.rfile.read(int(self.headers.get("content-length", 0)))
@@ -184,6 +186,7 @@ printf '%s\n' "$*" >>"$FAKE_DIR/cpctl-calls"
 [ -z "${FAKE_LOGIN_FAILS:-}" ]
 FAKE
 chmod 755 "$work/cpctl"
+# shellcheck disable=SC2030 # each run's settings stay in its subshell
 run_cpctl() { (export CP_CPCTL="$work/cpctl"; run "$@"); }
 rm -f "$token_file" "$work/cpctl-calls"
 run_cpctl --name tester --worker cp-test --url "http://127.0.0.1:$port" --agent amp || fail "setup with cpctl failed"
@@ -200,7 +203,35 @@ before=$(cat "$token_file")
 run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "update failed"
 grep -q 'Updating cp-test; its settings stay as they are' "$work/out" || fail "update message"
 grep -q 'cpctl peer add tester http://127.0.0.1:18519' "$work/out" || fail "no share line after an update"
+grep -q 'Updated: http://127.0.0.1:18519 now runs' "$work/out" || fail "update: not checked with the token file"
 [ "$(cat "$token_file")" = "$before" ] || fail "the update changed the owner token"
+
+# An update logs in a cpctl that has no login, and leaves one it has alone.
+login=$work/home/.config/clanker-proxy/login
+# shellcheck disable=SC2031 # each run's settings stay in its subshell
+update_cpctl() { (export CP_CPCTL="$work/cpctl"; run_existing "$@"); }
+rm -f "$work/cpctl-calls" "$login"
+update_cpctl --worker cp-test --url "http://127.0.0.1:$port" || fail "update with cpctl failed"
+grep -qx "login http://127.0.0.1:18519 --token-file $token_file" "$work/cpctl-calls" || fail "update: cpctl not logged in"
+printf 'url=https://elsewhere.example\ntoken=cpo_%s\n' "$(printf 'B%.0s' $(seq 43))" >"$login"
+: >"$work/cpctl-calls"
+update_cpctl --worker cp-test --url "http://127.0.0.1:$port" || fail "update with cpctl failed"
+if grep -q '^login' "$work/cpctl-calls"; then fail "update: replaced another login"; fi
+
+# Set up on another machine: no token file here, so the update is checked
+# with cpctl's login for this URL, or not at all.
+mv "$token_file" "$work/token.away"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "unchecked update failed"
+grep -q 'Deployed local to http://127.0.0.1:18519\.' "$work/out" || fail "unchecked update: says it was checked"
+if grep -q 'now runs\|cpctl peer add' "$work/out"; then fail "unchecked update: claims what it did not check"; fi
+printf 'url=http://127.0.0.1:18519\ntoken=%s\n' "$(cat "$work/token.away")" >"$login"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "update with a login failed"
+grep -q 'Updated: http://127.0.0.1:18519 now runs' "$work/out" || fail "update: not checked with the login"
+[ "$(cat "$work/auth-seen")" = "Bearer $(cat "$work/token.away")" ] || fail "update: checked without the login's token"
+grep -q 'cpctl peer add tester http://127.0.0.1:18519' "$work/out" || fail "update with a login: no share line"
+if grep -q 'cpo_' "$work/out"; then fail "the login's token reached the output"; fi
+rm -f "$login"
+mv "$work/token.away" "$token_file"
 
 # A release that cannot read the daemon's data: refused without --start-over,
 # then a fresh setup on new storage that keeps the owner token.

@@ -340,11 +340,16 @@ if [ -n "$existing" ]; then
     found=$(grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' "$tmp/deploy.log" | head -n 1 || true)
     url=${url:-$found}
     # With the owner token here, the update is checked, and the share line
-    # can name the owner.
+    # can name the owner. A setup made on another machine leaves no token
+    # file here, only the login cpctl saved for this URL.
     saved=${token_file:-$config/$worker.token}
     stale='' owner=''
     if [ -s "$saved" ]; then
         (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$saved")" >"$tmp/auth")
+    elif [ -s "$config/login" ] && grep -qxF "url=$url" "$config/login"; then
+        (umask 077 && sed -n 's/^token=/Authorization: Bearer /p' "$config/login" >"$tmp/auth")
+    fi
+    if [ -s "$tmp/auth" ]; then
         # Until the new release answers. A release that changed storage
         # refuses the daemon's earlier data.
         i=0
@@ -364,8 +369,20 @@ if [ -n "$existing" ]; then
         done
     fi
     if [ -z "$stale" ]; then
-        done_ "Updated: $url now runs $version."
+        if [ -n "$owner" ]; then
+            done_ "Updated: $url now runs $version."
+        elif [ -s "$tmp/auth" ]; then
+            heads_up "Deployed $version, but $url did not answer as $version within a minute."
+        else
+            done_ "Deployed $version to $url."
+        fi
         install_cpctl
+        # A setup from before cpctl login: log it in, unless it is logged in
+        # elsewhere.
+        if [ -n "$cli" ] && [ -n "$owner" ] && [ -s "$saved" ] && [ ! -e "$config/login" ] &&
+            "$cli" login "$url" --token-file "$saved" >/dev/null 2>&1; then
+            done_ "cpctl here is logged in to your daemon."
+        fi
         [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
         [ -z "$owner" ] || share "$owner" "$url"
         exit 0
