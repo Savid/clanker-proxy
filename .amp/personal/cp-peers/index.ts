@@ -116,13 +116,15 @@ export default async function (amp: PluginAPI) {
 			properties: {
 				peer: { type: 'string', description: "The peer's name, or one of its aliases." },
 				message: { type: 'string', description: 'What to ask or tell them, in full.' },
+				thread: { type: 'string', description: 'To follow up on an existing cpd thread with them: its ID, or its first 8 characters.' },
 			},
 			required: ['peer', 'message'],
 		},
 		async execute(input, ctx) {
-			const { peer, message } = input as { peer?: unknown; message?: unknown }
+			const { peer, message, thread: about } = input as { peer?: unknown; message?: unknown; thread?: unknown }
 			if (typeof peer !== 'string' || !peerName.test(peer) || peer.length > 39) return 'ask_peer: peer must be a peer name or alias.'
 			if (typeof message !== 'string' || !message.trim()) return 'ask_peer: give a message.'
+			if (about !== undefined && (typeof about !== 'string' || !/^[0-9a-f-]{8,36}$/i.test(about))) return 'ask_peer: thread is a cpd thread ID, or its first 8 characters.'
 			let found: Peer | undefined
 			try {
 				// Read now: aliases may have changed since this thread started.
@@ -139,10 +141,11 @@ export default async function (amp: PluginAPI) {
 			// refuses any peer but its own, so a stale title cannot misroute it.
 			// Its agent knows the peer by name only, so an alias is explained.
 			const alias = peer === name ? '' : ` ${peer} is my alias for ${name}: give cp_send "${peer}", and it checks that with cpd.`
-			await amp.threads.get(thread).appendUserMessage({
-				type: 'user-message',
-				content: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`,
-			})
+			const content =
+				typeof about === 'string'
+					? `My thread ${ctx.thread.id} asks you to follow up on cpd thread ${about} with ${name}: pass this on with cp_follow_up, replyTo ${ctx.thread.id}.\n\n${message}`
+					: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`
+			await amp.threads.get(thread).appendUserMessage({ type: 'user-message', content })
 			return `Passed to ${name}'s thread in your clanker-proxy inbox, which sends it. This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
 		},
 	})

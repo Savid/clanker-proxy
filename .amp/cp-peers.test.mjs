@@ -74,9 +74,12 @@ test("ask_peer knows your peers by name and alias, and hands the question to the
 	])
 	await f.ask({ peer: 'alice', message: 'hi' })
 	assert.equal(f.posted[1].content, 'My thread T-asker asks you to send alice this, with replyTo T-asker.\n\nhi')
+	await f.ask({ peer: 'ally', message: 'Send him the command.', thread: '485eec32' })
+	assert.equal(f.posted[2].content, 'My thread T-asker asks you to follow up on cpd thread 485eec32 with alice: pass this on with cp_follow_up, replyTo T-asker.\n\nSend him the command.')
+	assert.match(await f.ask({ peer: 'alice', message: 'x', thread: 'nope' }), /thread is a cpd thread ID/)
 	assert.match(await f.ask({ peer: 'carol', message: 'hi' }), /carol has no thread in your clanker-proxy inbox yet/)
 	assert.match(await f.ask({ peer: 'Not A Name', message: 'hi' }), /peer must be a peer name or alias/)
-	assert.equal(f.posted.length, 2)
+	assert.equal(f.posted.length, 3)
 })
 
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
