@@ -544,7 +544,8 @@ export default async function (amp: PluginAPI) {
 			const content = `clanker-proxy: ${how ? `${peer} ${how} ${subject}` : `${subject} with ${peer}`}, a cpd thread you're watching, has ended. Their words stay in the conversation that handled it: never look for it or read it.${where} You won't hear of it again.`
 			const asked = askedLabel(subject)
 			const report = reportLabel(subject)
-			for (const id of await labelled(asked).catch(() => [] as ThreadID[])) {
+			const watchers = await labelled(asked).catch(() => [] as ThreadID[])
+			for (const id of watchers) {
 				const thread = amp.threads.get(id)
 				await thread
 					.appendUserMessage({ type: 'user-message', content })
@@ -553,7 +554,10 @@ export default async function (amp: PluginAPI) {
 					.catch(() => undefined)
 			}
 			if (keepReport) return
-			for (const id of await labelled(report).catch(() => [] as ThreadID[])) {
+			// Labels are read, then written whole, and a read just after a write
+			// can still show the old ones: a thread done above is left alone, or
+			// writing back what it read would put its watch label back.
+			for (const id of (await labelled(report).catch(() => [] as ThreadID[])).filter((x) => !watchers.includes(x))) {
 				const thread = amp.threads.get(id)
 				await thread
 					.labels()
