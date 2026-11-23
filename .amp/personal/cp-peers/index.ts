@@ -54,8 +54,8 @@ async function labelled(name: string): Promise<Peer | undefined> {
 // read those: an agent with untrusted input, private data and the power to
 // act at once is one prompt injection from misuse. They are never given an
 // inbox thread's ID, and tools that name one, by ID, link or label, are
-// refused. Amp runs read_thread, and tools called from code_exec, without
-// tool.call, so those can still read one an agent finds.
+// refused. Amp runs read_thread and code_exec, and what code_exec calls,
+// without tool.call, so those can still read one an agent finds.
 const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|peer-)/i
 const threadIDs = /T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
