@@ -6,6 +6,8 @@
 //! the recipient's public key and the body's SHA-256, one per line. Naming
 //! the recipient keeps a call to one peer from being replayed to another;
 //! the time bounds replays to the same peer, whose calls are idempotent.
+//! A peering request goes out before the recipient's key is known, so it
+//! names the requester's own key instead.
 
 use std::fmt::Write as _;
 
@@ -55,7 +57,7 @@ pub fn code(one: &PublicKey, other: &PublicKey) -> Result<Code, Error> {
 
 /// An incoming call's signature and what it covers, as the host read them
 /// from the request. [`crate::Core::authenticate_peer`] checks it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignedCall {
     pub key: PublicKey,
     pub date: i64,

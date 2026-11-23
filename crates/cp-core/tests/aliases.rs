@@ -4,7 +4,10 @@
 
 mod common;
 
-use common::{Clock, Daemon, ask, kind, name, offered, peer, scope, settle, signed, url};
+use common::{
+    Clock, Daemon, ask, kind, name, offered, peer, received, request_from, scope, settle, signed,
+    url,
+};
 use cp_api::{
     Aliases, Approval, ErrorKind, ListThreadsQuery, MAX_ALIASES, NewThread, Peer, PeerInput,
     PeeringRequest, WebhookCreate, WebhookEvents, WebhookOrigin, WebhookType, WebhookUpdate,
@@ -377,7 +380,12 @@ fn a_peer_that_moved_leaves_its_old_name_to_its_threads() {
         note: None,
         aliases: cp_api::Aliases::default(),
     };
-    alice.call(|c| c.request_received(&moved)).unwrap();
+    let (moved, sig) = received(
+        &bob.core
+            .peering_call(url("https://alice.test"), &moved)
+            .unwrap(),
+    );
+    alice.call(|c| c.request_received(&moved, &sig)).unwrap();
     let id = alice.call(|c| c.requests()).unwrap().requests[0].id.clone();
     let pending = alice
         .call(|c| {
@@ -549,4 +557,68 @@ fn peering_calls_always_carry_the_aliases_offered() {
     assert!(request(r#","aliases":[]"#).is_ok());
     assert!(request("").is_err(), "a release before offered aliases");
     assert!(serde_json::from_str::<cp_api::PeeringAccepted>("{}").is_err());
+}
+
+#[test]
+fn offers_come_only_with_peering_never_later() {
+    let clock = Clock::new();
+    let mut alice = Daemon::new("alice", &clock, 1);
+    let mut bob = Daemon::new("bob", &clock, 2);
+    offer(&mut bob, &["bobby"]).unwrap();
+    approve_as(&mut bob, &mut alice, "bob");
+    set(&mut alice, "bob", &[]).unwrap();
+
+    // Bob, already active here, approves another request from alice: its
+    // acceptance offers his new names, which alice's daemon ignores.
+    offer(&mut bob, &["boss"]).unwrap();
+    let call = alice
+        .core
+        .peering_call(
+            url("https://bob.test"),
+            &PeeringRequest {
+                name: name("alice"),
+                url: url("https://alice.test"),
+                key: alice.core.public_key().clone(),
+                note: None,
+                aliases: aliases(&["al"]),
+            },
+        )
+        .unwrap();
+    let (request, sig) = received(&call);
+    bob.call(|c| c.request_received(&request, &sig)).unwrap();
+    approve_asked(&mut alice, &mut bob, "alice");
+    assert_eq!(
+        alice.call(|c| c.peer(&name("bob"), None)).unwrap().aliases,
+        Vec::<Name>::new()
+    );
+}
+
+#[test]
+fn an_offer_survives_its_request_leaving_the_queue_while_approving() {
+    let clock = Clock::new();
+    let mut alice = Daemon::new("alice", &clock, 1);
+    let mut bob = Daemon::new("bob", &clock, 2);
+    offer(&mut alice, &["al"]).unwrap();
+    ask(&mut alice, &mut bob);
+    for n in 1..cp_core::MAX_PENDING_REQUESTS {
+        clock.advance(10 * cp_core::Millis::SECOND);
+        let (r, sig) = request_from(&format!("p{n}"), &clock, u64::from(n) + 100, "bob");
+        bob.call(|c| c.request_received(&r, &sig)).unwrap();
+    }
+    let id = bob.call(|c| c.requests()).unwrap().requests[0].id.clone();
+    let pending = bob
+        .call(|c| c.begin_approval(&id, Approval::default()))
+        .unwrap();
+    // One more drops the oldest, alice's, while her daemon confirms.
+    let (r, sig) = request_from("late", &clock, 99, "bob");
+    bob.call(|c| c.request_received(&r, &sig)).unwrap();
+    assert!(
+        bob.call(|c| c.requests())
+            .unwrap()
+            .requests
+            .iter()
+            .all(|r| r.name.as_str() != "alice")
+    );
+    let p = bob.call(|c| c.commit_approval(&pending)).unwrap();
+    assert_eq!(names(&p.aliases), ["al"]);
 }

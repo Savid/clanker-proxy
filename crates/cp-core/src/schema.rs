@@ -65,6 +65,7 @@ pub const STATEMENTS: &[&str] = &[
         url TEXT NOT NULL,
         key TEXT NOT NULL,
         previous_key TEXT,
+        aliases TEXT NOT NULL,
         expires_at INTEGER NOT NULL
     ) STRICT",
     "CREATE TABLE IF NOT EXISTS events (

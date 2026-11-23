@@ -16,7 +16,7 @@ use cp_api::{
     Approval, DaemonUrl, Error, ErrorKind, NewThread, PeerInput, PeeringRequest, Peers, ThreadRef,
     ThreadSummary,
 };
-use cp_core::{Attempt, Config, Core, EVENTS_PATH, Millis, Outcome, Runtime, SignedCall};
+use cp_core::{Attempt, Call, Config, Core, EVENTS_PATH, Millis, Outcome, Runtime, SignedCall};
 use cp_sqlite::{Sqlite, run};
 use cp_thread::{Action, Body, Name, Title};
 
@@ -173,8 +173,8 @@ pub fn ask(a: &mut Daemon, b: &mut Daemon) -> cp_api::Peer {
             })
         })
         .unwrap();
-    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
-    let receipt = b.call(|c| c.request_received(&request)).unwrap();
+    let (request, sig) = received(&call);
+    let receipt = b.call(|c| c.request_received(&request, &sig)).unwrap();
     let asked = a
         .call(|c| c.finish_add_peer(&b_name, &call.url, &receipt))
         .unwrap();
@@ -206,6 +206,30 @@ pub fn peer(a: &mut Daemon, b: &mut Daemon) {
     })
     .unwrap();
     b.call(|c| c.commit_approval(&pending)).unwrap();
+}
+
+/// A peering request as its recipient reads it: the request and its
+/// signature.
+pub fn received(call: &Call) -> (PeeringRequest, SignedCall) {
+    (
+        serde_json::from_slice(&call.body).unwrap(),
+        signed(&call.headers, call.path, &call.body),
+    )
+}
+
+/// The request a new daemon called `who` sends to the daemon `to`.
+pub fn request_from(who: &str, clock: &Clock, seed: u64, to: &str) -> (PeeringRequest, SignedCall) {
+    let mut d = Daemon::new(who, clock, seed);
+    let call = d
+        .call(|c| {
+            c.add_peer(PeerInput {
+                name: name(to),
+                url: url(&format!("https://{to}.test")),
+                note: None,
+            })
+        })
+        .unwrap();
+    received(&call)
 }
 
 /// The aliases an approval's acceptance offers.

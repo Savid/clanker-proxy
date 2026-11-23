@@ -246,14 +246,9 @@ fn pending_notifications_coalesce_and_peering_is_capped() {
 
     for n in 0..120u32 {
         clock.advance(Millis::MINUTE);
-        let req = cp_api::PeeringRequest {
-            name: name(&format!("p{n}")),
-            url: cp_api::DaemonUrl::try_from(format!("https://p{n}.test")).unwrap(),
-            key: cp_api::PublicKey::try_from(format!("{n:043}")).unwrap(),
-            note: None,
-            aliases: cp_api::Aliases::default(),
-        };
-        alice.call(|c| c.request_received(&req)).unwrap();
+        let (req, sig) =
+            common::request_from(&format!("p{n}"), &clock, u64::from(n) + 100, "alice");
+        alice.call(|c| c.request_received(&req, &sig)).unwrap();
     }
     let all = alice
         .call(|c| c.webhook_deliveries(&name("w"), None, Some(100), None))

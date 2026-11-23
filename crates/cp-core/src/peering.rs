@@ -122,7 +122,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
 
     fn live_op(&self) -> Result<Option<Row>, Error> {
         Ok(self.sql.query_one(
-            "SELECT request_id, name, url, key, previous_key FROM peering_op WHERE expires_at > ?",
+            "SELECT request_id, name, url, key, previous_key, aliases FROM peering_op WHERE expires_at > ?",
             &[self.now().0.into()],
         )?)
     }
@@ -393,12 +393,23 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             note,
             aliases: self.own_aliases()?,
         };
+        self.peering_call(url, &request)
+    }
+
+    /// The call sending `request` to the daemon at `url`, signed with this
+    /// daemon's key for that same key: the recipient's is not known yet.
+    /// The signature makes the request's name, URL and aliases the key
+    /// holder's, so a copied key cannot come with another URL.
+    pub fn peering_call(&self, url: DaemonUrl, request: &PeeringRequest) -> Result<Call, Error> {
+        let path = "/api/v1/peering-requests";
+        let body =
+            serde_json::to_vec(request).map_err(|e| err(ErrorKind::Internal, e.to_string()))?;
+        let headers = self.sign("POST", path, &self.key, &body)?;
         Ok(Call {
             url,
-            path: "/api/v1/peering-requests",
-            headers: Vec::new(),
-            body: serde_json::to_vec(&request)
-                .map_err(|e| err(ErrorKind::Internal, e.to_string()))?,
+            path,
+            headers,
+            body,
         })
     }
 
@@ -462,8 +473,20 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     }
 
     /// Stores a peering request from another daemon for the owner to
-    /// approve. Public, so rate-limited and capped.
-    pub fn request_received(&mut self, req: &PeeringRequest) -> Result<RequestReceipt, Error> {
+    /// approve, once `call` shows the key it gives signed it (see
+    /// [`Core::peering_call`]). Public, so rate-limited and capped.
+    pub fn request_received(
+        &mut self,
+        req: &PeeringRequest,
+        call: &SignedCall,
+    ) -> Result<RequestReceipt, Error> {
+        if call.key != req.key {
+            return Err(err(
+                ErrorKind::Unauthorized,
+                "a peering request must be signed with the key it gives",
+            ));
+        }
+        self.authenticate_requester(call)?;
         if req.key == self.key {
             return Err(err(
                 ErrorKind::Unprocessable,
@@ -530,6 +553,20 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         })
     }
 
+    /// Checks a peering request's signature: made with the key it gives,
+    /// for that same key, within five minutes. Needs no body, so the host
+    /// refuses a bad one before reading it.
+    pub fn authenticate_requester(&self, call: &SignedCall) -> Result<(), Error> {
+        let now = self.now().0.div_euclid(Millis::SECOND);
+        if (call.date - now).abs() > MAX_SKEW_SECS || !call.verifies(&call.key) {
+            return Err(err(
+                ErrorKind::Unauthorized,
+                "a peering request must be signed, within five minutes, with the key it gives",
+            ));
+        }
+        Ok(())
+    }
+
     /// Pending peering requests from the last week, oldest first.
     pub fn requests(&self) -> Result<RequestList, Error> {
         let rows = self.sql.query(
@@ -566,7 +603,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         let r = self
             .sql
             .query_one(
-                "SELECT name, url, key FROM requests WHERE id = ? AND at >= ?",
+                "SELECT name, url, key, aliases FROM requests WHERE id = ? AND at >= ?",
                 &[text(id.as_str()), now.plus(-REQUEST_TTL).0.into()],
             )?
             .ok_or_else(|| {
@@ -581,6 +618,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         };
         let url: DaemonUrl = r.parse(1)?;
         let key: PublicKey = r.parse(2)?;
+        let offered = r.text(3)?.to_string();
         let previous = self.approvable(&name, &url)?;
         if self.live_op()?.is_some() {
             return Err(err(
@@ -589,13 +627,14 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             ));
         }
         self.sql.execute(
-            "INSERT OR REPLACE INTO peering_op (slot, request_id, name, url, key, previous_key, expires_at) VALUES (1, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO peering_op (slot, request_id, name, url, key, previous_key, aliases, expires_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
             &[
                 text(id.as_str()),
                 text(&name),
                 text(url.as_str()),
                 text(key.as_str()),
                 previous.as_ref().map(|p| p.key.to_string()).into(),
+                offered.into(),
                 now.plus(CONFIRM_TTL).0.into(),
             ],
         )?;
@@ -635,13 +674,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 format!("{name} changed while approving; approve again"),
             ));
         }
-        let offered = match self.sql.query_one(
-            "SELECT aliases FROM requests WHERE id = ?",
-            &[text(pending.request.as_str())],
-        )? {
-            Some(r) => stored_aliases(r.text(0)?)?,
-            None => Aliases::default(),
-        };
+        let offered = stored_aliases(op.text(5)?)?;
         let now = self.now();
         // The same daemon under another name, which has moved URL, is
         // forgotten as if removed. A peer of the same name and URL is
@@ -826,12 +859,20 @@ impl<S: Sql, R: Runtime> Core<S, R> {
 
     /// The daemon with `key`, which the host has authenticated, approved this
     /// one's request: the peer is active, keeps the aliases it offers that
-    /// are free here, and events queued for them are due now.
+    /// are free here if it was requested, and events queued for them are
+    /// due now.
     pub fn accepted(&mut self, key: &PublicKey, offered: &Aliases) -> Result<(), Error> {
         let name = self
             .peer_with_key(key)?
             .ok_or_else(|| err(ErrorKind::Unauthorized, "unknown peer key"))?;
-        self.keep_offered(&name, offered.as_slice())?;
+        // Only while this daemon is asking: any active peer can sign an
+        // acceptance, and would otherwise add names whenever it liked.
+        if self
+            .load_peer(&name)?
+            .is_some_and(|p| p.status == PeerStatus::Requested)
+        {
+            self.keep_offered(&name, offered.as_slice())?;
+        }
         self.peer_heard_from(&name)
     }
 

@@ -129,7 +129,9 @@ run --name tester --alias tess --worker cp-test --url "http://127.0.0.1:$port" |
 grep -q 'owner tester (also tess)' "$work/out" || fail "alias: summary"
 grep -q '^/api/v1/me/aliases {"aliases":\["tess"\]}$' "$work/put" || fail "alias: not offered"
 run --name tester --alias tester --worker cp-test && fail "accepted the name as an alias"
+grep -q 'alias tester is already your name' "$work/out" || fail "alias: own name message"
 run --name tester --alias Bad_Alias --worker cp-test && fail "accepted an invalid alias"
+grep -q 'alias Bad_Alias: lower-case' "$work/out" || fail "alias: invalid message"
 
 # Amp: the prompt for the orb and the two values; with no terminal, the
 # token appears as the file that holds it.

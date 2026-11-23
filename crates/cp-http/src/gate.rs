@@ -58,7 +58,7 @@ impl Gate {
             Access::Owner | Access::OwnerOrAgent => {
                 token.starts_with(prefix::OWNER) || token.starts_with(prefix::AGENT)
             }
-            Access::Peer => signed,
+            Access::Peer | Access::Requester => signed,
         };
         if !fits {
             return Err(Box::new(problem(&unauthorized())));
@@ -146,9 +146,14 @@ mod tests {
             413
         );
         assert!(matches!(
-            g.check(&post, "/api/v1/peering-requests", None, false, Some(10)),
+            g.check(&post, "/api/v1/peering-requests", None, true, Some(10)),
             Ok(Op::RequestPeering)
         ));
+        assert_eq!(
+            status(g.check(&post, "/api/v1/peering-requests", None, false, Some(10))),
+            401,
+            "a peering request is signed"
+        );
         // Calls between daemons need a signature, and a bearer will not do.
         let events = "/api/v1/federation/events";
         assert_eq!(

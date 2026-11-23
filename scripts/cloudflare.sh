@@ -371,10 +371,12 @@ done
 # Names are lower-case letters, digits and hyphens, so safe in JSON as is.
 called=$name
 if [ -n "$alias" ]; then
-    curl -fsS -X PUT -H @"$tmp/auth" -H 'content-type: application/json' \
-        -d "{\"aliases\":[\"$alias\"]}" "$url/api/v1/me/aliases" >/dev/null ||
-        fail "could not set the alias; set it with: cpctl alias $alias"
-    called="$name (also $alias)"
+    if curl -fsS -X PUT -H @"$tmp/auth" -H 'content-type: application/json' \
+        -d "{\"aliases\":[\"$alias\"]}" "$url/api/v1/me/aliases" >/dev/null 2>&1; then
+        called="$name (also $alias)"
+    else
+        say "Could not set the alias; set it later with: cpctl alias $alias"
+    fi
 fi
 
 say ""
