@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="t d">
-<title id="t">An Amp orb working your inbox</title>
-<desc id="d">A peer's daemon delivers a thread event to your cpd. cpd sends a signed webhook, carrying metadata only, to the inbox thread in an Amp orb, where the cp-inbox plugin routes it to one conversation per cpd thread, under that peer's thread. The conversation's agent reads the thread with cpctl show and answers with cpctl, using an agent token; cpd delivers the answer to the peer.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="440" viewBox="0 0 960 440" role="img" aria-labelledby="t d">
+<title id="t">Asking a peer through your Amp inbox</title>
+<desc id="d">Your thread asks with ask_peer, which hands the question to bob's peer thread in the Amp orb's inbox. That thread sends it with cp_send through your cpd to bob's cpd. Bob's answer reaches your cpd, which wakes the orb with a signed webhook carrying IDs only. The inbox routes it to a conversation under bob's thread, which reads bob's words with cpctl in its sandbox and sends your thread a checked short form with cp_answer, never bob's words.</desc>
 <defs>
   <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28"/></pattern>
-  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   <marker id="mc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#22d3ee" stroke-width="1.6"/></marker>
   <marker id="mp" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#f472b6" stroke-width="1.6"/></marker>
   <marker id="ma" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#fbbf24" stroke-width="1.6"/></marker>
+  <marker id="mw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#e2e8f0" stroke-width="1.6"/></marker>
 </defs>
 <style>
   text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"DejaVu Sans Mono",monospace;fill:#e2e8f0}
@@ -14,69 +14,85 @@
   .xs{font-size:11px;fill:#7c8aa0;letter-spacing:.2em;font-weight:700}
   .c{fill:#22d3ee}.p{fill:#f472b6}.a{fill:#fbbf24}
   .box{fill:#0b1220}
-  .an{animation-duration:10s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
-  @keyframes d1{0%{opacity:0;transform:translateX(0)}2%{opacity:1}13%{opacity:1;transform:translateX(86px)}15%,100%{opacity:0;transform:translateX(86px)}}
-  @keyframes d2{0%,15%{opacity:0;transform:translateX(0)}17%{opacity:1}28%{opacity:1;transform:translateX(96px)}30%,100%{opacity:0;transform:translateX(96px)}}
-  @keyframes g1{0%,28%{opacity:0}31%{opacity:1}40%,100%{opacity:0}}
-  @keyframes d3{0%,33%{opacity:0;transform:translateY(0)}35%{opacity:1}42%{opacity:1;transform:translateY(40px)}44%,100%{opacity:0;transform:translateY(40px)}}
-  @keyframes g2{0%,42%{opacity:0}45%{opacity:1}58%,100%{opacity:0}}
-  @keyframes d4{0%,57%{opacity:0;transform:translate(0,0)}59%{opacity:1}66%{opacity:1;transform:translate(-178px,0)}72%{opacity:1;transform:translate(-178px,-90px)}74%,100%{opacity:0;transform:translate(-178px,-90px)}}
-  @keyframes d5{0%,74%{opacity:0;transform:translateX(0)}76%{opacity:1}87%{opacity:1;transform:translateX(-86px)}89%,100%{opacity:0;transform:translateX(-86px)}}
-  @keyframes k1{0%,14%{opacity:1}16%,100%{opacity:0}}
-  @keyframes k2{0%,14%{opacity:0}16%,42%{opacity:1}44%,100%{opacity:0}}
-  @keyframes k3{0%,42%{opacity:0}44%,73%{opacity:1}75%,100%{opacity:0}}
-  @keyframes k4{0%,73%{opacity:0}75%,96%{opacity:1}100%{opacity:0}}
-  @media (prefers-reduced-motion:reduce){.an{animation:none!important}.dot,.flash{display:none}.cap{display:none}.cap1{display:inline}}
+  .f{fill:none;stroke-width:1.6;stroke-dasharray:3 5}
+  .m{animation:march 1.2s linear infinite}
+  @keyframes march{to{stroke-dashoffset:-16}}
+  .an{animation-duration:8s;animation-iteration-count:infinite;animation-timing-function:ease-in-out}
+  @keyframes s1{0%,22%{opacity:1}26%,96%{opacity:.25}100%{opacity:1}}
+  @keyframes s2{0%,22%{opacity:.25}26%,47%{opacity:1}51%,100%{opacity:.25}}
+  @keyframes s3{0%,47%{opacity:.25}51%,72%{opacity:1}76%,100%{opacity:.25}}
+  @keyframes s4{0%,72%{opacity:.25}76%,96%{opacity:1}100%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){.an,.m{animation:none!important}}
 </style>
-<rect width="960" height="360" rx="18" fill="#070a10"/>
-<rect width="960" height="360" rx="18" fill="url(#grid)"/>
-<rect x=".5" y=".5" width="959" height="359" rx="18" fill="none" stroke="#1d2635"/>
+<rect width="960" height="440" rx="18" fill="#070a10"/>
+<rect width="960" height="440" rx="18" fill="url(#grid)"/>
+<rect x=".5" y=".5" width="959" height="439" rx="18" fill="none" stroke="#1d2635"/>
 
-<!-- peer and your cpd -->
-<rect x="40" y="70" width="170" height="74" rx="12" class="box" stroke="#f472b6" stroke-width="1.6"/>
-<text x="58" y="100" class="h p">peer's cpd</text>
-<text x="58" y="122" class="s">bob, anywhere</text>
-<rect x="300" y="70" width="190" height="74" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
-<text x="318" y="100" class="h c">your cpd</text>
-<text x="318" y="122" class="s">always on, public URL</text>
-<path d="M212 94H296" fill="none" stroke="#f472b6" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mp)"/>
-<path d="M298 122H214" fill="none" stroke="#22d3ee" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mc)"/>
+<!-- daemons -->
+<rect x="40" y="60" width="170" height="74" rx="12" class="box" stroke="#f472b6" stroke-width="1.6"/>
+<text x="58" y="90" class="h p">bob's cpd</text>
+<text x="58" y="112" class="s">anywhere</text>
+<rect x="290" y="60" width="190" height="74" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
+<text x="308" y="90" class="h c">your cpd</text>
+<text x="308" y="112" class="s">always on, public URL</text>
 
-<!-- orb -->
-<rect x="572" y="36" width="352" height="270" rx="16" fill="none" stroke="#fbbf24" stroke-opacity=".45" stroke-dasharray="4 6"/>
-<text x="588" y="56" class="xs a">AMP ORB</text>
-<rect x="590" y="70" width="300" height="74" rx="12" class="box" stroke="#fbbf24" stroke-width="1.6"/>
-<rect x="590" y="70" width="300" height="74" rx="12" fill="none" stroke="#fbbf24" stroke-width="2.5" filter="url(#glow)" class="an flash" style="animation-name:g1;opacity:0"/>
-<text x="608" y="100" class="h a">inbox thread</text>
-<text x="608" y="122" class="s">cp-inbox plugin · owns the webhook</text>
-<path d="M492 102H586" fill="none" stroke="#fbbf24" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#ma)"/>
-<text x="531" y="126" class="e a" text-anchor="middle">signed</text>
-<text x="531" y="141" class="e a" text-anchor="middle">webhook</text>
-<path d="M740 146V182" fill="none" stroke="#fbbf24" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#ma)"/>
-<rect x="602" y="196" width="300" height="80" rx="12" class="box" stroke="#334155"/>
-<rect x="596" y="190" width="300" height="80" rx="12" class="box" stroke="#475569"/>
-<rect x="590" y="184" width="300" height="80" rx="12" class="box" stroke="#e2e8f0" stroke-opacity=".7" stroke-width="1.4"/>
-<rect x="590" y="184" width="300" height="80" rx="12" fill="none" stroke="#e2e8f0" stroke-width="2.5" filter="url(#glow)" class="an flash" style="animation-name:g2;opacity:0"/>
-<text x="608" y="212" class="h">conversation</text>
-<text x="608" y="234" class="s">per cpd thread, under bob's thread</text>
-<text x="608" y="252" class="s">sandboxed; reads, codes, answers</text>
-<path d="M588 224H395V148" fill="none" stroke="#22d3ee" stroke-opacity=".6" stroke-dasharray="2 5" marker-end="url(#mc)"/>
-<text x="410" y="246" class="e c">cpctl show · reply</text>
-<text x="410" y="262" class="s">via the plugin</text>
+<!-- the orb -->
+<rect x="560" y="28" width="364" height="278" rx="16" fill="none" stroke="#fbbf24" stroke-opacity=".45" stroke-dasharray="4 6"/>
+<text x="576" y="45" class="xs a">AMP ORB</text>
+<rect x="580" y="52" width="324" height="52" rx="12" class="box" stroke="#fbbf24" stroke-width="1.6"/>
+<text x="598" y="75" class="h a">inbox thread</text>
+<text x="598" y="94" class="s">cp-inbox plugin · gets the webhook</text>
+<rect x="580" y="120" width="324" height="50" rx="12" class="box" stroke="#475569" stroke-width="1.4"/>
+<text x="598" y="142" class="h">bob (bobby)</text>
+<text x="598" y="160" class="s">peer thread · sends with cp_send</text>
+<rect x="580" y="190" width="324" height="104" rx="12" class="box" stroke="#e2e8f0" stroke-opacity=".7" stroke-width="1.4"/>
+<rect x="588" y="198" width="308" height="88" rx="8" fill="none" stroke="#475569" stroke-dasharray="3 4"/>
+<text x="822" y="214" class="xs">SANDBOX</text>
+<text x="600" y="218" class="h">conversation</text>
+<text x="600" y="238" class="s">one per cpd thread</text>
+<text x="600" y="256" class="s">reads bob's words with cpctl</text>
+<text x="600" y="274" class="s">no secrets · its own directory</text>
 
-<!-- dots -->
-<circle cx="212" cy="94" r="4" fill="#f472b6" filter="url(#glow)" class="an dot" style="animation-name:d1;opacity:0"/>
-<circle cx="492" cy="102" r="4" fill="#fbbf24" filter="url(#glow)" class="an dot" style="animation-name:d2;opacity:0"/>
-<circle cx="740" cy="146" r="4" fill="#fbbf24" filter="url(#glow)" class="an dot" style="animation-name:d3;opacity:0"/>
-<circle cx="574" cy="238" r="4" fill="#22d3ee" filter="url(#glow)" class="an dot" style="animation-name:d4;opacity:0"/>
-<circle cx="298" cy="122" r="4" fill="#22d3ee" filter="url(#glow)" class="an dot" style="animation-name:d5;opacity:0"/>
+<!-- your thread -->
+<rect x="580" y="336" width="324" height="60" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
+<text x="598" y="360" class="h c">your thread</text>
+<text x="598" y="380" class="s">any project · "is bobby free?"</text>
 
-<!-- captions -->
-<g font-size="14">
-  <text x="40" y="306" class="an cap cap1" style="animation-name:k1"><tspan class="p">01</tspan>  a peer opens or answers a thread</text>
-  <text x="40" y="306" class="an cap" style="animation-name:k2;opacity:0"><tspan class="a">02</tspan>  cpd wakes the orb; the inbox routes it</text>
-  <text x="40" y="306" class="an cap" style="animation-name:k3;opacity:0"><tspan class="c">03</tspan>  the conversation reads and answers</text>
-  <text x="40" y="306" class="an cap" style="animation-name:k4;opacity:0"><tspan class="c">04</tspan>  cpd delivers it to the peer</text>
+<!-- 1: you ask -->
+<g class="an" style="animation-name:s1">
+  <path d="M906 366H940V145H910" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text transform="translate(953 256) rotate(-90)" class="e c" text-anchor="middle">ask_peer</text>
 </g>
-<text x="40" y="332" class="s">webhooks carry metadata only · peer text arrives through cpctl show, quoted</text>
+<!-- 2: bob's thread sends it -->
+<g class="an" style="animation-name:s2">
+  <path d="M578 158H420V140" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="436" y="176" class="e c">cp_send</text>
+  <path d="M288 112H216" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+</g>
+<!-- 3: bob answers; cpd wakes the orb -->
+<g class="an" style="animation-name:s3">
+  <path d="M212 86H284" class="f m" stroke="#f472b6" marker-end="url(#mp)"/>
+  <path d="M482 78H574" class="f m" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <text x="528" y="98" class="e a" text-anchor="middle">signed</text>
+  <text x="528" y="112" class="e a" text-anchor="middle">webhook</text>
+  <path d="M742 106V114" class="f" stroke="#fbbf24" marker-end="url(#ma)"/>
+  <path d="M742 172V184" class="f" stroke="#fbbf24" marker-end="url(#ma)"/>
+</g>
+<!-- 4: the conversation reads it and reports in short -->
+<g class="an" style="animation-name:s4">
+  <path d="M578 240H360V140" class="f m" stroke="#e2e8f0" marker-end="url(#mw)"/>
+  <text x="376" y="232" class="e">cpctl show · close</text>
+  <text x="376" y="256" class="s">via the plugin's broker</text>
+  <path d="M742 296V330" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
+  <text x="752" y="322" class="e c">cp_answer: yes, Fri 18:00</text>
+</g>
+
+<!-- steps -->
+<g font-size="12">
+  <text x="40" y="304"><tspan class="c" font-weight="700">1</tspan>  you ask from any thread; ask_peer hands it to bob's thread</text>
+  <text x="40" y="326"><tspan class="c" font-weight="700">2</tspan>  bob's thread sends it with cp_send; cpd delivers it</text>
+  <text x="40" y="348"><tspan class="p" font-weight="700">3</tspan>  bob answers; cpd wakes the orb with a signed webhook</text>
+  <text x="40" y="370"><tspan class="c" font-weight="700">4</tspan>  a sandboxed conversation reads it; your thread gets a short form</text>
+</g>
+<text x="40" y="418" class="s">webhooks carry IDs and a state, never peer text · bob's words stay in the conversation</text>
 </svg>

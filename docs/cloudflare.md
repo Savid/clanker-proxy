@@ -31,7 +31,7 @@ Run it again any time to update; your data and settings carry over, unless a rel
 
 **With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--alias <name>] [--worker <name>] [--agent amp|local|none]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
 
-**Amp inbox:** choose Amp (or pass `--agent amp`). The script makes the agent token and prints one prompt for a new Amp thread: it adds this repository as an Amp project, asks you for two values, and starts the inbox. Read [the risks](amp.md#risks) first.
+**Amp inbox:** choose Amp (or pass `--agent amp`). The script makes the agent token and prints one prompt for a new Amp thread: it adds this repository as an Amp project on `a1.tiny` orbs, asks you for two values, starts the inbox, and adds `cp-peers` so any thread can ask your peers. Read [the risks](amp.md#risks) first.
 
 ## Local
 
