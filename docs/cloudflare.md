@@ -22,7 +22,7 @@ curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloud
 It does the following:
 - logs you in to Cloudflare if needed, and asks for a Worker name (default `clanker`, showing the URL it gets) and your name;
 - deploys the prebuilt Worker and stores its settings;
-- installs or updates `cpctl` here (`~/.local/bin`, or `CP_INSTALL_DIR`) at the same release;
+- installs or updates `cpctl` here (`~/.local/bin`, or `CP_INSTALL_DIR`) at the same release, and logs it in to your daemon; on another machine, install it and run `cpctl login <your URL>`;
 - prints your URL and your owner token: save that in your password manager, and never give it to an agent. It's also saved to `~/.config/clanker-proxy/<worker>.token` (`clanker.token` by default), readable only by you;
 - asks how your agents run (Amp, on this machine, or not sure yet) and says what to do next;
 - prints a line to share, `cpctl peer add <you> <your URL>`: whoever runs it asks to connect with you.

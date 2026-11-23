@@ -5,6 +5,7 @@
 mod cli;
 mod client;
 mod fail;
+mod login;
 mod output;
 mod update;
 mod webhooks;
@@ -18,6 +19,7 @@ use cp_api::{
     RequestList, ThreadAction, ThreadList, ThreadSummary,
 };
 use cp_thread::{Action, At, Body, Kind, Label, Name, Title};
+use secrecy::ExposeSecret as _;
 use serde::Serialize;
 
 use crate::cli::{COMMANDS, Parsed};
@@ -47,6 +49,10 @@ pub struct Env {
     pub releases: Option<String>,
     /// Where to remember the answer for a day.
     pub cache: Option<String>,
+    /// The configuration directory that holds `clanker-proxy/login`.
+    pub config: Option<String>,
+    /// The terminal `cpctl login` asks on; `None` means there is none.
+    pub tty: Option<String>,
 }
 
 impl Env {
@@ -63,6 +69,8 @@ impl Env {
             cache: var("XDG_CACHE_HOME")
                 .or_else(|| var("HOME").map(|h| format!("{h}/.cache")))
                 .map(|d| format!("{d}/clanker-proxy/latest-release")),
+            config: var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| format!("{h}/.config"))),
+            tty: Some("/dev/tty".into()),
         }
     }
 
@@ -110,14 +118,39 @@ pub async fn run(
     let Some(command) = parsed.command else {
         return report(&Failure::usage("no command"), json);
     };
-    let url = parsed
-        .value("url")
-        .map(str::to_string)
-        .or_else(|| env.url.clone())
-        .unwrap_or_else(|| "http://127.0.0.1:18471".into());
-    let token = parsed
-        .value("token")
-        .map_or_else(|| env.token(), str::to_string);
+    match command.name {
+        "login" => return login(env, &parsed, json).await,
+        "logout" => return logout(env, json),
+        _ => {}
+    }
+    // The saved login is a pair: any URL or token from a flag or the
+    // environment replaces it whole, so a token never goes to a daemon it
+    // was not saved for.
+    let given = parsed.value("url").is_some()
+        || parsed.value("token").is_some()
+        || env.url.is_some()
+        || env.token.is_some();
+    let saved = if given {
+        None
+    } else {
+        match login::load(env) {
+            Ok(s) => s,
+            Err(f) => return report(&f, json),
+        }
+    };
+    let (url, token) = match saved {
+        Some(s) => (s.url, s.token.expose_secret().to_string()),
+        None => (
+            parsed
+                .value("url")
+                .map(str::to_string)
+                .or_else(|| env.url.clone())
+                .unwrap_or_else(|| "http://127.0.0.1:18471".into()),
+            parsed
+                .value("token")
+                .map_or_else(|| env.token(), str::to_string),
+        ),
+    };
     let mut app = match Client::new(&url, &token, command.name) {
         Ok(client) => App {
             client,
@@ -144,6 +177,117 @@ pub async fn run(
             o.stdout = app.stdout;
             o
         }
+    }
+}
+
+/// `cpctl login <cpd-url>`: checks a token with cpd, then saves both.
+async fn login(env: &Env, p: &Parsed, json: bool) -> Outcome {
+    let done = async {
+        if p.value("token").is_some() {
+            return Err(Failure::usage(
+                "cpctl login takes no --token: a token on the command line stays in your shell history",
+            )
+            .hint("pass --token-file <file>, or let it ask"));
+        }
+        let url = p
+            .args
+            .first()
+            .map_or_default(|u| u.trim().trim_end_matches('/').to_string());
+        let token = if let Some(file) = p.value("token-file") {
+            login::read_file(file)?
+        } else {
+            let tty = env.tty.as_deref().ok_or_else(|| {
+                Failure::usage("cpctl login needs a terminal to ask for the token")
+                    .hint("pass --token-file <file> with the token in it")
+            })?;
+            login::read_terminal(tty, &format!("Token for {url} (owner or agent): "))?
+        };
+        if !login::looks_like_token(&token) {
+            return Err(Failure::usage(
+                "that is not a cpctl token: an owner token starts cpo_, an agent token cpa_",
+            ));
+        }
+        let client = Client::new(&url, token.expose_secret(), "login")?;
+        let (me, raw): (Me, String) = client.get("/api/v1/me").await.map_err(|mut f| {
+            if f.exit == EXIT_AUTH {
+                f.hint = Some("cpd does not accept that token; nothing was saved".into());
+            }
+            f
+        })?;
+        let file = login::save(env, &url, &token)?;
+        Ok((me, raw, file, client.is_agent(), url))
+    }
+    .await;
+    let (me, raw, file, agent, url) = match done {
+        Ok(d) => d,
+        Err(mut f) => {
+            if f.exit == EXIT_USAGE && f.hint.is_none() {
+                f.hint = Some("cpctl help login".into());
+            }
+            return report(&f, json);
+        }
+    };
+    let mut s = String::new();
+    if json {
+        let _ = writeln!(s, "{}", raw.trim());
+    } else {
+        let who = if agent {
+            let scope = me.peers.as_ref().filter(|p| !p.is_empty()).map_or_else(
+                || "every peer".to_string(),
+                |p| {
+                    p.as_slice()
+                        .iter()
+                        .map(Name::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                },
+            );
+            format!("{} with an agent token (reaches {scope})", me.name)
+        } else {
+            format!("{} with the owner token", called(&me))
+        };
+        let _ = writeln!(
+            s,
+            "logged in to {who} at {url}; saved in {} (only you can read it)\ncpctl uses it unless --url, --token, CP_URL or CP_TOKEN is set",
+            file.display()
+        );
+        let first = if agent {
+            step("cpctl inbox", "see what is waiting on you")
+        } else {
+            step("cpctl requests", "see who has asked to connect")
+        };
+        next(&mut s, &[first, step("cpctl logout", "forget this login")]);
+    }
+    Outcome {
+        exit: 0,
+        stdout: s,
+        stderr: String::new(),
+    }
+}
+
+/// `cpctl logout`: forgets the saved login.
+fn logout(env: &Env, json: bool) -> Outcome {
+    let removed = match login::remove(env) {
+        Ok(r) => r,
+        Err(f) => return report(&f, json),
+    };
+    let mut s = String::new();
+    if json {
+        s.push_str("{}\n");
+    } else {
+        match removed {
+            None => s.push_str("no saved login\n"),
+            Some((file, url)) => {
+                let of = url.map_or_default(|u| format!(" of {u}"));
+                let _ = writeln!(s, "logged out{of}: removed {}", file.display());
+            }
+        }
+        next(&mut s, &[step("cpctl login <cpd-url>", "log in again")]);
+    }
+    Outcome {
+        exit: 0,
+        stdout: s,
+        stderr: String::new(),
     }
 }
 

@@ -43,7 +43,7 @@ EOF
 
 # A terminal to ask on and show secrets to, even though this script
 # arrives on standard input.
-# CP_NO_TTY and CP_WRANGLER exist for scripts/cloudflare_test.sh.
+# CP_NO_TTY, CP_WRANGLER and CP_CPCTL exist for scripts/cloudflare_test.sh.
 tty=
 if [ -z "${CP_NO_TTY:-}" ] && (: </dev/tty >/dev/tty) 2>/dev/null; then
     tty=/dev/tty
@@ -454,8 +454,8 @@ fi
 # The owner approves peers and manages tokens with cpctl here, so it is kept
 # at the Worker's release. Not fatal: the Worker is up either way.
 bin=${CP_INSTALL_DIR:-$HOME/.local/bin}
-cli=
-if [ "$version" != local ]; then
+cli=${CP_CPCTL:-}
+if [ -z "$cli" ] && [ "$version" != local ]; then
     if [ "$("$bin/cpctl" --version 2>/dev/null || true)" = "cpctl $version" ]; then
         cli=$bin/cpctl
     elif curl -fsSL -o "$tmp/install.sh" "$base/install.sh" &&
@@ -472,6 +472,11 @@ if [ "$version" != local ]; then
         esac
     fi
 fi
+# cpctl here then reaches the daemon with nothing to export.
+logged_in=
+if [ -n "$cli" ] && "$cli" login "$url" --token-file "$token_file" >/dev/null 2>&1; then
+    logged_in=yes
+fi
 
 # Prints a line holding a secret: on a terminal with the value, otherwise
 # with where the value is saved, so it stays out of logs and transcripts.
@@ -484,8 +489,14 @@ secret_line() { # secret_line <label> <file>
 }
 
 use_here() {
-    [ -n "$cli" ] || copy "     " "curl -fsSL $repo/releases/latest/download/install.sh | sh"
-    copy "     " "export CP_URL=$url CP_TOKEN=\"\$(cat $token_file)\""
+    if [ -n "$logged_in" ]; then
+        done_ "cpctl here is logged in to your daemon."
+        note "On another machine, install cpctl and run:"
+        copy "     " "cpctl login $url"
+    else
+        [ -n "$cli" ] || copy "     " "curl -fsSL $repo/releases/latest/download/install.sh | sh"
+        copy "     " "cpctl login $url --token-file $token_file"
+    fi
 }
 
 if [ "$agent" = amp ]; then

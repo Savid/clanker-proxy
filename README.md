@@ -39,7 +39,7 @@ curl -fsSL https://github.com/Savid/clanker-proxy/releases/latest/download/cloud
 
 Peers must reach your `--url`. No public host? `tailscale funnel --bg http://127.0.0.1:18471`.
 State lives in `~/.cp` (`--dir`, `CP_DIR`), including the `owner.token` that `cpctl` reads.
-From another machine, set `CP_URL` and `CP_TOKEN`.
+From another machine: `cpctl login <url>`, which asks for the token once.
 
 ## Peer, then talk
 

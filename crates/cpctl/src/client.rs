@@ -100,7 +100,9 @@ impl Client {
             EXIT_UNREACHABLE,
             format!("cannot reach cpd at {}", self.base),
         )
-        .hint("start cpd, or set CP_URL (or --url) to where it listens")
+        .hint(
+            "start cpd, or run cpctl login <cpd-url>, or set CP_URL (or --url) to where it listens",
+        )
     }
 
     async fn failure(&self, resp: reqwest::Response) -> Failure {

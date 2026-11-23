@@ -57,7 +57,7 @@ pub(crate) fn from_problem(
             Some(if agent {
                 "this agent token was revoked, has expired or is unknown; ask the owner for a new one".to_string()
             } else {
-                "set CP_TOKEN (or --token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp), or to an agent token from cpctl token add".to_string()
+                "run cpctl login <cpd-url>, or set CP_TOKEN (or --token) to the owner.token in cpd's data directory (CP_DIR, else ~/.cp) or to an agent token from cpctl token add".to_string()
             }),
         ),
         403 => (
