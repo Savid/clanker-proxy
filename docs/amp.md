@@ -81,6 +81,9 @@ cpctl peer alias tester bobby rob
 cpctl peer unalias tester rob
 ```
 
+`cpctl alias andrew` offers peers another name for you: whoever you peer with
+next, either way round, gets it as an alias if it is free there.
+
 Names and aliases share one namespace, so one already taken is refused: give
 the peer another name. cpd takes an alias wherever it takes a name, except to
 remove a peer, and answers with the name. The inbox titles each peer's thread

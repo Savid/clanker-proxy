@@ -4,7 +4,7 @@
 /// The version `STATEMENTS` create. Before 1.0 a storage change bumps
 /// this instead of adding a migration: earlier data is refused, and its
 /// owner starts again from empty storage.
-pub const BASELINE: u32 = 6;
+pub const BASELINE: u32 = 7;
 
 /// Changes since the baseline, in order: entry `i` moves stored data from
 /// version `BASELINE + i` to the next. Append only: deployed data has
@@ -50,6 +50,7 @@ pub const STATEMENTS: &[&str] = &[
         url TEXT NOT NULL,
         key TEXT NOT NULL,
         note TEXT,
+        aliases TEXT NOT NULL,
         at INTEGER NOT NULL
     ) STRICT",
     "CREATE TABLE IF NOT EXISTS request_times (
@@ -64,6 +65,7 @@ pub const STATEMENTS: &[&str] = &[
         url TEXT NOT NULL,
         key TEXT NOT NULL,
         previous_key TEXT,
+        aliases TEXT NOT NULL,
         expires_at INTEGER NOT NULL
     ) STRICT",
     "CREATE TABLE IF NOT EXISTS events (

@@ -3,19 +3,14 @@
 
 mod common;
 
-use common::{Clock, Daemon, kind, name, peer, settle, signed, url};
-use cp_api::{Approval, ErrorKind, PeerInput, PeerStatus, PeeringRequest, PublicKey};
+use common::{Clock, Daemon, kind, name, peer, received, request_from, settle, signed, url};
+use cp_api::{Approval, ErrorKind, PeerInput, PeerStatus, PeeringRequest};
 use cp_core::{Config, Core, EVENTS_PATH, Millis, REQUESTS_PER_MINUTE};
 use cp_sqlite::Sqlite;
 use cp_thread::Action;
 
-fn request(n: u32) -> PeeringRequest {
-    PeeringRequest {
-        name: name(&format!("p{n}")),
-        url: url(&format!("https://p{n}.test")),
-        key: PublicKey::try_from(format!("{n:043}")).unwrap(),
-        note: None,
-    }
+fn request(n: u32, clock: &Clock) -> (PeeringRequest, cp_core::SignedCall) {
+    request_from(&format!("p{n}"), clock, u64::from(n) + 100, "bob")
 }
 
 #[test]
@@ -72,8 +67,8 @@ fn add_peer_refusals() {
     let call = carol
         .call(|c| c.add_peer(ask("bob", "https://bob.test")))
         .unwrap();
-    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
-    bob.call(|c| c.request_received(&request)).unwrap();
+    let (request, sig) = received(&call);
+    bob.call(|c| c.request_received(&request, &sig)).unwrap();
     let e = bob
         .call(|c| c.add_peer(ask("carol", "https://carol.test")))
         .unwrap_err();
@@ -116,27 +111,84 @@ fn asking_saves_nothing_until_the_other_daemon_answers() {
             })
         })
         .unwrap();
-    assert!(call.headers.is_empty(), "a peering request is not signed");
+    assert!(!call.headers.is_empty(), "signed with alice's key");
     assert_eq!(
         kind(&alice.call(|c| c.peer(&name("bob"), None))),
         ErrorKind::NotFound
     );
     // The receipt carries bob's key; alice records bob with it.
-    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
+    let (request, sig) = received(&call);
     assert_eq!(&request.key, alice.core.public_key());
-    let receipt = bob.call(|c| c.request_received(&request)).unwrap();
+    let receipt = bob.call(|c| c.request_received(&request, &sig)).unwrap();
     assert_eq!(&receipt.key, bob.core.public_key());
     let p = alice
         .call(|c| c.finish_add_peer(&name("bob"), &call.url, &receipt))
         .unwrap();
     assert_eq!((p.status, p.code), (PeerStatus::Requested, receipt.code));
     // A daemon cannot peer with itself.
-    let mut own = request.clone();
-    own.key = bob.core.public_key().clone();
+    let own = bob
+        .call(|c| {
+            c.add_peer(PeerInput {
+                name: name("me"),
+                url: url("https://bob.test"),
+                note: None,
+            })
+        })
+        .unwrap();
+    let (own, own_sig) = received(&own);
     assert_eq!(
-        kind(&bob.call(|c| c.request_received(&own))),
+        kind(&bob.call(|c| c.request_received(&own, &own_sig))),
         ErrorKind::Unprocessable
     );
+}
+
+#[test]
+fn a_peering_request_is_signed_with_the_key_it_gives() {
+    let clock = Clock::new();
+    let mut bob = Daemon::new("bob", &clock, 2);
+    let asker = |who: &str, seed: u64| {
+        Daemon::new(who, &clock, seed)
+            .call(|c| {
+                c.add_peer(PeerInput {
+                    name: name("bob"),
+                    url: url("https://bob.test"),
+                    note: None,
+                })
+            })
+            .unwrap()
+    };
+    let (alice_call, mallory_call) = (asker("alice", 1), asker("mallory", 3));
+    let (alice, sig) = received(&alice_call);
+    // The request as sent with other contents under the same signature.
+    let changed = |call: &cp_core::Call, change: &dyn Fn(&mut PeeringRequest)| {
+        let mut r: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
+        change(&mut r);
+        let body = serde_json::to_vec(&r).unwrap();
+        (r, signed(&call.headers, call.path, &body))
+    };
+    // Alice's key with another URL, or other aliases: only alice can sign
+    // that, so her code cannot vouch for someone else's daemon.
+    for (req, sig) in [
+        changed(&alice_call, &|r| r.url = url("https://mallory.test")),
+        changed(&alice_call, &|r| {
+            r.aliases = cp_api::Aliases::try_from(vec![name("boss")]).unwrap();
+        }),
+        changed(&mallory_call, &|r| r.key = alice.key.clone()),
+    ] {
+        assert_eq!(
+            kind(&bob.call(|c| c.request_received(&req, &sig))),
+            ErrorKind::Unauthorized
+        );
+    }
+    clock.advance(6 * Millis::MINUTE);
+    assert_eq!(
+        kind(&bob.call(|c| c.request_received(&alice, &sig))),
+        ErrorKind::Unauthorized,
+        "too old"
+    );
+    clock.advance(-6 * Millis::MINUTE);
+    bob.call(|c| c.request_received(&alice, &sig)).unwrap();
+    assert_eq!(bob.call(|c| c.requests()).unwrap().requests.len(), 1);
 }
 
 /// A daemon that has asked bob to peer, through the real request.
@@ -151,8 +203,8 @@ fn asked(n: u64, clock: &Clock, bob: &mut Daemon) -> Daemon {
             })
         })
         .unwrap();
-    let request: PeeringRequest = serde_json::from_slice(&call.body).unwrap();
-    let receipt = bob.call(|c| c.request_received(&request)).unwrap();
+    let (request, sig) = received(&call);
+    let receipt = bob.call(|c| c.request_received(&request, &sig)).unwrap();
     d.call(|c| c.finish_add_peer(&name("bob"), &call.url, &receipt))
         .unwrap();
     d
@@ -274,15 +326,18 @@ fn public_requests_are_limited() {
     let clock = Clock::new();
     let mut bob = Daemon::new("bob", &clock, 2);
     for n in 0..REQUESTS_PER_MINUTE {
-        bob.call(|c| c.request_received(&request(n))).unwrap();
+        let (r, sig) = request(n, &clock);
+        bob.call(|c| c.request_received(&r, &sig)).unwrap();
     }
+    let (r, sig) = request(99, &clock);
     assert_eq!(
-        kind(&bob.call(|c| c.request_received(&request(99)))),
+        kind(&bob.call(|c| c.request_received(&r, &sig))),
         ErrorKind::Unavailable
     );
     for n in REQUESTS_PER_MINUTE..30 {
         clock.advance(Millis::MINUTE);
-        bob.call(|c| c.request_received(&request(n))).unwrap();
+        let (r, sig) = request(n, &clock);
+        bob.call(|c| c.request_received(&r, &sig)).unwrap();
     }
     let reqs = bob.call(|c| c.requests()).unwrap().requests;
     assert_eq!(reqs.len(), 20, "at most 20 wait");

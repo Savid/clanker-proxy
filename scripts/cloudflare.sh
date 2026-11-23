@@ -21,6 +21,7 @@ usage: cloudflare.sh [options]
 Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
 
   --name <owner>     your name: lower-case letters, digits, single hyphens
+  --alias <name>     another name peers can call you (default: none)
   --worker <name>    the Worker's name (default clanker); its URL is
                      https://<name>.<your-subdomain>.workers.dev
   --url <url>        the URL peers use, if not the workers.dev one
@@ -59,7 +60,11 @@ ask() {
         printf '%s\n' "$2"
         return
     fi
-    printf '%s [%s]: ' "$1" "$2" >"$tty"
+    if [ -n "$2" ]; then
+        printf '%s [%s]: ' "$1" "$2" >"$tty"
+    else
+        printf '%s: ' "$1" >"$tty"
+    fi
     answer=
     IFS= read -r answer <"$tty" || true
     printf '%s\n' "${answer:-$2}"
@@ -76,17 +81,18 @@ valid_name() { # valid_name <value> <max length>
     [ "${#1}" -le "$2" ] && printf '%s' "$1" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
 }
 
-name='' worker='' url='' token_file='' agent='' bundle='' start_over='' storage=''
+name='' alias='' worker='' url='' token_file='' agent='' bundle='' start_over='' storage=''
 while [ "$#" -gt 0 ]; do
     case $1 in
         -h | --help) usage; exit 0 ;;
         --start-over) start_over=yes; shift; continue ;;
-        --name | --worker | --url | --token-file | --bundle | --agent) ;;
+        --name | --alias | --worker | --url | --token-file | --bundle | --agent) ;;
         *) fail "unknown option $1 (see --help)" ;;
     esac
     [ "$#" -ge 2 ] || fail "$1 needs a value (see --help)"
     case $1 in
         --name) name=$2 ;;
+        --alias) alias=$2 ;;
         --worker) worker=$2 ;;
         --url) url=$2 ;;
         --token-file) token_file=$2 ;;
@@ -289,6 +295,7 @@ if [ -n "$existing" ]; then
     fi
     if [ -z "$stale" ]; then
         say "Updated: $url now runs $version."
+        [ -z "$alias" ] || say "Aliases change with: cpctl alias $alias"
         [ -z "$owner" ] || share "$owner" "$url"
         exit 0
     fi
@@ -307,6 +314,11 @@ fi
 default_name=$(printf '%s' "${USER:-me}" | tr 'A-Z_.' 'a-z--' | tr -cd 'a-z0-9-')
 name=${name:-$(ask "Your name, as peers will see it" "${default_name:-me}")}
 valid_name "$name" 39 || fail "name $name: lower-case letters, digits and single hyphens, at most 39"
+alias=${alias:-$(ask "Another name peers can call you (optional)" '')}
+if [ -n "$alias" ]; then
+    valid_name "$alias" 39 || fail "alias $alias: lower-case letters, digits and single hyphens, at most 39"
+    [ "$alias" != "$name" ] || fail "alias $alias is already your name"
+fi
 
 # The owner token: a file given, the one saved by an earlier run, one
 # entered, or a new one.
@@ -356,8 +368,19 @@ until curl -fsS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null; do
     sleep 2
 done
 
+# Names are lower-case letters, digits and hyphens, so safe in JSON as is.
+called=$name
+if [ -n "$alias" ]; then
+    if curl -fsS -X PUT -H @"$tmp/auth" -H 'content-type: application/json' \
+        -d "{\"aliases\":[\"$alias\"]}" "$url/api/v1/me/aliases" >/dev/null 2>&1; then
+        called="$name (also $alias)"
+    else
+        say "Could not set the alias; set it later with: cpctl alias $alias"
+    fi
+fi
+
 say ""
-say "clanker-proxy is running at $url, owner $name."
+say "clanker-proxy is running at $url, owner $called."
 say "Owner token saved to $token_file (only you can read it)."
 show ""
 show "OWNER TOKEN: full control of your daemon. Save it in your password"

@@ -2,12 +2,12 @@
   "openapi": "3.2.0",
   "info": {
     "title": "clanker-proxy API",
-    "description": "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it sends, lists, reads, streams and acts on threads, reads peers and the owner's name, and registers its own webhook, optionally only for some peers. Peering, agent tokens and the owner's webhooks stay with the owner. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
+    "description": "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it sends, lists, reads, streams and acts on threads, reads peers and the owner's name, and registers its own webhook, optionally only for some peers. Peering, agent tokens and the owner's webhooks stay with the owner. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **requester**: a daemon asking to peer, by a request signed with the key it gives; only requestPeering. **public**: no token; only getHealth. Every error is an RFC 9457 problem.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "servers": [
     {
@@ -146,8 +146,19 @@
           "federation"
         ],
         "summary": "Say a peering request was approved",
-        "description": "The approving daemon calls this, signed with its key, so the requester starts delivering at once.",
+        "description": "The approving daemon calls this, signed with its key, so the requester starts delivering at once. The requester keeps the aliases it offers that are still free there.",
         "operationId": "notifyPeeringAccepted",
+        "requestBody": {
+          "description": "The aliases the approver offers.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeeringAccepted"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "204": {
             "description": "Noted."
@@ -257,7 +268,7 @@
           "system"
         ],
         "summary": "Read the owner's name and public URL",
-        "description": "The name this daemon offers peers, and the URL it gives them to call back on. An agent token limited to peers also sees those peers.",
+        "description": "The name this daemon offers peers, its other names, and the URL it gives them to call back on. An agent token limited to peers also sees those peers.",
         "operationId": "getMe",
         "responses": {
           "200": {
@@ -315,6 +326,54 @@
         "security": [
           {
             "agentToken": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/aliases": {
+      "put": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Set the owner's aliases",
+        "description": "Replaces the other names the owner offers peers. A peering request carries them, and so does approving one, so peering in either direction gives them to the peer, which keeps those still free there as aliases. Peers already peered do not get later changes. Fails with 409 when an alias is the owner's name or names a peer here. At most 10.",
+        "operationId": "setOwnAliases",
+        "requestBody": {
+          "description": "Every alias the owner is to offer.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PeerAliases"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerToken": []
           }
         ]
       }
@@ -436,10 +495,10 @@
           "peering"
         ],
         "summary": "Ask to become a peer",
-        "description": "Another daemon asks this one's owner to accept it as a peer, giving its public key; the answer gives this daemon's key and the code both owners compare. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
+        "description": "Another daemon asks this one's owner to accept it as a peer, giving its public key; the answer gives this daemon's key and the code both owners compare. It signs the request as a call to its own key (see peerSignature), since it does not know this daemon's yet, so its name, URL and aliases are the key holder's; unsigned, signed with another key, or dated more than five minutes off, it answers 401. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
         "operationId": "requestPeering",
         "requestBody": {
-          "description": "The requester and its public key.",
+          "description": "The requester, its public key, and the aliases it offers.",
           "content": {
             "application/json": {
               "schema": {
@@ -471,7 +530,11 @@
             }
           }
         },
-        "security": []
+        "security": [
+          {
+            "peerSignature": []
+          }
+        ]
       }
     },
     "/api/v1/peering-requests/{id}": {
@@ -1659,7 +1722,7 @@
           "minLength": 1,
           "pattern": "^[a-z0-9](-?[a-z0-9])*$"
         },
-        "description": "Other names for the peer, in the same namespace as peers' names; a repeated one counts once.",
+        "description": "Other names, sorted; a repeated one counts once.",
         "maxItems": 10
       },
       "Approval": {
@@ -1919,9 +1982,18 @@
         "description": "The daemon's owner, as peers see them.",
         "required": [
           "name",
+          "aliases",
           "version"
         ],
         "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Name"
+            },
+            "description": "Other names the owner offers peers, sorted. Peering in either\ndirection gives them to the peer, which keeps those still free there\nas aliases.",
+            "maxItems": 10
+          },
           "name": {
             "$ref": "#/components/schemas/Name"
           },
@@ -2111,7 +2183,7 @@
       },
       "PeerAliases": {
         "type": "object",
-        "description": "A peer's aliases, replacing the ones it has.",
+        "description": "Aliases, replacing the ones there are.",
         "required": [
           "aliases"
         ],
@@ -2174,15 +2246,34 @@
           "active"
         ]
       },
+      "PeeringAccepted": {
+        "type": "object",
+        "description": "What an approving daemon tells the requester.",
+        "required": [
+          "aliases"
+        ],
+        "properties": {
+          "aliases": {
+            "$ref": "#/components/schemas/Aliases",
+            "description": "Other names the approver offers; the requester keeps those still\nfree as their aliases."
+          }
+        },
+        "additionalProperties": false
+      },
       "PeeringRequest": {
         "type": "object",
         "description": "One daemon asking another to become peers.",
         "required": [
           "name",
           "url",
-          "key"
+          "key",
+          "aliases"
         ],
         "properties": {
+          "aliases": {
+            "$ref": "#/components/schemas/Aliases",
+            "description": "Other names the requester offers; approving keeps those still free\nas their aliases."
+          },
           "key": {
             "$ref": "#/components/schemas/PublicKey",
             "description": "The requester's public key."
@@ -2302,11 +2393,20 @@
         "required": [
           "id",
           "name",
+          "aliases",
           "url",
           "code",
           "at"
         ],
         "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Name"
+            },
+            "description": "Other names they offer, sorted; approving keeps those still free as\ntheir aliases.",
+            "maxItems": 10
+          },
           "at": {
             "$ref": "#/components/schemas/At"
           },

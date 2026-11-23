@@ -15,9 +15,9 @@ use crate::error::Problem;
 use crate::model::{
     AgentTokenInput, AgentTokenList, AgentTokenSummary, Approval, Delivery, DeliveryStatus,
     GetThreadQuery, Health, HealthStatus, ListThreadsQuery, Me, NewAgentToken, NewThread, Peer,
-    PeerAliases, PeerInput, PeerList, PeerStatus, PeeringRequest, Receipt, ReceiptStatus, Request,
-    RequestList, RequestReceipt, Thread, ThreadAction, ThreadEvent, ThreadList, ThreadSummary,
-    TurnFilter, WebhookDeliveriesQuery, WireEvent,
+    PeerAliases, PeerInput, PeerList, PeerStatus, PeeringAccepted, PeeringRequest, Receipt,
+    ReceiptStatus, Request, RequestList, RequestReceipt, Thread, ThreadAction, ThreadEvent,
+    ThreadList, ThreadSummary, TurnFilter, WebhookDeliveriesQuery, WireEvent,
 };
 use crate::text::{Aliases, Cursor, ThreadRef};
 use crate::webhooks::{
@@ -38,15 +38,23 @@ async fn get_health() {}
 
 #[utoipa::path(get, path = "/api/v1/me", operation_id = "getMe", tag = "system",
     summary = "Read the owner's name and public URL",
-    description = "The name this daemon offers peers, and the URL it gives them to call back on. An agent token limited to peers also sees those peers.",
+    description = "The name this daemon offers peers, its other names, and the URL it gives them to call back on. An agent token limited to peers also sees those peers.",
     responses((status = 200, description = "The owner.", body = Me),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn get_me() {}
 
+#[utoipa::path(put, path = "/api/v1/me/aliases", operation_id = "setOwnAliases", tag = "system",
+    summary = "Set the owner's aliases",
+    description = "Replaces the other names the owner offers peers. A peering request carries them, and so does approving one, so peering in either direction gives them to the peer, which keeps those still free there as aliases. Peers already peered do not get later changes. Fails with 409 when an alias is the owner's name or names a peer here. At most 10.",
+    request_body(content = PeerAliases, description = "Every alias the owner is to offer."),
+    responses((status = 200, description = "The owner.", body = Me),
+        (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
+async fn set_own_aliases() {}
+
 #[utoipa::path(post, path = "/api/v1/peering-requests", operation_id = "requestPeering", tag = "peering",
     summary = "Ask to become a peer",
-    description = "Another daemon asks this one's owner to accept it as a peer, giving its public key; the answer gives this daemon's key and the code both owners compare. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
-    request_body(content = PeeringRequest, description = "The requester and its public key."),
+    description = "Another daemon asks this one's owner to accept it as a peer, giving its public key; the answer gives this daemon's key and the code both owners compare. It signs the request as a call to its own key (see peerSignature), since it does not know this daemon's yet, so its name, URL and aliases are the key holder's; unsigned, signed with another key, or dated more than five minutes off, it answers 401. Nothing is accepted from it until the owner approves. Requests expire after a week; at most 20 wait, and a new one drops the oldest. Past 10 requests a minute it answers 503.",
+    request_body(content = PeeringRequest, description = "The requester, its public key, and the aliases it offers."),
     responses((status = 202, description = "The request waits for the owner.", body = RequestReceipt),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn request_peering() {}
@@ -165,7 +173,8 @@ async fn deliver_event() {}
 
 #[utoipa::path(post, path = "/api/v1/federation/accepted", operation_id = "notifyPeeringAccepted", tag = "federation",
     summary = "Say a peering request was approved",
-    description = "The approving daemon calls this, signed with its key, so the requester starts delivering at once.",
+    description = "The approving daemon calls this, signed with its key, so the requester starts delivering at once. The requester keeps the aliases it offers that are still free there.",
+    request_body(content = PeeringAccepted, description = "The aliases the approver offers."),
     responses((status = 204, description = "Noted."),
         (status = "default", description = "An error.", body = Problem, content_type = PROBLEM)))]
 async fn notify_peering_accepted() {}
@@ -289,7 +298,7 @@ async fn receive_webhook_notification() {}
     version = "3.2.0",
     info(
         title = "clanker-proxy API",
-        description = "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it sends, lists, reads, streams and acts on threads, reads peers and the owner's name, and registers its own webhook, optionally only for some peers. Peering, agent tokens and the owner's webhooks stay with the owner. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **public**: no token; only getHealth and requestPeering. Every error is an RFC 9457 problem.",
+        description = "One API with four access levels, declared per operation and checked before the request body is read. **owner**: the daemon's owner, with its owner token. **agent**: a token the owner makes for an agent; it sends, lists, reads, streams and acts on threads, reads peers and the owner's name, and registers its own webhook, optionally only for some peers. Peering, agent tokens and the owner's webhooks stay with the owner. **peer**: another daemon, by a request signed with its Ed25519 key (see peerSignature). **requester**: a daemon asking to peer, by a request signed with the key it gives; only requestPeering. **public**: no token; only getHealth. Every error is an RFC 9457 problem.",
         license(name = "MIT", identifier = "MIT"),
     ),
     servers((url = "/", description = "The daemon")),
@@ -302,7 +311,7 @@ async fn receive_webhook_notification() {}
         (name = "webhooks", description = "Notifications to owner-configured endpoints."),
     ),
     paths(
-        get_health, get_me, request_peering, list_requests, deny_request, approve_request,
+        get_health, get_me, set_own_aliases, request_peering, list_requests, deny_request, approve_request,
         list_peers, add_peer, get_peer, remove_peer, set_peer_aliases, list_threads, open_thread,
         get_thread, act_on_thread, stream_events, deliver_event, notify_peering_accepted,
         list_agent_tokens, create_agent_token, delete_agent_token, revoke_own_token, list_webhooks,
@@ -310,7 +319,7 @@ async fn receive_webhook_notification() {}
         retry_webhook_delivery, set_own_webhook, delete_own_webhook,
     ),
     components(schemas(
-        Problem, Health, HealthStatus, Me, PeeringRequest, ReceiptStatus, RequestReceipt, Request,
+        Problem, Health, HealthStatus, Me, PeeringRequest, PeeringAccepted, ReceiptStatus, RequestReceipt, Request,
         RequestList, Approval, PeerInput, PeerStatus, Peer, PeerList, PeerAliases, Aliases, NewThread, ThreadAction,
         ThreadSummary, Thread, ThreadEvent, Delivery, DeliveryStatus, ThreadList, TurnFilter,
         WireEvent, Receipt, AgentTokenInput, AgentTokenSummary, NewAgentToken, AgentTokenList,
@@ -358,7 +367,7 @@ pub fn openapi() -> Document {
             Access::Owner => vec![requirement("ownerToken")],
             Access::OwnerOrAgent => vec![requirement("ownerToken"), requirement("agentToken")],
             Access::Agent => vec![requirement("agentToken")],
-            Access::Peer => vec![requirement("peerSignature")],
+            Access::Peer | Access::Requester => vec![requirement("peerSignature")],
         });
     }
 

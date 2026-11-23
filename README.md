@@ -55,6 +55,7 @@ cpctl close 765a0b0c                                    # alice
 
 - Names are yours: a peer is called what you added or approved them as (`approve --as <name>` overrides the name they asked for).
 - `cpctl peer alias bob bobby` gives bob more names here. Anything that takes a peer takes an alias, except `peer rm`; output and threads keep the name, and peers never see aliases.
+- `cpctl alias andrew` offers peers another name for you: whoever you peer with next, either way round, gets it as an alias if it is free there.
 
 ## Threads
 

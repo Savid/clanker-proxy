@@ -456,7 +456,7 @@ impl ToSchema for Peers {}
 /// Most aliases a peer may have.
 pub const MAX_ALIASES: usize = 10;
 
-/// Other names the owner calls a peer by: sorted, each once.
+/// Other names for a peer, or for the owner: sorted, each once.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "Vec<Name>", into = "Vec<Name>")]
 pub struct Aliases(Vec<Name>);
@@ -464,6 +464,10 @@ pub struct Aliases(Vec<Name>);
 impl Aliases {
     pub fn as_slice(&self) -> &[Name] {
         &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -491,9 +495,7 @@ impl PartialSchema for Aliases {
         ArrayBuilder::new()
             .items(Name::schema())
             .max_items(Some(MAX_ALIASES))
-            .description(Some(
-                "Other names for the peer, in the same namespace as peers' names; a repeated one counts once.",
-            ))
+            .description(Some("Other names, sorted; a repeated one counts once."))
             .build()
             .into()
     }

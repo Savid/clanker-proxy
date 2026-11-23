@@ -288,7 +288,7 @@ async fn access_is_checked_for_every_operation() {
                 Access::Owner => who == "owner",
                 Access::OwnerOrAgent => matches!(who, "owner" | "agent"),
                 Access::Agent => who == "agent",
-                Access::Peer => false,
+                Access::Peer | Access::Requester => false,
             };
             if admitted {
                 assert!(

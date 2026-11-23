@@ -31,6 +31,10 @@ pub enum Caller {
     Peer {
         key: cp_api::PublicKey,
     },
+    /// A daemon asking to peer, by its signature with the key it gives.
+    Requester {
+        call: SignedCall,
+    },
 }
 
 impl Caller {
@@ -205,7 +209,7 @@ impl<H: Host> Service<H> {
             Route::NotFound => return Err(Error::new(ErrorKind::NotFound, "no such API route")),
         };
         let header = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok());
-        let signed = (op.access() == Access::Peer)
+        let signed = matches!(op.access(), Access::Peer | Access::Requester)
             .then(|| SignedCall::new(header, req.method().as_str(), req.uri().path(), req.body()))
             .flatten();
         let caller = self
@@ -287,6 +291,14 @@ impl<H: Host> Service<H> {
                     .await?;
                 Ok(Caller::Peer { key })
             }
+            Access::Requester => {
+                let call = signed.ok_or_else(unauthorized)?;
+                let checked = call.clone();
+                self.host
+                    .core(move |c| c.authenticate_requester(&checked))
+                    .await?;
+                Ok(Caller::Requester { call })
+            }
             _ => Err(unauthorized()),
         }
     }
@@ -312,13 +324,24 @@ impl<H: Host> Service<H> {
                     },
                 )
             }
-            Op::GetMe => {
+            Op::GetMe | Op::SetOwnAliases => {
+                let set = if op == Op::SetOwnAliases {
+                    let a: cp_api::PeerAliases = decode(req)?;
+                    Some(a.aliases)
+                } else {
+                    None
+                };
                 let version = h.version().to_string();
                 let peers = scope.clone();
                 let me = h
                     .core(move |c| {
+                        let aliases = match set {
+                            Some(a) => c.set_own_aliases(&a)?,
+                            None => c.own_aliases()?,
+                        };
                         Ok(Me {
                             name: c.me().clone(),
+                            aliases: aliases.into(),
                             url: c.url().cloned(),
                             version,
                             peers,
@@ -328,8 +351,14 @@ impl<H: Host> Service<H> {
                 json(200, &me)
             }
             Op::RequestPeering => {
+                let Caller::Requester { call } = caller else {
+                    return Err(unauthorized());
+                };
                 let body: PeeringRequest = decode(req)?;
-                json(202, &h.core(move |c| c.request_received(&body)).await?)
+                json(
+                    202,
+                    &h.core(move |c| c.request_received(&body, &call)).await?,
+                )
             }
             Op::ListRequests => json(200, &h.core(|c| c.requests()).await?),
             Op::DenyRequest => {
@@ -406,7 +435,8 @@ impl<H: Host> Service<H> {
                 let Caller::Peer { key } = caller else {
                     return Err(unauthorized());
                 };
-                h.core(move |c| c.accepted(&key)).await?;
+                let a: cp_api::PeeringAccepted = decode(req)?;
+                h.core(move |c| c.accepted(&key, &a.aliases)).await?;
                 empty()
             }
             Op::SetOwnWebhook | Op::DeleteOwnWebhook => {

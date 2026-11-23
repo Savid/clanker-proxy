@@ -417,6 +417,7 @@ pub(crate) fn requests(out: &mut String, requests: &[Request], now: i64) {
     let mut rows = vec![vec![
         "ID".into(),
         "NAME".into(),
+        "ALIASES".into(),
         "CODE".into(),
         "ASKED".into(),
         "URL".into(),
@@ -426,6 +427,15 @@ pub(crate) fn requests(out: &mut String, requests: &[Request], now: i64) {
         rows.push(vec![
             r.id.to_string(),
             r.name.to_string(),
+            if r.aliases.is_empty() {
+                "-".into()
+            } else {
+                r.aliases
+                    .iter()
+                    .map(cp_thread::Name::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            },
             r.code.to_string(),
             ago(now, r.at),
             r.url.to_string(),

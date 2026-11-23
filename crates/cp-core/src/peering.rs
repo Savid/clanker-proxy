@@ -7,9 +7,9 @@
 //! again.
 
 use cp_api::{
-    Aliases, Approval, DaemonUrl, Error, ErrorKind, Note, Peer, PeerInput, PeerList, PeerStatus,
-    PeeringRequest, Peers, PublicKey, ReceiptStatus, Request, RequestList, RequestReceipt,
-    RequestRef, Version,
+    Aliases, Approval, DaemonUrl, Error, ErrorKind, MAX_ALIASES, Note, Peer, PeerInput, PeerList,
+    PeerStatus, PeeringAccepted, PeeringRequest, Peers, PublicKey, ReceiptStatus, Request,
+    RequestList, RequestReceipt, RequestRef, Version,
 };
 use cp_thread::Name;
 
@@ -32,6 +32,14 @@ pub const CONFIRM_TTL: i64 = 30 * Millis::SECOND;
 
 fn err(kind: ErrorKind, detail: impl Into<String>) -> Error {
     Error::new(kind, detail)
+}
+
+fn aliases_json(aliases: &Aliases) -> Result<String, Error> {
+    serde_json::to_string(aliases).map_err(|e| err(ErrorKind::Internal, e.to_string()))
+}
+
+fn stored_aliases(json: &str) -> Result<Aliases, Error> {
+    serde_json::from_str(json).map_err(|_| err(ErrorKind::Internal, "stored aliases are invalid"))
 }
 
 /// A POST to another daemon, ready to send: `path` on `url`, with these
@@ -114,7 +122,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
 
     fn live_op(&self) -> Result<Option<Row>, Error> {
         Ok(self.sql.query_one(
-            "SELECT request_id, name, url, key, previous_key FROM peering_op WHERE expires_at > ?",
+            "SELECT request_id, name, url, key, previous_key, aliases FROM peering_op WHERE expires_at > ?",
             &[self.now().0.into()],
         )?)
     }
@@ -168,44 +176,52 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             .transpose()
     }
 
-    /// Replaces the aliases of the peer `name` names. Aliases share the
-    /// namespace of peers' names: each must be free of the owner's name,
+    /// Why `alias` cannot name the peer `peer`, if it cannot. Aliases share
+    /// the namespace of peers' names: each must be free of the owner's name,
     /// peers' names, other peers' aliases, removed peers' names kept for
     /// their threads, and the name an approval is confirming.
+    fn alias_taken(&self, alias: &Name, peer: &Name) -> Result<Option<String>, Error> {
+        if *alias == self.me {
+            return Ok(Some(format!("{alias} is this daemon's owner")));
+        }
+        if alias == peer {
+            return Ok(Some(format!("{alias} is already this peer's name")));
+        }
+        if self.load_peer(alias)?.is_some() {
+            return Ok(Some(format!("{alias} is another peer's name")));
+        }
+        if let Some(other) = self.alias_of(alias)?.filter(|o| o != peer) {
+            return Ok(Some(format!("{alias} is an alias of {other}")));
+        }
+        if let Some(r) = self.sql.query_one(
+            "SELECT url FROM former_peers WHERE name = ?",
+            &[text(alias)],
+        )? {
+            return Ok(Some(format!(
+                "{alias} was a peer at {} and threads with them are kept",
+                r.text(0)?
+            )));
+        }
+        if let Some(op) = self.live_op()?
+            && op.text(1)? == alias.as_str()
+        {
+            return Ok(Some(format!(
+                "{alias} is being approved; retry in a few seconds"
+            )));
+        }
+        Ok(None)
+    }
+
+    /// Replaces the aliases of the peer `name` names; see
+    /// [`Core::alias_taken`] for the names refused.
     pub fn set_peer_aliases(&mut self, name: &Name, aliases: &Aliases) -> Result<Peer, Error> {
         let real = self.resolve_peer(name, None)?;
         let p = self
             .load_peer(&real)?
             .ok_or_else(|| err(ErrorKind::NotFound, format!("{name} is not a peer")))?;
-        let approving = self
-            .live_op()?
-            .map(|r| r.text(1).map(str::to_string))
-            .transpose()?;
         for alias in aliases.as_slice() {
-            let taken = |detail: String| Err(err(ErrorKind::Conflict, detail));
-            if *alias == self.me {
-                return taken(format!("{alias} is this daemon's owner"));
-            }
-            if *alias == p.name {
-                return taken(format!("{alias} is already this peer's name"));
-            }
-            if self.load_peer(alias)?.is_some() {
-                return taken(format!("{alias} is another peer's name"));
-            }
-            if let Some(other) = self.alias_of(alias)?.filter(|o| *o != p.name) {
-                return taken(format!("{alias} is an alias of {other}"));
-            }
-            if let Some(r) = self.sql.query_one(
-                "SELECT url FROM former_peers WHERE name = ?",
-                &[text(alias)],
-            )? {
-                return taken(format!(
-                    "{alias} was a peer at {} and threads with them are kept",
-                    r.text(0)?
-                ));
-            }
-            if approving.as_deref() == Some(alias.as_str()) {
-                return taken(format!("{alias} is being approved; retry in a few seconds"));
+            if let Some(why) = self.alias_taken(alias, &p.name)? {
+                return Err(err(ErrorKind::Conflict, why));
             }
         }
         self.sql
@@ -217,6 +233,74 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             )?;
         }
         self.peer_view(&p)
+    }
+
+    /// Adds the names a new peer offers as their aliases, skipping any
+    /// taken here and any past the limit: an offer never fails peering.
+    fn keep_offered(&mut self, peer: &Name, offered: &[Name]) -> Result<(), Error> {
+        let mut count = self
+            .sql
+            .query_one(
+                "SELECT count(*) FROM peer_aliases WHERE peer = ?",
+                &[text(peer)],
+            )?
+            .map(|r| r.count(0))
+            .transpose()?
+            .unwrap_or(0);
+        for alias in offered {
+            if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_ALIASES {
+                break;
+            }
+            if self.alias_of(alias)?.is_some() || self.alias_taken(alias, peer)?.is_some() {
+                continue;
+            }
+            self.sql.execute(
+                "INSERT INTO peer_aliases (alias, peer) VALUES (?, ?)",
+                &[text(alias), text(peer)],
+            )?;
+            count += 1;
+        }
+        Ok(())
+    }
+
+    /// The other names the owner offers peers.
+    pub fn own_aliases(&self) -> Result<Aliases, Error> {
+        match self
+            .sql
+            .query_one("SELECT value FROM meta WHERE key = 'aliases'", &[])?
+        {
+            Some(r) => stored_aliases(r.text(0)?),
+            None => Ok(Aliases::default()),
+        }
+    }
+
+    /// Replaces the other names the owner offers peers. A name that is the
+    /// owner's, or a peer's name or alias here, is refused: offering it is
+    /// most likely a peer's alias set in the wrong place.
+    pub fn set_own_aliases(&mut self, aliases: &Aliases) -> Result<Aliases, Error> {
+        for alias in aliases.as_slice() {
+            if *alias == self.me {
+                return Err(err(
+                    ErrorKind::Conflict,
+                    format!("{alias} is already the owner's name"),
+                ));
+            }
+            let peer = match self.alias_of(alias)? {
+                Some(peer) => Some(peer),
+                None => self.load_peer(alias)?.map(|p| p.name),
+            };
+            if let Some(peer) = peer {
+                return Err(err(
+                    ErrorKind::Conflict,
+                    format!("{alias} already names the peer {peer} here"),
+                ));
+            }
+        }
+        self.sql.execute(
+            "INSERT INTO meta (key, value) VALUES ('aliases', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            &[aliases_json(aliases)?.into()],
+        )?;
+        Ok(aliases.clone())
     }
 
     /// Whether `name` is or was a peer: what a token or webhook may be
@@ -307,13 +391,25 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             url: own_url,
             key: self.key.clone(),
             note,
+            aliases: self.own_aliases()?,
         };
+        self.peering_call(url, &request)
+    }
+
+    /// The call sending `request` to the daemon at `url`, signed with this
+    /// daemon's key for that same key: the recipient's is not known yet.
+    /// The signature makes the request's name, URL and aliases the key
+    /// holder's, so a copied key cannot come with another URL.
+    pub fn peering_call(&self, url: DaemonUrl, request: &PeeringRequest) -> Result<Call, Error> {
+        let path = "/api/v1/peering-requests";
+        let body =
+            serde_json::to_vec(request).map_err(|e| err(ErrorKind::Internal, e.to_string()))?;
+        let headers = self.sign("POST", path, &self.key, &body)?;
         Ok(Call {
             url,
-            path: "/api/v1/peering-requests",
-            headers: Vec::new(),
-            body: serde_json::to_vec(&request)
-                .map_err(|e| err(ErrorKind::Internal, e.to_string()))?,
+            path,
+            headers,
+            body,
         })
     }
 
@@ -377,8 +473,20 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     }
 
     /// Stores a peering request from another daemon for the owner to
-    /// approve. Public, so rate-limited and capped.
-    pub fn request_received(&mut self, req: &PeeringRequest) -> Result<RequestReceipt, Error> {
+    /// approve, once `call` shows the key it gives signed it (see
+    /// [`Core::peering_call`]). Public, so rate-limited and capped.
+    pub fn request_received(
+        &mut self,
+        req: &PeeringRequest,
+        call: &SignedCall,
+    ) -> Result<RequestReceipt, Error> {
+        if call.key != req.key {
+            return Err(err(
+                ErrorKind::Unauthorized,
+                "a peering request must be signed with the key it gives",
+            ));
+        }
+        self.authenticate_requester(call)?;
         if req.key == self.key {
             return Err(err(
                 ErrorKind::Unprocessable,
@@ -412,13 +520,14 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             &[now.plus(-REQUEST_TTL).0.into()],
         )?;
         self.sql.execute(
-            "INSERT INTO requests (id, name, url, key, note, at) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO requests (id, name, url, key, note, aliases, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             &[
                 id.clone().into(),
                 text(&req.name),
                 text(req.url.as_str()),
                 text(req.key.as_str()),
                 req.note.as_ref().map(Note::as_str).into(),
+                aliases_json(&req.aliases)?.into(),
                 now.0.into(),
             ],
         )?;
@@ -444,10 +553,24 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         })
     }
 
+    /// Checks a peering request's signature: made with the key it gives,
+    /// for that same key, within five minutes. Needs no body, so the host
+    /// refuses a bad one before reading it.
+    pub fn authenticate_requester(&self, call: &SignedCall) -> Result<(), Error> {
+        let now = self.now().0.div_euclid(Millis::SECOND);
+        if (call.date - now).abs() > MAX_SKEW_SECS || !call.verifies(&call.key) {
+            return Err(err(
+                ErrorKind::Unauthorized,
+                "a peering request must be signed, within five minutes, with the key it gives",
+            ));
+        }
+        Ok(())
+    }
+
     /// Pending peering requests from the last week, oldest first.
     pub fn requests(&self) -> Result<RequestList, Error> {
         let rows = self.sql.query(
-            "SELECT id, name, url, key, note, at FROM requests WHERE at >= ? ORDER BY at, id",
+            "SELECT id, name, url, key, note, at, aliases FROM requests WHERE at >= ? ORDER BY at, id",
             &[self.now().plus(-REQUEST_TTL).0.into()],
         )?;
         let mut requests = Vec::with_capacity(rows.len());
@@ -455,6 +578,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             requests.push(Request {
                 id: r.parse(0)?,
                 name: r.parse(1)?,
+                aliases: stored_aliases(r.text(6)?)?.into(),
                 url: r.parse(2)?,
                 code: code(&r.parse(3)?, &self.key)?,
                 note: r.opt_parse(4)?,
@@ -479,7 +603,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         let r = self
             .sql
             .query_one(
-                "SELECT name, url, key FROM requests WHERE id = ? AND at >= ?",
+                "SELECT name, url, key, aliases FROM requests WHERE id = ? AND at >= ?",
                 &[text(id.as_str()), now.plus(-REQUEST_TTL).0.into()],
             )?
             .ok_or_else(|| {
@@ -494,6 +618,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         };
         let url: DaemonUrl = r.parse(1)?;
         let key: PublicKey = r.parse(2)?;
+        let offered = r.text(3)?.to_string();
         let previous = self.approvable(&name, &url)?;
         if self.live_op()?.is_some() {
             return Err(err(
@@ -502,18 +627,23 @@ impl<S: Sql, R: Runtime> Core<S, R> {
             ));
         }
         self.sql.execute(
-            "INSERT OR REPLACE INTO peering_op (slot, request_id, name, url, key, previous_key, expires_at) VALUES (1, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO peering_op (slot, request_id, name, url, key, previous_key, aliases, expires_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
             &[
                 text(id.as_str()),
                 text(&name),
                 text(url.as_str()),
                 text(key.as_str()),
                 previous.as_ref().map(|p| p.key.to_string()).into(),
+                offered.into(),
                 now.plus(CONFIRM_TTL).0.into(),
             ],
         )?;
         let path = "/api/v1/federation/accepted";
-        let headers = self.sign("POST", path, &key, b"")?;
+        let body = serde_json::to_vec(&PeeringAccepted {
+            aliases: self.own_aliases()?,
+        })
+        .map_err(|e| err(ErrorKind::Internal, e.to_string()))?;
+        let headers = self.sign("POST", path, &key, &body)?;
         Ok(PendingApproval {
             request: id.clone(),
             name,
@@ -521,7 +651,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 url,
                 path,
                 headers,
-                body: Vec::new(),
+                body,
             },
         })
     }
@@ -544,6 +674,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 format!("{name} changed while approving; approve again"),
             ));
         }
+        let offered = stored_aliases(op.text(5)?)?;
         let now = self.now();
         // The same daemon under another name, which has moved URL, is
         // forgotten as if removed. A peer of the same name and URL is
@@ -570,6 +701,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
         self.sql
             .execute("DELETE FROM requests WHERE url = ?", &[text(url.as_str())])?;
         self.sql.execute("DELETE FROM peering_op", &[])?;
+        self.keep_offered(&name, offered.as_slice())?;
         self.reschedule(&name)?;
         self.peer(&name, None)
     }
@@ -726,12 +858,21 @@ impl<S: Sql, R: Runtime> Core<S, R> {
     }
 
     /// The daemon with `key`, which the host has authenticated, approved this
-    /// one's request: the peer is active and events queued for them are due
-    /// now.
-    pub fn accepted(&mut self, key: &PublicKey) -> Result<(), Error> {
+    /// one's request: the peer is active, keeps the aliases it offers that
+    /// are free here if it was requested, and events queued for them are
+    /// due now.
+    pub fn accepted(&mut self, key: &PublicKey, offered: &Aliases) -> Result<(), Error> {
         let name = self
             .peer_with_key(key)?
             .ok_or_else(|| err(ErrorKind::Unauthorized, "unknown peer key"))?;
+        // Only while this daemon is asking: any active peer can sign an
+        // acceptance, and would otherwise add names whenever it liked.
+        if self
+            .load_peer(&name)?
+            .is_some_and(|p| p.status == PeerStatus::Requested)
+        {
+            self.keep_offered(&name, offered.as_slice())?;
+        }
         self.peer_heard_from(&name)
     }
 
