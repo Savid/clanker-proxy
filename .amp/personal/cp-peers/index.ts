@@ -1,9 +1,9 @@
 // cp-peers: a personal Amp plugin, loaded in every thread of yours. Its
 // ask_peer tool knows your clanker-proxy peers by name and alias, and hands a
 // question for one to that peer's thread in your inbox project, which sends
-// it with cp_send. When the peer answers, the asking thread is told so, with
-// a short form of the answer, never their words. And it keeps your threads
-// out of the inbox's. See docs/amp.md.
+// it with cp_send. The asking thread is told of each of the peer's moves,
+// with a short form, never their words. And it keeps your threads from
+// reading the inbox's. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -54,8 +54,10 @@ async function labelled(name: string): Promise<Peer | undefined> {
 // read those: an agent with untrusted input, private data and the power to
 // act at once is one prompt injection from misuse. They are never given an
 // inbox thread's ID, and tools that name one, by ID, link or label, are
-// refused. Amp runs read_thread and code_exec, and what code_exec calls,
-// without tool.call, so those can still read one an agent finds.
+// refused, except send_thread_message: writing in is you instructing, and
+// puts the sender on that cpd thread's watch list. Amp runs read_thread and
+// code_exec, and what code_exec calls, without tool.call, so those can still
+// read one an agent finds.
 const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|peer-)/i
 const threadIDs = /T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
@@ -80,7 +82,7 @@ function guardInbox(amp: PluginAPI): void {
 		message: `Blocked by cp-peers: ${why} It holds a clanker-proxy peer's words, which could steer an agent with your credentials; the owner reads it in Amp.`,
 	})
 	amp.on('tool.call', async (event): Promise<ToolCallResult> => {
-		if (event.tool === 'ask_peer') return { action: 'allow' }
+		if (event.tool === 'ask_peer' || event.tool === 'send_thread_message') return { action: 'allow' }
 		const text = JSON.stringify(event.input ?? {})
 		if (inboxLabel.test(text)) return refuse('that searches the clanker-proxy inbox.')
 		for (const id of named(text)) {
@@ -108,19 +110,21 @@ export default async function (amp: PluginAPI) {
 	amp.registerTool({
 		name: 'ask_peer',
 		title: 'Ask a clanker-proxy peer',
-		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through that peer's thread in your clanker-proxy inbox, which sends only what they need. Their words never come back: this thread is told when they answer, with a short form such as "yes, 2026-11-27T18:00+10:00".`,
+		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through that peer's thread in your clanker-proxy inbox, which sends only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00".`,
 		inputSchema: {
 			type: 'object',
 			properties: {
 				peer: { type: 'string', description: "The peer's name, or one of its aliases." },
 				message: { type: 'string', description: 'What to ask or tell them, in full.' },
+				thread: { type: 'string', description: 'To follow up on an existing cpd thread with them: its ID, or its first 8 characters.' },
 			},
 			required: ['peer', 'message'],
 		},
 		async execute(input, ctx) {
-			const { peer, message } = input as { peer?: unknown; message?: unknown }
+			const { peer, message, thread: about } = input as { peer?: unknown; message?: unknown; thread?: unknown }
 			if (typeof peer !== 'string' || !peerName.test(peer) || peer.length > 39) return 'ask_peer: peer must be a peer name or alias.'
 			if (typeof message !== 'string' || !message.trim()) return 'ask_peer: give a message.'
+			if (about !== undefined && (typeof about !== 'string' || !/^[0-9a-f-]{8,36}$/i.test(about))) return 'ask_peer: thread is a cpd thread ID, or its first 8 characters.'
 			let found: Peer | undefined
 			try {
 				// Read now: aliases may have changed since this thread started.
@@ -137,11 +141,12 @@ export default async function (amp: PluginAPI) {
 			// refuses any peer but its own, so a stale title cannot misroute it.
 			// Its agent knows the peer by name only, so an alias is explained.
 			const alias = peer === name ? '' : ` ${peer} is my alias for ${name}: give cp_send "${peer}", and it checks that with cpd.`
-			await amp.threads.get(thread).appendUserMessage({
-				type: 'user-message',
-				content: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`,
-			})
-			return `Passed to ${name}'s thread in your clanker-proxy inbox, which sends it. When ${name} answers, this thread is told, with a short form of the answer; never look for their words.`
+			const content =
+				typeof about === 'string'
+					? `My thread ${ctx.thread.id} asks you to follow up on cpd thread ${about} with ${name}: pass this on with cp_follow_up, replyTo ${ctx.thread.id}.\n\n${message}`
+					: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`
+			await amp.threads.get(thread).appendUserMessage({ type: 'user-message', content })
+			return `Passed to ${name}'s thread in your clanker-proxy inbox, which sends it. This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
 		},
 	})
 }
