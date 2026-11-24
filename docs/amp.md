@@ -13,12 +13,21 @@ short, never in their words. Read [Risks](#risks) first.
 | | Where | Reads a peer's words | Tools |
 | --- | --- | --- | --- |
 | **Your threads** | anywhere, Spaces too | never | yours, with your credentials; `ask_peer`, except in Spaces, which run no plugins |
-| **Inbox** | the project's first thread to load the plugin with its secrets | no: webhooks carry IDs | none: leave it idle, never archive it |
+| **Inbox** | the project's first thread to load the plugin with its secrets | no: webhooks carry IDs | none: asks pass through it; leave it idle, never archive it |
 | **Peer thread** | under the inbox, one per peer, titled `bob (bobby)` | never | `cp_send` and `cp_follow_up` only |
 | **Conversation** | under its peer thread, one per cpd thread | yes, in a [sandbox](#what-a-conversation-can-do) | shell, web, `cp_send`, `cp_ask_owner`, `cp_answer`; a key for its own cpd thread |
 
 Labels: the inbox `cp-inbox`; peer threads `cp-peer`, `cp-sealed` and
-`peer-<name>`; conversations `clanker-proxy` and `peer-<name>`.
+`peer-<name>`; both `inbox-<key>`; conversations `clanker-proxy` and
+`peer-<name>`.
+
+Peer threads and conversations run on the inbox's orb, not in orbs of their
+own, so asks go to the inbox, which wakes the orb, and the plugin passes them
+on. After the plugin restarts (an update, a reload, a new orb), it starts a
+new peer thread or conversation the next time one is needed, and a new
+conversation catches up from cpd. Never `amp threads continue` an inbox
+thread: your machine would run it without the plugin, so without its guard
+or sandbox.
 
 **One-way glass** between your threads and the inbox:
 
@@ -34,7 +43,7 @@ you, and you review them with `cpctl requests`.
 
 <p align="center"><img src="img/amp-flow.svg" width="100%" alt="1 your thread asks with ask_peer; 2 bob's thread sends it with cp_send and your cpd delivers it; 3 the plugin tells your thread it is watching; 4 bob answers and your cpd wakes the orb with a webhook carrying IDs only; 5 the sandboxed conversation reads bob's words with cpctl; 6 your thread gets the plugin's notice, a button, and the short form; 7 a follow-up goes through bob's thread with cp_follow_up; 8 when the thread ends, your thread gets a last notice."></p>
 
-1. **Ask** from any thread, by name or [alias](#names-and-aliases): "ask bob <what>". `ask_peer` hands it to bob's thread, which sends it with `cp_send`, to bob only. In the project, `cp_send` sends it; from a Space, message bob's thread; from your machine, `cpctl send`.
+1. **Ask** from any thread, by name or [alias](#names-and-aliases): "ask bob <what>". `ask_peer` brings it to the inbox, whose plugin hands it to bob's thread, which sends it with `cp_send`, to bob only. In the project, `cp_send` sends it; from a Space, message bob's thread; from your machine, `cpctl send`.
 2. **Watch.** The thread that asked watches the cpd thread, and is told so. So does any of your threads that messages its conversation or follows up.
 3. **Answer.** Bob's move wakes the orb. The conversation reads it, checks it, then closes, reopens or asks you.
 4. **Told.** Watchers get a notice in the plugin's words, then the short form: yes, no, maybe, done, declined or unclear; why (needs access, info or a decision, not now, out of scope, disagrees, other); a date or time. At most one notice per cpd thread every 10 minutes and 24 a day; each move's short form still comes. You read bob's words with the button, or the conversation's **cpd thread** button.
@@ -84,7 +93,7 @@ Triggers) and start a new thread in the project.
 3. Reload the plugins (`plugins: reload`): a plugin can't reload itself.
 
 New orbs start on master, and your other threads load the new `cp-peers` when
-they start.
+they start; one started before may need a new thread to reach a peer.
 
 ## Names and aliases
 

@@ -18,9 +18,12 @@ const hookURL = 'https://example.invalid/webhook'
 const key = createHmac('sha256', token).update(`cp-inbox webhook\n${hookURL}`).digest()
 // What the plugin sent cpd, by fixture.
 const registrations = []
+// The plugin process: the tests' own, as the plugin loads in it.
+const runtime = `${process.pid}-${Math.round(performance.timeOrigin)}`
 
-// fixture loads the plugin; base is where its home goes, by default with the rest.
-async function fixture(t, base) {
+// fixture loads the plugin; base is where its home goes, by default with
+// the rest, and seed changes the saved state it starts with.
+async function fixture(t, base, seed = (state) => state) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-inbox-test-'))
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
@@ -59,13 +62,13 @@ async function fixture(t, base) {
 	})
 	await mkdir(join(dir, 'cp-inbox'))
 	await mkdir(checkout, { recursive: true })
-	await writeFile(stateFile, JSON.stringify({
+	await writeFile(stateFile, JSON.stringify(seed({
 		seen: [], wakes: [], known: ['conversation'], lastPeeringNotice: 0, heldNotices: {}, hubs: {},
 		conversations: { [subject]: {
 			amp: 'conversation', peer, created: Date.now(), briefed: true,
-			wakes: [], replies: 0, lastReply: 0, held: false, ended: 0,
+			wakes: [], replies: 0, lastReply: 0, held: false, ended: 0, runtime,
 		} },
-	}))
+	})))
 	await writeFile(cpctl, `#!/usr/bin/env node
 const fs = require('node:fs')
 const path = require('node:path')
@@ -149,8 +152,13 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	const labels = {}
 	// Threads whose messages fail, as an archived one's do.
 	const failing = new Set()
+	// Threads whose turn the plugin cancelled, and its keep-awake leases.
+	const cancelled = []
+	const leases = []
 	const handle = (id) => ({
 		id,
+		agent: async () => agent,
+		cancel: async () => { cancelled.push(id) },
 		// Its title is the last one the amp CLI gave it.
 		title: { get: async () => (await ampCalls()).filter((c) => c[1] === 'rename' && c[2] === id).at(-1)?.[3] ?? null },
 		state: { get: async () => threadState },
@@ -185,6 +193,11 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	}
 	const amp = {
 		logger: { log: (...args) => logs.push(args) },
+		system: { executor: { keepAlive: async () => {
+			const lease = { ended: false, unsubscribe() { lease.ended = true } }
+			leases.push(lease)
+			return lease
+		} } },
 		threads: { get: handle },
 		helpers: { shellCommandFromToolCall: (e) => (e.tool === 'shell_command' ? { command: e.input.cmd } : null) },
 		on(name, fn) {
@@ -256,13 +269,13 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		until: async (check) => {
 			for (let i = 0; i < 100 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 20))
 		},
-		messages, posted, logs, created, agents, tools, confirms, buttons, notices,
+		messages, posted, logs, created, agents, tools, confirms, buttons, notices, cancelled, leases, handle, ui,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		idle: () => { threadState = 'idle' },
 		end: (thread) => agentEnd({ thread: { id: thread } }),
-		start: (thread, message) => agentStart({ thread: { id: thread }, message, id: 'message' }),
+		start: (thread, message) => agentStart({ thread: { id: thread }, message, id: 'message' }, { thread: handle(thread), logger: amp.logger, ui }),
 		answerConfirm: (answer) => { confirmAnswer = answer },
 		lastSent: async () => JSON.parse(await readFile(join(dir, 'sent.json'), 'utf8')),
 		send: (thread, input) => tools.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }),
@@ -453,9 +466,9 @@ test('a conversation runs as its own agent, briefed on its sandbox', async (t) =
 	await f.deliver(f.event('thread.open', 'open', true, sent))
 	assert.deepEqual(f.agents.map((a) => a.model), ['anthropic/claude-opus-5-5', 'anthropic/claude-opus-5-5'])
 	// The peer's thread only sends and follows up.
-	assert.deepEqual(f.agents[1].tools, { include: ['cp_send', 'cp_follow_up'], exclude: ['code_exec', 'tool_search'] })
-	assert.deepEqual(f.labels[f.created[0].id], ['cp-peer', 'cp-sealed', 'peer-alice'])
-	const { include, exclude } = f.agents[0].tools
+	assert.deepEqual(f.agents[0].tools, { include: ['cp_send', 'cp_follow_up'], exclude: ['code_exec', 'tool_search'] })
+	assert.deepEqual(f.labels[f.created[0].id], ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b'])
+	const { include, exclude } = f.agents[1].tools
 	assert.deepEqual(exclude, ['code_exec', 'tool_search'])
 	assert.deepEqual(include, ['shell_command', 'shell_command_status', 'shell_command_kill', 'web_search', 'read_web_page', 'todo_read', 'todo_write', 'get_current_time', 'cp_ask_owner', 'cp_send', 'cp_answer'])
 	assert.equal(f.tools.cp_ask_owner.defer, false)
@@ -913,6 +926,113 @@ test("a peer's thread follows up for one of your threads, which then watches the
 	assert.match(await follow({ thread: 'not an id', message: 'x' }), /thread is a cpd thread ID/)
 	f.failing.add(conversation)
 	assert.match(await follow({ thread: other, message: 'x' }), /could not reach the conversation for .*If its cpd thread has ended/)
+})
+
+// A state whose peer's thread and conversation another plugin process started.
+const earlier = (s) => ({
+	...s,
+	hubs: { [peer]: 'old-hub' },
+	runtimes: { 'old-hub': 'gone' },
+	conversations: { [subject]: { ...s.conversations[subject], runtime: 'gone', wakes: [Date.now()], replies: 2, lastReply: Date.now() - 3_600_000 } },
+})
+
+test('a peer thread or conversation another plugin process started is replaced, never written to', async (t) => {
+	const f = await fixture(t, undefined, earlier)
+	f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b']
+	await f.respond({ state: 'acked' })
+	await f.deliver(f.event('thread.reply', 'acked', true))
+	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }, { id: 'thread-2', parent: 'thread-1' }])
+	assert.ok(!f.posted.some((p) => p.thread === 'old-hub' || p.thread === 'conversation'), 'nothing is written where nothing runs')
+	assert.deepEqual(f.cancelled, ['conversation', 'old-hub'])
+	const archived = (await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2])
+	assert.deepEqual(archived, ['conversation', 'old-hub'])
+	// ask_peer finds the new peer thread, not the old one.
+	assert.deepEqual(f.labels['old-hub'], ['cp-sealed'])
+	const first = f.posted.at(-1)
+	assert.equal(first.thread, 'thread-2')
+	assert.match(first.content, new RegExp(`^You handle clanker-proxy thread ${subject} with alice`))
+	assert.match(first.content, new RegExp(`An earlier conversation handled this thread; nothing of it reaches you but your directory\\. Read the whole thread before acting: \`cpctl show ${subject} --all\`\\.\n\nalice replied`))
+	const state = await f.readState()
+	assert.equal(state.hubs.alice, 'thread-1')
+	assert.deepEqual(state.runtimes, { 'thread-1': runtime })
+	const c = state.conversations[subject]
+	assert.equal(c.amp, 'thread-2')
+	assert.equal(c.runtime, runtime)
+	assert.equal(c.replies, 3, 'its counts carry over')
+	assert.equal(c.wakes.length, 2)
+	assert.ok(['conversation', 'old-hub', 'thread-2'].every((id) => state.known.includes(id)), 'the guard keeps checking all of them')
+	// The new ones are this process's: the next move goes straight there.
+	await f.deliver(f.event('thread.needs-input', 'needs-input', true))
+	assert.equal(f.created.length, 2)
+	assert.equal(f.posted.at(-1).thread, 'thread-2')
+})
+
+test("an ended cpd thread's conversation from another plugin process is retired, and none starts", async (t) => {
+	const f = await fixture(t, undefined, earlier)
+	await f.respond({ state: 'closed' })
+	await f.deliver(f.event('thread.close', 'closed'))
+	assert.deepEqual(f.created, [])
+	assert.deepEqual(f.cancelled, ['conversation'])
+	assert.equal((await f.readState()).conversations[subject].amp, 'conversation', 'kept, for a reopen to bring back')
+	await f.respond({ state: 'acked' })
+	await f.deliver(f.event('thread.reopen', 'acked', true))
+	assert.deepEqual(f.created.map((c) => c.id), ['thread-1', 'thread-2'])
+	assert.equal(f.posted.at(-1).thread, 'thread-2')
+})
+
+test("a follow-up for a conversation another plugin process started goes to a new one under the peer's thread", async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...earlier(s), runtimes: { 'old-hub': runtime } }))
+	const follow = (input) => f.tools.cp_follow_up.execute(input, { thread: f.handle('old-hub'), logger: { log() {} }, ui: f.ui })
+	assert.equal(await follow({ thread: subject.slice(0, 8), message: 'Send him the kubectl command.' }), `Passed to the conversation handling ${subject}.`)
+	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'old-hub' }])
+	assert.deepEqual(f.cancelled, ['conversation'])
+	assert.equal(f.posted.length, 1)
+	assert.equal(f.posted[0].thread, 'thread-1')
+	assert.match(f.posted[0].content, /^You handle clanker-proxy thread [\s\S]*An earlier conversation handled this thread[\s\S]*From the owner, through their thread for this peer:\n\nSend him the kubectl command\.$/)
+	assert.equal((await f.readState()).conversations[subject].amp, 'thread-1')
+	// Its first message, the plugin's own, puts nobody on the watch list.
+	f.labels['T-00000000-0000-4000-8000-0000000000e1'] = ['work']
+	await f.start('thread-1', `${f.posted[0].content}\n\nThread message metadata: this message was sent by Amp thread \`T-00000000-0000-4000-8000-0000000000e1\`, not directly by the user.`)
+	assert.deepEqual(f.labels['T-00000000-0000-4000-8000-0000000000e1'], ['work'])
+	// An ended one is not brought back.
+	const g = await fixture(t, undefined, (s) => ({ ...earlier(s), runtimes: { 'old-hub': runtime }, conversations: { [subject]: { ...earlier(s).conversations[subject], ended: Date.now() } } }))
+	assert.match(await g.tools.cp_follow_up.execute({ thread: subject, message: 'x' }, { thread: g.handle('old-hub'), logger: { log() {} }, ui: g.ui }), /could not reach the conversation .*If its cpd thread has ended/)
+	assert.deepEqual(g.created, [])
+})
+
+// What cp-peers writes to the inbox for a peer's thread.
+const ask = (to, content) => `cp-inbox: for ${to}'s thread. Only the cp-inbox plugin acts on this message. If you can read it, the plugin is not running here: tell T-x, with send_thread_message, that cp-inbox is not running and nothing was sent, and do nothing else.\n\n${content}`
+
+test("an ask comes to the inbox, which wakes for it; the plugin passes it to the peer's thread, and the inbox's agent never runs", async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...earlier(s), inbox: 'inbox' }))
+	f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'peer-alice']
+	const asker = 'T-00000000-0000-4000-8000-0000000000aa'
+	f.labels[asker] = ['work']
+	const content = `My thread ${asker} asks you to send ally this, with replyTo ${asker}.\n\nUp for a beer?`
+	assert.deepEqual(await f.start('inbox', ask('alice', content)), {})
+	assert.deepEqual(f.cancelled.at(0), 'inbox', 'the turn is cancelled before anything else')
+	// The peer's thread was another process's, so a new one takes it.
+	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }])
+	assert.ok(!f.posted.some((p) => p.thread === 'old-hub'))
+	assert.match(f.posted.at(-2).content, /my clanker-proxy thread for alice/)
+	assert.deepEqual(f.posted.at(-1), { thread: 'thread-1', content })
+	assert.equal(f.leases.length, 1, 'the orb stays up while the peer thread sends')
+	assert.deepEqual(f.labels.inbox, ['cp-inbox', 'inbox-b'])
+	// The next ask goes to the same peer thread.
+	await f.start('inbox', ask('alice', content))
+	assert.equal(f.created.length, 1)
+	assert.equal(f.posted.at(-1).thread, 'thread-1')
+	// Not a peer of this inbox: the thread that asked is told.
+	f.setPeers([{ name: 'alice', aliases: ['ally'] }])
+	await f.start('inbox', ask('bob', `My thread ${asker} asks you to send bob this, with replyTo ${asker}.\n\nhi`))
+	assert.deepEqual(f.posted.at(-1), { thread: asker, content: "clanker-proxy: your message for bob was not sent: bob is not one of this inbox's peers." })
+	assert.equal(f.created.length, 1)
+	// Only the inbox passes asks on, and only asks.
+	const before = f.posted.length
+	await f.start('thread-1', ask('alice', content))
+	await f.start('inbox', 'How many conversations are open?')
+	assert.equal(f.posted.length, before)
+	assert.equal(f.cancelled.filter((id) => id !== 'old-hub' && id !== 'conversation').length, 3)
 })
 
 test("updating moves the orb's checkout, cpctl and cp-peers to the release the daemon runs", async (t) => {
