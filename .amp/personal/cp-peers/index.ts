@@ -1,16 +1,16 @@
 // cp-peers: a personal Amp plugin, loaded in every thread of yours. Its
 // ask_peer tool knows your clanker-proxy peers by name and alias, and hands a
-// question for one to your inbox, which passes it to that peer's thread,
-// which sends it with cp_send. The asking thread is told of each of the
-// peer's moves, with a short form, never their words. And it keeps your
-// threads from reading the inbox's. See docs/amp.md.
+// question for one to your inbox, whose plugin sends it. The asking thread
+// is told of each of the peer's moves, with a short form, never their words.
+// And it keeps your threads from reading the inbox's. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 
 import type { PluginAPI, ToolCallResult } from '@ampcode/plugin'
 
-export const description = "Ask your clanker-proxy peers from any thread: ask_peer hands the question to that peer's thread in your inbox project."
+export const description = "Ask your clanker-proxy peers from any thread: ask_peer brings the question to your inbox, whose plugin sends it."
 
 const run = promisify(execFile)
 // The plugin API cannot search threads; the amp CLI, signed in as you, can.
@@ -87,7 +87,7 @@ async function labelled(amp: PluginAPI, name: string): Promise<Peer | undefined>
 // puts the sender on that cpd thread's watch list. Amp runs read_thread and
 // code_exec, and what code_exec calls, without tool.call, so those can still
 // read one an agent finds.
-const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|peer-)/i
+const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|cp-inbox|cp-sealed|peer-|inbox-)/i
 const threadIDs = /T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 function guardInbox(amp: PluginAPI): void {
@@ -99,7 +99,7 @@ function guardInbox(amp: PluginAPI): void {
 			found = amp.threads
 				.get(id as `T-${string}`)
 				.labels()
-				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer') || l.includes('cp-sealed'))
+				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer') || l.includes('cp-sealed') || l.includes('cp-inbox'))
 			checked.set(id, found)
 			found.catch(() => checked.delete(id))
 		}
@@ -139,20 +139,22 @@ export default async function (amp: PluginAPI) {
 	amp.registerTool({
 		name: 'ask_peer',
 		title: 'Ask a clanker-proxy peer',
-		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through that peer's thread in your clanker-proxy inbox, which sends only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00".`,
+		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through your clanker-proxy inbox, which sends it as written, so give only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00".`,
 		inputSchema: {
 			type: 'object',
 			properties: {
 				peer: { type: 'string', description: "The peer's name, or one of its aliases." },
+				title: { type: 'string', description: 'What you ask, in one line; the first line of the message if left out.' },
 				message: { type: 'string', description: 'What to ask or tell them, in full.' },
 				thread: { type: 'string', description: 'To follow up on an existing cpd thread with them: its ID, or its first 8 characters.' },
 			},
 			required: ['peer', 'message'],
 		},
 		async execute(input, ctx) {
-			const { peer, message, thread: about } = input as { peer?: unknown; message?: unknown; thread?: unknown }
+			const { peer, title, message, thread: about } = input as { peer?: unknown; title?: unknown; message?: unknown; thread?: unknown }
 			if (typeof peer !== 'string' || !peerName.test(peer) || peer.length > 39) return 'ask_peer: peer must be a peer name or alias.'
 			if (typeof message !== 'string' || !message.trim()) return 'ask_peer: give a message.'
+			if (title !== undefined && (typeof title !== 'string' || [...title.trim()].length > 200)) return 'ask_peer: title is one line of at most 200 characters.'
 			if (about !== undefined && (typeof about !== 'string' || !/^[0-9a-f-]{8,36}$/i.test(about))) return 'ask_peer: thread is a cpd thread ID, or its first 8 characters.'
 			let found: Peer | undefined
 			try {
@@ -167,28 +169,28 @@ export default async function (amp: PluginAPI) {
 			// thread between you.
 			if (!found) return `ask_peer: ${peer} has no thread in your clanker-proxy inbox yet. Reload the inbox's plugins, or ask from a thread of that project, with cp_send.`
 			const { name, thread } = found
-			// The name as asked: the peer's thread resolves it with cpd, and
-			// refuses any peer but its own, so a stale title cannot misroute it.
-			// Its agent knows the peer by name only, so an alias is explained.
-			const alias = peer === name ? '' : ` ${peer} is my alias for ${name}: give cp_send "${peer}", and it checks that with cpd.`
-			const content =
-				typeof about === 'string'
-					? `My thread ${ctx.thread.id} asks you to follow up on cpd thread ${about} with ${name}: pass this on with cp_follow_up, replyTo ${ctx.thread.id}.\n\n${message}`
-					: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`
-			const told = `This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
-			// A peer's thread runs on the client that runs the inbox, not in an
-			// orb of its own: a message there never wakes the orb, and waits for
-			// ever once that client restarts. The inbox, an orb thread, wakes
-			// for one, and its plugin passes it on, starting a new peer's
-			// thread when it needs one.
+			// The inbox, an orb thread, wakes for a message, and its plugin
+			// sends the ask, or passes a follow-up to its conversation: the
+			// threads it starts run in its orb and never wake it. The name as
+			// asked goes too: the plugin checks with cpd that it names this
+			// peer, so a stale title cannot misroute it.
 			const inbox = await inboxOf(amp, thread).catch(() => undefined)
-			if (inbox) {
-				const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell ${ctx.thread.id}, with send_thread_message, that it may not have been sent.`
-				await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${content}` })
-				return `Passed to your clanker-proxy inbox, which hands it to ${name}'s thread to send. ${told}`
+			if (!inbox) return `ask_peer: cannot tell which of your threads is the clanker-proxy inbox for ${name}. Check that the inbox is not archived, and reload its plugins.`
+			const ask = {
+				// Handled once, however often it reaches the inbox.
+				id: randomUUID(),
+				asker: ctx.thread.id,
+				named: peer,
+				message,
+				...(typeof title === 'string' && title.trim() ? { title: title.trim().split('\n', 1)[0] } : {}),
+				...(typeof about === 'string' ? { thread: about } : {}),
 			}
-			await amp.threads.get(thread).appendUserMessage({ type: 'user-message', content })
-			return `Passed to ${name}'s thread in your clanker-proxy inbox, which sends it. ${told}`
+			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell ${ctx.thread.id}, with send_thread_message, that it may not have been sent.`
+			await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${JSON.stringify(ask)}` })
+			const told = `This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
+			return typeof about === 'string'
+				? `Passed to your clanker-proxy inbox, which passes it to the conversation handling ${about} with ${name}. ${told}`
+				: `Passed to your clanker-proxy inbox, which sends it to ${name}. ${told}`
 		},
 	})
 }

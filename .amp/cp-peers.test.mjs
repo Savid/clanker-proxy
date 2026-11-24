@@ -52,63 +52,63 @@ process.stdout.write(JSON.stringify(found[process.argv[4]] ?? []))
 	return { tools, posted, ask, hooks, call }
 }
 
-test("ask_peer knows your peers by name and alias, and hands the question to the peer's thread", async (t) => {
+const inbox = 'T-00000000-0000-4000-8000-00000000f001'
+const forInbox = (name) => `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-asker, with send_thread_message, that it may not have been sent.`
+// The ask as the inbox reads it.
+const asked = (post) => {
+	const [line, json] = post.content.split('\n\n')
+	const { id, ...ask } = JSON.parse(json)
+	assert.match(id, /^[0-9a-f-]{36}$/, 'each ask has an ID of its own')
+	return { thread: post.thread, line, ask }
+}
+// Amp's search keeps only a query's last label, so a search names one, and
+// finds every thread that has it: the inbox and its peer threads.
+const keyed = { 'label:inbox-00000000f001 archived:false': [{ id: hub }, { id: inbox }] }
+const inboxLabels = { [hub]: ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-00000000f001'], [inbox]: ['cp-inbox', 'inbox-00000000f001'] }
+
+test("ask_peer knows your peers by name and alias, and brings the ask to their inbox, whose plugin sends it", async (t) => {
 	const f = await load(t, {
 		'label:cp-peer archived:false': [
 			{ id: hub, title: 'alice (ally, al)' },
 			{ id: 'T-bad', title: 'bob' },
 			{ id: 'T-00000000-0000-4000-8000-0000000000a2', title: 'Clanker-proxy carol thread' },
 		],
-	})
+		...keyed,
+	}, {}, inboxLabels)
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
 	assert.equal(
-		await f.ask({ peer: 'ally', message: 'Up for a beer?' }),
-		"Passed to alice's thread in your clanker-proxy inbox, which sends it. This thread is told of each of alice's moves, with a short form; never look for their words.",
+		await f.ask({ peer: 'ally', message: 'Up for a beer?\nFriday?' }),
+		"Passed to your clanker-proxy inbox, which sends it to alice. This thread is told of each of alice's moves, with a short form; never look for their words.",
 	)
-	// The name as asked, explained: the peer's thread resolves it with cpd.
-	assert.deepEqual(f.posted, [
-		{
-			thread: hub,
-			content: 'My thread T-asker asks you to send ally this, with replyTo T-asker. ally is my alias for alice: give cp_send "ally", and it checks that with cpd.\n\nUp for a beer?',
-		},
-	])
-	await f.ask({ peer: 'alice', message: 'hi' })
-	assert.equal(f.posted[1].content, 'My thread T-asker asks you to send alice this, with replyTo T-asker.\n\nhi')
-	await f.ask({ peer: 'ally', message: 'Send him the command.', thread: '485eec32' })
-	assert.equal(f.posted[2].content, 'My thread T-asker asks you to follow up on cpd thread 485eec32 with alice: pass this on with cp_follow_up, replyTo T-asker.\n\nSend him the command.')
+	// The name as asked: the plugin checks with cpd that it names alice.
+	assert.deepEqual(asked(f.posted[0]), { thread: inbox, line: forInbox('alice'), ask: { asker: 'T-asker', named: 'ally', message: 'Up for a beer?\nFriday?' } })
+	await f.ask({ peer: 'alice', title: '  Lunch\nignored  ', message: 'hi' })
+	assert.deepEqual(asked(f.posted[1]).ask, { asker: 'T-asker', named: 'alice', message: 'hi', title: 'Lunch' })
+	assert.equal(
+		await f.ask({ peer: 'ally', message: 'Send him the command.', thread: '485eec32' }),
+		"Passed to your clanker-proxy inbox, which passes it to the conversation handling 485eec32 with alice. This thread is told of each of alice's moves, with a short form; never look for their words.",
+	)
+	assert.deepEqual(asked(f.posted[2]).ask, { asker: 'T-asker', named: 'ally', message: 'Send him the command.', thread: '485eec32' })
 	assert.match(await f.ask({ peer: 'alice', message: 'x', thread: 'nope' }), /thread is a cpd thread ID/)
+	assert.match(await f.ask({ peer: 'alice', message: 'x', title: 'y'.repeat(201) }), /title is one line of at most 200 characters/)
 	assert.match(await f.ask({ peer: 'carol', message: 'hi' }), /carol has no thread in your clanker-proxy inbox yet/)
 	assert.match(await f.ask({ peer: 'Not A Name', message: 'hi' }), /peer must be a peer name or alias/)
 	assert.equal(f.posted.length, 3)
 })
 
-test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes it on", async (t) => {
-	const inbox = 'T-00000000-0000-4000-8000-00000000f001'
+test("ask_peer finds the peer's own inbox, or your only one, and never writes into a peer's thread", async (t) => {
 	const other = 'T-00000000-0000-4000-8000-00000000f002'
 	const bob = 'T-00000000-0000-4000-8000-0000000000b0'
 	const f = await load(t, {
 		'label:cp-peer archived:false': [{ id: hub, title: 'alice (ally)' }, { id: bob, title: 'bob' }],
-		// Amp's search keeps only a query's last label, so a search names one,
-		// and finds every thread that has it: the inbox and its peer threads.
-		'label:inbox-00000000f001 archived:false': [{ id: hub }, { id: inbox }],
+		...keyed,
 		'label:cp-inbox archived:false': [{ id: inbox }, { id: other }],
-	}, {}, {
-		[hub]: ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-00000000f001'],
-		[bob]: ['cp-peer', 'cp-sealed', 'peer-bob'],
-		[inbox]: ['cp-inbox', 'inbox-00000000f001'],
-		[other]: ['cp-inbox', 'inbox-00000000f002'],
-	})
-	assert.equal(
-		await f.ask({ peer: 'ally', message: 'Up for a beer?' }),
-		"Passed to your clanker-proxy inbox, which hands it to alice's thread to send. This thread is told of each of alice's moves, with a short form; never look for their words.",
-	)
-	assert.deepEqual(f.posted, [{
-		thread: inbox,
-		content: `cp-inbox: for alice's thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-asker, with send_thread_message, that it may not have been sent.\n\nMy thread T-asker asks you to send ally this, with replyTo T-asker. ally is my alias for alice: give cp_send "ally", and it checks that with cpd.\n\nUp for a beer?`,
-	}])
+	}, {}, { ...inboxLabels, [bob]: ['cp-peer', 'cp-sealed', 'peer-bob'], [other]: ['cp-inbox', 'inbox-00000000f002'] })
+	await f.ask({ peer: 'ally', message: 'hi' })
+	assert.equal(f.posted[0].thread, inbox)
 	// Bob's thread is from before the label, and two inboxes could hold it.
-	await f.ask({ peer: 'bob', message: 'hi' })
-	assert.deepEqual(f.posted[1], { thread: bob, content: 'My thread T-asker asks you to send bob this, with replyTo T-asker.\n\nhi' })
+	assert.match(await f.ask({ peer: 'bob', message: 'hi' }), /cannot tell which of your threads is the clanker-proxy inbox for bob/)
+	assert.equal(f.posted.length, 1)
 	// With one inbox, it is that one.
 	const one = await load(t, {
 		'label:cp-peer archived:false': [{ id: bob, title: 'bob' }],
@@ -116,15 +116,13 @@ test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes
 	}, {}, { [bob]: ['cp-peer', 'cp-sealed', 'peer-bob'], [inbox]: ['cp-inbox', 'inbox-00000000f001'] })
 	await one.ask({ peer: 'bob', message: 'hi' })
 	assert.equal(one.posted[0].thread, inbox)
-	assert.match(one.posted[0].content, /^cp-inbox: for bob's thread\. [^\n]*\n\nMy thread T-asker asks you to send bob this/)
-	// A keyed thread whose inbox is gone gets the ask itself, never another
-	// inbox's.
+	// A keyed thread whose inbox is gone gets no other inbox's.
 	const gone = await load(t, {
 		'label:cp-peer archived:false': [{ id: hub, title: 'alice' }],
 		'label:cp-inbox archived:false': [{ id: other }],
-	}, {}, { [hub]: ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-00000000f001'] })
-	await gone.ask({ peer: 'alice', message: 'hi' })
-	assert.deepEqual(gone.posted.map((p) => p.thread), [hub])
+	}, {}, { [hub]: inboxLabels[hub], [other]: ['cp-inbox', 'inbox-00000000f002'] })
+	assert.match(await gone.ask({ peer: 'alice', message: 'hi' }), /cannot tell which of your threads is the clanker-proxy inbox/)
+	assert.deepEqual(gone.posted, [])
 })
 
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
@@ -135,10 +133,11 @@ test("ask_peer prefers a peer's name to another's alias, and finds an untitled p
 		'label:cp-peer archived:false': [{ id: hub, title: 'alice (bob)' }, { id: bob, title: 'bob' }, { id: dave, title: 'Clanker-proxy dave thread' }],
 		// Dave's conversations carry his label too.
 		'label:peer-dave archived:false': [{ id: daveTalk, title: 'Fix the build' }, { id: dave, title: 'Clanker-proxy dave thread' }],
-	}, {}, { [dave]: ['cp-peer', 'cp-sealed', 'peer-dave'], [daveTalk]: ['clanker-proxy', 'peer-dave'] })
+		'label:cp-inbox archived:false': [{ id: inbox }],
+	}, {}, { [dave]: ['cp-peer', 'cp-sealed', 'peer-dave'], [daveTalk]: ['clanker-proxy', 'peer-dave'], [bob]: ['cp-peer', 'peer-bob'], [inbox]: ['cp-inbox'] })
 	await f.ask({ peer: 'bob', message: 'hi' })
 	await f.ask({ peer: 'dave', message: 'hi' })
-	assert.deepEqual(f.posted.map((p) => p.thread), [bob, dave])
+	assert.deepEqual(f.posted.map((p) => asked(p).line), [forInbox('bob'), forInbox('dave')])
 })
 
 test('ask_peer stays out of the inbox project, and away without peers', async (t) => {

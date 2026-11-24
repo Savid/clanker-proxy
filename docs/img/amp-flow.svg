@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="548" viewBox="0 0 960 548" role="img" aria-labelledby="t d">
 <title id="t">A round trip through the Amp inbox</title>
-<desc id="d">1: your thread asks with ask_peer, which hands the question to bob's thread in the inbox orb. 2: bob's thread sends it with cp_send; your cpd delivers it to bob's cpd. 3: the plugin tells your thread it was sent and that it is watching. 4: bob answers; your cpd wakes the orb with a signed webhook carrying IDs only. 5: the sandboxed conversation reads bob's words with cpctl. 6: your thread gets the plugin's notice and a button for you, then the conversation's checked short form. 7: to follow up, your thread asks bob's thread, which passes it on with cp_follow_up. 8: when the thread ends, on either side, your thread gets a last notice and stops watching.</desc>
+<desc id="d">1: your thread asks with ask_peer, which brings the question to the inbox in its orb. 2: the inbox's plugin sends it; your cpd delivers it to bob's cpd. 3: the plugin tells your thread it was sent and that it is watching. 4: bob answers; your cpd wakes the orb with a signed webhook carrying IDs only. 5: the sandboxed conversation reads bob's words with cpctl. 6: your thread gets the plugin's notice and a button for you, then the conversation's checked short form. 7: to follow up, your thread asks the inbox, whose plugin passes it to the conversation. 8: when the thread ends, on either side, your thread gets a last notice and stops watching.</desc>
 <defs>
   <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#111a28"/></pattern>
   <marker id="mc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L8 5L1 9" fill="none" stroke="#22d3ee" stroke-width="1.6"/></marker>
@@ -40,8 +40,8 @@
 <!-- lanes -->
 <rect x="50" y="24" width="140" height="46" rx="12" class="box" stroke="#22d3ee" stroke-width="1.6"/>
 <text x="120" y="52" class="h c" text-anchor="middle">your thread</text>
-<rect x="260" y="24" width="140" height="46" rx="12" class="box" stroke="#475569" stroke-width="1.4"/>
-<text x="330" y="52" class="h" text-anchor="middle">bob's thread</text>
+<rect x="260" y="24" width="140" height="46" rx="12" class="box" stroke="#fbbf24" stroke-width="1.6"/>
+<text x="330" y="52" class="h a" text-anchor="middle">inbox</text>
 <rect x="470" y="24" width="140" height="46" rx="12" class="box" stroke="#e2e8f0" stroke-opacity=".7" stroke-width="1.4"/>
 <text x="540" y="45" class="h" text-anchor="middle">conversation</text>
 <text x="540" y="62" class="s" text-anchor="middle">sandbox</text>
@@ -61,7 +61,7 @@
 <g class="an" style="animation-name:s2">
   <text x="22" y="142" class="n c">2</text>
   <path d="M332 138H724" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
-  <text x="436" y="131" class="e c" text-anchor="middle">cp_send</text>
+  <text x="436" y="131" class="e c" text-anchor="middle">sends</text>
   <path d="M732 160H874" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
   <text x="805" y="153" class="e c" text-anchor="middle">deliver</text>
 </g>
@@ -102,7 +102,7 @@
   <path d="M122 422H324" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
   <text x="224" y="415" class="e c" text-anchor="middle">follow up</text>
   <path d="M332 444H534" class="f m" stroke="#22d3ee" marker-end="url(#mc)"/>
-  <text x="436" y="437" class="e c" text-anchor="middle">cp_follow_up</text>
+  <text x="436" y="437" class="e c" text-anchor="middle">passes on</text>
 </g>
 <!-- 8 the end -->
 <g class="an" style="animation-name:s8">
