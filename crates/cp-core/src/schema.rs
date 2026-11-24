@@ -1,23 +1,37 @@
 //! The schema both hosts use, verbatim. Times are Unix milliseconds unless
 //! a column says seconds; an event's `at` is seconds, as on the wire.
 
-/// The version `STATEMENTS` create. Before 1.0 a storage change bumps
-/// this instead of adding a migration: earlier data is refused, and its
-/// owner starts again from empty storage.
-pub const BASELINE: u32 = 7;
+/// The version `STATEMENTS` create. Fixed for good: `MIGRATIONS` count
+/// from it, and deployed data was stamped with it.
+pub const BASE: u32 = 7;
 
-/// Changes since the baseline, in order: entry `i` moves stored data from
-/// version `BASELINE + i` to the next. Append only: deployed data has
-/// already run every shipped entry, so editing one would split installs.
+/// The oldest stored data this build upgrades; older data is refused.
+/// Raising it drops the upgrade path from earlier releases, so it moves
+/// only to a release owners were told to upgrade through.
+pub const UPGRADES_FROM: u32 = BASE;
+const _: () = assert!(UPGRADES_FROM >= BASE);
+
+/// Every storage change, in order: entry `i` moves stored data from
+/// version `BASE + i` to the next. Append only: deployed data has already
+/// run every shipped entry, so editing one would split installs;
+/// `tests/schema.rs` pins each. A change to what may be stored (a new enum
+/// value, a JSON shape, a unit) is a storage change too, even with no SQL.
+///
+/// Each statement runs alone, inside the transaction that opens the daemon:
+/// no `BEGIN`, `VACUUM` or pragmas. On a Worker it runs in the Durable
+/// Object's constructor, within a request's CPU limit, so keep each one
+/// cheap on a large daemon. A change SQL cannot make (re-folding threads
+/// under new rules) needs this list to hold Rust steps first.
 pub const MIGRATIONS: &[&[&str]] = &[];
 
 /// The version this build stores data at.
 #[allow(clippy::cast_possible_truncation)] // a handful of migrations
-pub const SCHEMA_VERSION: u32 = BASELINE + MIGRATIONS.len() as u32;
+pub const SCHEMA_VERSION: u32 = BASE + MIGRATIONS.len() as u32;
 
-/// Statements creating the baseline schema on empty storage. Frozen: later
-/// changes go in `MIGRATIONS`. The first creates `meta`, which records the
-/// version.
+/// Statements creating schema `BASE` on empty storage, before `MIGRATIONS`
+/// run. Frozen: changes go in `MIGRATIONS`. The first creates `meta`,
+/// whose `schema_version` row every release reads, so it stays where it is
+/// for good: data without it is refused.
 pub const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,

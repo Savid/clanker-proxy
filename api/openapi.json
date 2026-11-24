@@ -1848,7 +1848,7 @@
       },
       "Event": {
         "type": "object",
-        "description": "One step in a thread, as daemons exchange it. Who sent it is the peer\nwhose secret delivered it; it is for the receiving daemon's owner.",
+        "description": "One step in a thread, as daemons exchange it. Who sent it is the peer\nwhose secret delivered it; it is for the receiving daemon's owner.\nUnknown fields are ignored, as in `PeeringRequest`, and never change\nwho wrote it.",
         "required": [
           "id",
           "thread",
@@ -1906,8 +1906,7 @@
               }
             ]
           }
-        },
-        "additionalProperties": false
+        }
       },
       "Health": {
         "type": "object",
@@ -2248,7 +2247,7 @@
       },
       "PeeringAccepted": {
         "type": "object",
-        "description": "What an approving daemon tells the requester.",
+        "description": "What an approving daemon tells the requester. Unknown fields are\nignored, as in `PeeringRequest`.",
         "required": [
           "aliases"
         ],
@@ -2257,12 +2256,11 @@
             "$ref": "#/components/schemas/Aliases",
             "description": "Other names the approver offers; the requester keeps those still\nfree as their aliases."
           }
-        },
-        "additionalProperties": false
+        }
       },
       "PeeringRequest": {
         "type": "object",
-        "description": "One daemon asking another to become peers.",
+        "description": "One daemon asking another to become peers. Like everything daemons send\neach other, it may come from another release: fields this one does not\nknow are ignored, so a release can add optional ones.",
         "required": [
           "name",
           "url",
@@ -2295,8 +2293,7 @@
           "url": {
             "$ref": "#/components/schemas/DaemonUrl"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "Peers": {
         "type": "array",

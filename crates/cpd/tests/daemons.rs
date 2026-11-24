@@ -16,7 +16,7 @@ struct Node {
     daemon: Daemon,
     token: String,
     url: String,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 /// A directory removed when dropped.
@@ -60,7 +60,7 @@ async fn node(name: &str) -> Node {
         daemon,
         token,
         url,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -565,4 +565,74 @@ async fn webhooks_reach_a_receiver_signed() {
     .await;
     alice.daemon.shutdown().await;
     bob.daemon.shutdown().await;
+}
+
+/// Two daemons on one directory would migrate data under each other, and a
+/// daemon that cannot serve must not touch storage at all.
+#[tokio::test]
+async fn one_daemon_per_directory_and_nothing_stored_without_a_port() {
+    let alice = node("alice").await;
+    let opts = |dir: std::path::PathBuf, listen| Options {
+        dir,
+        name: Some(cp_thread::Name::try_from("alice").unwrap()),
+        url: None,
+        listen,
+        version: "test".into(),
+    };
+    let free = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let Err(e) = Daemon::start(opts(alice.dir.0.clone(), free)).await else {
+        panic!("a second daemon started on the same directory");
+    };
+    assert!(e.contains("another cpd is using"), "{e}");
+
+    let fresh = temp_dir("taken");
+    let Err(e) = Daemon::start(opts(fresh.0.clone(), alice.daemon.addr)).await else {
+        panic!("started on a port in use");
+    };
+    assert!(e.contains("listen on"), "{e}");
+    assert!(!fresh.0.join(cpd::DB_FILE).exists());
+    assert!(!fresh.0.join(cpd::TOKEN_FILE).exists());
+}
+
+#[tokio::test]
+async fn data_a_later_release_upgraded_points_back_to_its_copy() {
+    use cp_core::Sql as _;
+    let dir = temp_dir("later");
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let sql = cp_sqlite::Sqlite::open(&dir.0.join(cpd::DB_FILE)).unwrap();
+    for s in cp_core::STATEMENTS {
+        sql.execute(s, &[]).unwrap();
+    }
+    sql.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+        &[(cp_core::SCHEMA_VERSION + 1).to_string().into()],
+    )
+    .unwrap();
+    drop(sql);
+    let start = || {
+        Daemon::start(Options {
+            dir: dir.0.clone(),
+            name: Some(cp_thread::Name::try_from("alice").unwrap()),
+            url: None,
+            listen: "127.0.0.1:0".parse().unwrap(),
+            version: "test".into(),
+        })
+    };
+    let Err(e) = start().await else {
+        panic!("started on data from a later release");
+    };
+    assert!(e.contains("newer release") && !e.contains("go back"), "{e}");
+    let copy = dir.0.join(format!(
+        "{}.schema-{}",
+        cpd::DB_FILE,
+        cp_core::SCHEMA_VERSION
+    ));
+    std::fs::write(&copy, b"").unwrap();
+    let Err(e) = start().await else {
+        panic!("started on data from a later release");
+    };
+    assert!(e.contains(&format!("go back to {}", copy.display())), "{e}");
 }

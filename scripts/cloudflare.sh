@@ -30,9 +30,6 @@ Deploys clanker-proxy to Cloudflare, or updates a deployment made before.
                      token an Amp inbox needs), local (on this machine), or
                      none (decide later)
   --bundle <file>    deploy this Worker bundle instead of downloading one
-  --start-over       when this release cannot read the daemon's data (one
-                     that changed storage), start on empty storage: its
-                     peers, threads and agent tokens stay behind
 
 Environment: CP_VERSION picks a release (default: the latest);
 CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID log in without a browser;
@@ -43,7 +40,8 @@ EOF
 
 # A terminal to ask on and show secrets to, even though this script
 # arrives on standard input.
-# CP_NO_TTY, CP_WRANGLER and CP_CPCTL exist for scripts/cloudflare_test.sh.
+# CP_NO_TTY, CP_WRANGLER, CP_CPCTL and CP_UPDATE_TRIES exist for
+# scripts/cloudflare_test.sh.
 tty=
 if [ -z "${CP_NO_TTY:-}" ] && (: </dev/tty >/dev/tty) 2>/dev/null; then
     tty=/dev/tty
@@ -123,11 +121,10 @@ valid_name() { # valid_name <value> <max length>
     [ "${#1}" -le "$2" ] && printf '%s' "$1" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'
 }
 
-name='' alias='' worker='' url='' token_file='' agent='' bundle='' start_over='' storage=''
+name='' alias='' worker='' url='' token_file='' agent='' bundle=''
 while [ "$#" -gt 0 ]; do
     case $1 in
         -h | --help) usage; exit 0 ;;
-        --start-over) start_over=yes; shift; continue ;;
         --name | --alias | --worker | --url | --token-file | --bundle | --agent) ;;
         *) fail "unknown option $1 (see --help)" ;;
     esac
@@ -334,6 +331,48 @@ share() {
     note "cpctl requests, approve it: cpctl approve <id>."
 }
 
+# health: asks the Worker once whether it answers (0), cannot start on its
+# data (1), or neither (2). It needs no token.
+health() {
+    rm -f "$tmp/health.json"
+    code=$(curl -sS --max-time 10 -o "$tmp/health.json" -w '%{http_code}' "$url/api/v1/health" 2>/dev/null) || code=''
+    if [ -s "$tmp/health.json" ] && grep -q '"detail":"the daemon cannot start: ' "$tmp/health.json"; then
+        return 1
+    fi
+    [ "$code" = 200 ] || return 2
+}
+
+# The new release cannot start on the Worker's data, which it left as it
+# was: put back the release that ran before, and stop.
+refused() { # refused <why>
+    heads_up "$version cannot start on $worker's data: $1."
+    case $1 in
+        *"older than this release upgrades from"*)
+            fresh="To start fresh instead: npx wrangler delete --name $worker, then run this again." ;;
+        *) fresh='' ;;
+    esac
+    if ! wr rollback --name "$worker" --message "cloudflare.sh: $version cannot start on this data" --yes >"$tmp/rollback.log" 2>&1; then
+        tail -n 5 "$tmp/rollback.log" >&2
+        [ -z "$fresh" ] || note "$fresh"
+        fail "$worker runs $version, which cannot start; put back the release before with: npx wrangler rollback --name $worker"
+    fi
+    # The release before can be one that was refused too, after a rollback
+    # that failed; the new one can answer for a few seconds more.
+    n=0
+    until health; do
+        n=$((n + 1))
+        [ "$n" -lt "$tries" ] || break
+        sleep 2
+    done
+    if [ "$n" -lt "$tries" ]; then
+        done_ "$worker is back on the release it ran before; its data is as it was."
+    else
+        heads_up "$worker does not answer on the release before either; choose one that does with: npx wrangler deployments list --name $worker, then npx wrangler rollback <version-id> --name $worker"
+    fi
+    [ -z "$fresh" ] || note "$fresh"
+    fail "$worker was not updated"
+}
+
 if [ -n "$existing" ]; then
     step "Updating $worker; its settings stay as they are."
     deploy
@@ -343,59 +382,61 @@ if [ -n "$existing" ]; then
     # can name the owner. A setup made on another machine leaves no token
     # file here, only the login cpctl saved for this URL.
     saved=${token_file:-$config/$worker.token}
-    stale='' owner=''
+    owner=''
     if [ -s "$saved" ]; then
         (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$saved")" >"$tmp/auth")
     elif [ -s "$config/login" ] && grep -qxF "url=$url" "$config/login"; then
         (umask 077 && sed -n 's/^token=/Authorization: Bearer /p' "$config/login" >"$tmp/auth")
     fi
-    if [ -s "$tmp/auth" ]; then
-        # Until the new release answers. A release that changed storage
-        # refuses the daemon's earlier data.
-        i=0
-        while :; do
-            curl -sS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
-            if grep -q 'start from empty storage' "$tmp/me.json"; then
-                stale=yes
-                break
-            fi
+    # Until the new release answers, or cannot start on the stored data:
+    # data from a newer release, older than it upgrades from, or a
+    # migration that failed and rolled back. The owner's view says which
+    # release answers; without a token, a few seconds give a refusal time
+    # to show. Anything else, such as a migration over the CPU limit,
+    # fails before it can say why. Tests shorten the wait.
+    tries=${CP_UPDATE_TRIES:-30}
+    i=0 healthy=''
+    while :; do
+        if health; then
+            healthy=yes
+        elif [ "$?" = 1 ]; then
+            refused "$(node -e 'try { process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).detail).replace(/^the daemon cannot start: /, "")) } catch {}' <"$tmp/health.json")"
+        else
+            healthy=''
+        fi
+        if [ -s "$tmp/auth" ]; then
+            curl -sS --max-time 10 -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
             if grep -q '"name":' "$tmp/me.json" && { [ "$version" = local ] || grep -q "\"version\":\"$version\"" "$tmp/me.json"; }; then
                 owner=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$tmp/me.json")
                 break
             fi
-            i=$((i + 1))
-            [ "$i" -lt 30 ] || break
-            sleep 2
-        done
-    fi
-    if [ -z "$stale" ]; then
-        if [ -n "$owner" ]; then
-            done_ "Updated: $url now runs $version."
-        elif [ -s "$tmp/auth" ]; then
-            heads_up "Deployed $version, but $url did not answer as $version within a minute."
-        else
-            done_ "Deployed $version to $url."
+        elif [ -n "$healthy" ] && [ "$i" -ge 4 ]; then
+            break
         fi
-        install_cpctl
-        # A setup from before cpctl login: log it in, unless it is logged in
-        # elsewhere.
-        if [ -n "$cli" ] && [ -n "$owner" ] && [ -s "$saved" ] && [ ! -e "$config/login" ] &&
-            "$cli" login "$url" --token-file "$saved" >/dev/null 2>&1; then
-            done_ "cpctl here is logged in to your daemon."
+        i=$((i + 1))
+        if [ "$i" -ge "$tries" ]; then
+            heads_up "$url did not answer as $version within a minute."
+            note "See why: npx wrangler tail --name $worker"
+            note "If it stays down, put back the release before: npx wrangler rollback --name $worker"
+            fail "$worker may not be serving"
         fi
-        [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
-        [ -z "$owner" ] || share "$owner" "$url"
-        exit 0
+        sleep 2
+    done
+    if [ -n "$owner" ]; then
+        done_ "Updated: $url now runs $version."
+    else
+        done_ "Deployed $version to $url, which answers."
     fi
-    if [ -z "$start_over" ] && [ -n "$tty" ] &&
-        [ "$(ask "$worker's data is from an earlier release, which $version cannot read. Start over on empty storage? Its peers, threads and agent tokens stay behind (y/n)" n)" = y ]; then
-        start_over=yes
+    install_cpctl
+    # A setup from before cpctl login: log it in, unless it is logged in
+    # elsewhere.
+    if [ -n "$cli" ] && [ -n "$owner" ] && [ -s "$saved" ] && [ ! -e "$config/login" ] &&
+        "$cli" login "$url" --token-file "$saved" >/dev/null 2>&1; then
+        done_ "cpctl here is logged in to your daemon."
     fi
-    [ -n "$start_over" ] ||
-        fail "$worker's data is from an earlier release, which $version cannot read; rerun with --start-over to start on empty storage (its peers, threads and agent tokens stay behind, and you peer again)"
-    # A new name for the Durable Object; the old one keeps its data, unreachable.
-    storage=owner-$(date +%s)
-    heads_up "Starting $worker over on empty storage."
+    [ -z "$alias" ] || note "Aliases change with: cpctl alias $alias"
+    [ -z "$owner" ] || share "$owner" "$url"
+    exit 0
 fi
 
 [ -n "$name" ] || [ -n "$tty" ] || fail "pass --name <your name>: there is no terminal to ask on"
@@ -439,10 +480,9 @@ fi
 # All three settings go out in one deploy, so no version ever runs with only
 # some of them. The Worker gets only the owner token's SHA-256: the token
 # stays in the file on this machine.
-(umask 077 && NAME=$name URL=$url STORAGE=$storage TOKEN=$(cat "$token_file") node -e '
+(umask 077 && NAME=$name URL=$url TOKEN=$(cat "$token_file") node -e '
 const hash = require("crypto").createHash("sha256").update(process.env.TOKEN.trim()).digest("hex");
-const storage = process.env.STORAGE ? { CP_STORAGE: process.env.STORAGE } : {};
-process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash, ...storage }));
+process.stdout.write(JSON.stringify({ CP_NAME: process.env.NAME, CP_URL: process.env.URL, CP_OWNER_TOKEN_HASH: hash }));
 ' >"$tmp/secrets.json")
 step "Storing settings..."
 deploy --secrets-file "$tmp/secrets.json"

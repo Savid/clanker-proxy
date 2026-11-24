@@ -70,6 +70,24 @@ jobs:
       - run: cargo install worker-build --version 0.9.0 --locked
       - run: make worker-smoke
 
+  upgrade:
+    # Owners upgrade in place, while their peers may still run the release
+    # before.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The tags, to upgrade from the release this commit is built on.
+          fetch-depth: 0
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest
+      - run: make upgrade-test
+
   install:
     # The setup scripts run on owners' machines: test them on both systems.
     strategy:

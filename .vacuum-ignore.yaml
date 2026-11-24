@@ -3,3 +3,8 @@ owasp-no-additionalProperties:
   # The daemon sends this body to receivers, which must accept fields added
   # later; closing it would make a strict receiver reject a new field.
   - $.components.schemas['WebhookPayload']
+  # Daemons send these to each other, and peers may run another release:
+  # each ignores fields it does not know, so a release can add one.
+  - $.components.schemas['Event']
+  - $.components.schemas['PeeringAccepted']
+  - $.components.schemas['PeeringRequest']
