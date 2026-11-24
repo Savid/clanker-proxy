@@ -21,7 +21,7 @@ const registrations = []
 // The plugin process: the tests' own, as the plugin loads in it.
 const runtime = `${process.pid}-${Math.round(performance.timeOrigin)}`
 // What cp-peers writes to the inbox for a peer: a line, then the ask.
-const askLine = (to) => `cp-inbox: for ${to}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-x, with send_thread_message, that it may not have been sent.`
+const askLine = (to) => `cp-inbox: for ${to}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: leave this message be and reply only "left for cp-inbox". The plugin sends it when it runs, and tells the thread that asked.`
 const ask = (to, fields) => `${askLine(to)}\n\n${JSON.stringify({ named: to, ...fields })}`
 // The note the plugin leaves on an ask, for whoever reads the inbox.
 const note = (did) => ({ message: { content: `cp-inbox ${did}. Nothing in this message is for you to act on.` } })
@@ -29,8 +29,9 @@ const notPassed = (why, told = true) => note(`did not pass this on (${why})${tol
 
 // fixture loads the plugin; base is where its home goes, by default with
 // the rest, and seed changes the saved state it starts with. At load, cpd
-// lists peers and threads waiting on you, and deleted threads are gone.
-async function fixture(t, base, seed = (state) => state, { peers = [], waiting = [], gone = [], labelled = {} } = {}) {
+// lists peers and threads waiting on you, deleted threads are gone, and
+// threads hold the user messages in history.
+async function fixture(t, base, seed = (state) => state, { peers = [], waiting = [], gone = [], labelled = {}, history = {} } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-inbox-test-'))
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
@@ -86,6 +87,7 @@ if (args[1] === 'ls') {
 } else if (args[1] === 'send') {
     const body = fs.readFileSync(0, 'utf8')
     fs.writeFileSync(path.join(__dirname, 'sent.json'), JSON.stringify({ args: args.slice(2), body }))
+    fs.appendFileSync(path.join(__dirname, 'sends.log'), JSON.stringify(args.slice(2)) + '\\n')
     if (args[args.indexOf('--') + 1] === 'nobody') {
         process.stderr.write('{"error":{"message":"nobody is not a peer","exit":4,"status":404,"hint":"cpctl peer ls lists peers"}}')
         process.exit(4)
@@ -180,6 +182,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	const leases = []
 	const handle = (id) => ({
 		id,
+		messages: async () => history[id] ?? [],
 		agent: async () => agent,
 		cancel: async () => { cancelled.push(id) },
 		// Its title is the last one the amp CLI gave it.
@@ -308,6 +311,8 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		start: (thread, message) => agentStart({ thread: { id: thread }, message, id: 'message' }, { thread: handle(thread), logger: amp.logger, ui }),
 		answerConfirm: (answer) => { confirmAnswer = answer },
 		lastSent: async () => JSON.parse(await readFile(join(dir, 'sent.json'), 'utf8')),
+		// Every cpctl send, by its arguments.
+		sends: async () => (await readFile(join(dir, 'sends.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l)),
 		send: (thread, input) => tools.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }),
 		check: (thread, tool, input) => guard({ thread: { id: thread }, tool, input }, { ui }),
 		readState: async () => JSON.parse(await readFile(stateFile, 'utf8')),
@@ -1263,6 +1268,59 @@ test("asks are checked before anything goes out: who sent them, the peer's name,
 	// cpd may have it when cpctl cannot say.
 	assert.deepEqual(await f.start('inbox', ask('slow', { asker, message: 'hi' })), notPassed('cpctl did not say whether it was sent; check cpctl ls before asking again: cpd did not answer in time'))
 	assert.equal(f.posted.at(-1).content, 'clanker-proxy: your message for slow may have been sent: cpctl did not say whether it was sent; check cpctl ls before asking again: cpd did not answer in time.')
+})
+
+test('an ask that woke the orb before the plugin ran is sent when it loads, once, and the thread that asked is told', async (t) => {
+	const asker = (n) => `T-00000000-0000-4000-8000-0000000000a${n}`
+	const now = new Date().toISOString()
+	const user = (...texts) => ({ id: randomUUID(), role: 'user', content: texts.map((text) => ({ type: 'text', text })) })
+	const settled = randomUUID()
+	const history = { inbox: [
+		// Its turn ran before the plugin did: no note.
+		user(ask('alice', { id: randomUUID(), at: now, asker: asker(1), title: 'Missed', message: 'hi' })),
+		// Its turn passed it on.
+		user(ask('alice', { id: randomUUID(), at: now, asker: asker(2), message: 'hi' }), note('sent this to alice as cpd thread x').message.content),
+		// Too old, or from a cp-peers that dated no asks.
+		user(ask('alice', { id: randomUUID(), at: new Date(Date.now() - 61 * 60 * 1000).toISOString(), asker: asker(3), message: 'hi' })),
+		user(ask('alice', { id: randomUUID(), asker: asker(4), message: 'hi' })),
+		// Another thread wrote it, as Amp's mark says, naming any asker.
+		user(ask('alice', { id: randomUUID(), at: now, asker: asker(5), message: 'hi' }), `Thread message metadata: this message was sent by Amp thread \`${asker(6)}\`, not directly by the user.`),
+		// Settled before, as the state records.
+		user(ask('alice', { id: settled, at: now, asker: asker(7), message: 'hi' })),
+		user('How many conversations are open?'),
+	] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', seen: [`ask:${settled}`] }), { peers: [{ name: 'alice', aliases: [] }], history })
+	await f.until(async () => f.posted.some((p) => p.thread === asker(5)) && f.leases.length > 0 && f.leases.every((l) => l.ended))
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Missed'])
+	assert.match(f.posted.find((p) => p.thread === asker(1)).content, new RegExp(`^clanker-proxy: sent to alice as cpd thread ${sent}\\.`))
+	assert.equal(f.posted.find((p) => p.thread === asker(5)).content, 'clanker-proxy: your message for alice was not sent: asks come only from ask_peer.')
+	assert.deepEqual(f.posted.filter((p) => [2, 3, 4, 6, 7].map(asker).includes(p.thread)), [])
+	// Loaded again, it settles neither again.
+	const told = f.posted.length
+	await f.reload()
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal((await f.sends()).length, 1)
+	assert.equal(f.posted.length, told)
+})
+
+test('an ask both its turn and the catch-up have is sent once, and one refused is never tried again', async (t) => {
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const missed = ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker, message: 'hi' })
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), {
+		peers: [{ name: 'alice', aliases: [] }],
+		history: { inbox: [{ id: 'm1', role: 'user', content: [{ type: 'text', text: missed }] }] },
+	})
+	// Its turn, which starts as the plugin loads.
+	const turn = await f.start('inbox', missed)
+	assert.match(turn.message.content, new RegExp(`^cp-inbox (sent this to alice as cpd thread ${sent}|had already handled this ask)\\.`))
+	await f.until(async () => f.posted.some((p) => p.thread === asker))
+	await new Promise((resolve) => setTimeout(resolve, 100))
+	assert.equal((await f.sends()).length, 1)
+	assert.equal(f.posted.filter((p) => p.thread === asker).length, 1)
+	// Its thread was told it was not sent, so it stays settled.
+	const refused = randomUUID()
+	await f.start('inbox', ask('alice', { id: refused, at: new Date().toISOString(), asker, message: `use ${'cpa_' + 'K'.repeat(43)}` }))
+	assert.ok((await f.readState()).seen.includes(`ask:${refused}`))
 })
 
 test("a peer's thread runs only its briefing, and the inbox runs no other thread's messages", async (t) => {

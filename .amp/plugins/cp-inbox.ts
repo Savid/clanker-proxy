@@ -9,7 +9,8 @@
 // comes back with it. cp_send lets a thread here open a cpd thread; its
 // answers go to a conversation too. Your other threads' asks for a peer come
 // to the inbox, which wakes for them, and the plugin sends them, or passes a
-// follow-up to its conversation, with no agent in between. A peer's thread
+// follow-up to its conversation, with no agent in between; one that woke the
+// orb before the plugin ran is sent when the plugin loads. A peer's thread
 // only lists the peer and parents its conversations. Threads that ask watch
 // the cpd thread: they are told of each of the peer's moves, never the
 // peer's words. See docs/amp.md.
@@ -66,6 +67,10 @@ const conversationsPerPeer = 10
 const noticeGap = 10 * 60 * 1000
 const sweepEvery = 10 * 60 * 1000
 const sweepMax = 5
+// An ask that woke the orb before the plugin ran is sent when the plugin
+// loads, if it is this recent: an older one's thread has likely done
+// without it.
+const catchUpWithin = 60 * 60 * 1000
 const keepEnded = 30 * day
 // An approval prompt must show the whole command.
 const maxApprovable = 2000
@@ -112,6 +117,9 @@ const hubBriefingStart = 'This is my clanker-proxy thread for '
 // An ask that cp-peers brings to the inbox for a peer: a line for the
 // plugin, then the ask as JSON. cp-peers writes it the same way.
 const askLine = /^cp-inbox: for ([a-z0-9](?:-?[a-z0-9])*)'s thread\.[^\n]*\n\n/
+// How the note the plugin leaves on a message in the inbox ends.
+const noteEnd = ' Nothing in this message is for you to act on.'
+const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(noteEnd)
 // The plugin process this is. A thread the plugin starts runs on the client
 // running the plugin, not in an orb of its own: a message there never wakes
 // the orb, and once that client restarts (each time the orb wakes), or
@@ -186,6 +194,8 @@ interface Ask {
 	thread?: string
 	// cp-peers' own ID for it, so one handled twice is sent once.
 	id?: string
+	// When cp-peers wrote it, by the asking orb's clock.
+	at?: number
 	// Why it is refused as it stands.
 	error?: string
 }
@@ -213,13 +223,28 @@ export default async function (amp: PluginAPI) {
 	const ready = new Promise<void>((resolve) => {
 		loaded = resolve
 	})
+	// settle passes an ask on, or tells the thread that asked why not, and
+	// returns the note saying which.
+	const settle = async (ctx: Context, ask: Ask, labels: string[]): Promise<string> => {
+		const outcome: Outcome = pass ? await pass(ctx, ask, labels).catch(() => ({ why: 'the inbox could not pass it on' })) : { why: ask.error ?? notRunning }
+		if (!('why' in outcome)) return `cp-inbox ${outcome.done}.`
+		amp.logger.log(`cp-inbox: an ask for ${ask.peer} was not passed on: ${outcome.why}`)
+		const told = !!ask.asker && (await mayTell(ask.asker).catch(() => false))
+		if (told) {
+			await amp.threads
+				.get(ask.asker!)
+				.appendUserMessage({ type: 'user-message', content: `clanker-proxy: your message for ${ask.peer} ${outcome.maybe ? 'may have been sent' : 'was not sent'}: ${outcome.why}.` })
+				.catch(() => undefined)
+		}
+		return `cp-inbox did not pass this on (${outcome.why})${told ? ' and told the thread that asked' : ''}.`
+	}
 	amp.on('agent.start', async (event, ctx) => {
 		const ask = parseAsk(event.message)
 		const cancel = () =>
 			Promise.resolve()
 				.then(() => ctx.thread.cancel())
 				.catch(() => undefined)
-		const done = (note: string) => ({ message: { content: `${note} Nothing in this message is for you to act on.` } })
+		const done = (note: string) => ({ message: { content: `${note}${noteEnd}` } })
 		if (!ask) {
 			const labels = await amp.threads
 				.get(event.thread.id)
@@ -258,21 +283,7 @@ export default async function (amp: PluginAPI) {
 			.then(() => amp.system.executor.keepAlive())
 			.catch(() => undefined)
 		try {
-			const outcome: Outcome = ask.error
-				? { why: ask.error }
-				: pass
-					? await pass(ctx, ask, labels ?? []).catch(() => ({ why: 'the inbox could not pass it on' }))
-					: { why: notRunning }
-			if (!('why' in outcome)) return done(`cp-inbox ${outcome.done}.`)
-			amp.logger.log(`cp-inbox: an ask for ${ask.peer} was not passed on: ${outcome.why}`)
-			const told = !!ask.asker && (await mayTell(ask.asker).catch(() => false))
-			if (told) {
-				await amp.threads
-					.get(ask.asker!)
-					.appendUserMessage({ type: 'user-message', content: `clanker-proxy: your message for ${ask.peer} ${outcome.maybe ? 'may have been sent' : 'was not sent'}: ${outcome.why}.` })
-					.catch(() => undefined)
-			}
-			return done(`cp-inbox did not pass this on (${outcome.why})${told ? ' and told the thread that asked' : ''}.`)
+			return done(await settle(ctx, ask, labels ?? []))
 		} finally {
 			lease?.unsubscribe()
 		}
@@ -1470,7 +1481,8 @@ export default async function (amp: PluginAPI) {
 	// with no agent in between, and tells the thread that asked; it says why
 	// when it cannot. A new orb's state may not name the inbox yet; its label
 	// does.
-	pass = async (ctx, ask, labels) => {
+	const passOn = async (ctx: Context, ask: Ask, labels: string[]): Promise<Outcome> => {
+		if (ask.error) return { why: ask.error }
 		if (uninstalled) return { why: 'the inbox is uninstalled' }
 		if (ctx.thread.id !== state.inbox && !labels.includes('cp-inbox')) return { why: 'it reached a thread that is not the inbox' }
 		if (ask.id && state.seen.includes(`ask:${ask.id}`)) return { done: 'had already handled this ask' }
@@ -1534,6 +1546,31 @@ export default async function (amp: PluginAPI) {
 		void serial(() => inbox.sweep(ctx)).catch(() => undefined)
 		return outcome
 	}
+	// An ask's own turn and the catch-up at load can have it at once: it is
+	// settled once, and both get that outcome. One refused is never tried
+	// again, as the thread that asked was told it was not sent.
+	const passing = new Map<string, Promise<Outcome>>()
+	pass = (ctx, ask, labels) => {
+		const id = ask.id
+		if (!id) return passOn(ctx, ask, labels)
+		const settling = passing.get(id)
+		if (settling) return settling
+		const settled = passOn(ctx, ask, labels)
+			.then(async (outcome) => {
+				if ('why' in outcome && !uninstalled) {
+					await serial(async () => {
+						if (state.seen.includes(`ask:${id}`)) return
+						state.seen.push(`ask:${id}`)
+						state.seen.splice(0, state.seen.length - 1000)
+						await saveState(state)
+					})
+				}
+				return outcome
+			})
+			.finally(() => passing.delete(id))
+		passing.set(id, settled)
+		return settled
+	}
 	sealed = async (id, labels) =>
 		id !== state.inbox &&
 		(state.known.includes(id) || Object.values(state.hubs).includes(id) || Object.values(state.conversations).some((c) => c.amp === id) || sealedLabels(labels))
@@ -1556,12 +1593,44 @@ export default async function (amp: PluginAPI) {
 	}
 	loaded()
 
+	// Amp can start the inbox's turn for an ask that woke the orb before the
+	// plugin runs: the inbox's agent gets it, told to leave it be, and no note
+	// follows. Each such ask from the last hour is settled now.
+	const catchUp = async (ctx: Context, id: ThreadID) => {
+		const missed: Ask[] = []
+		for (const m of await amp.threads.get(id).messages({ from: 'end', limit: 20, roles: ['user'] })) {
+			if (m.role !== 'user') continue
+			const texts = m.content.flatMap((b) => (b.type === 'text' ? [b.text] : []))
+			if (texts.slice(1).some(isNote)) continue
+			// All of it, so Amp's mark on a message another thread sent is read.
+			const ask = parseAsk(texts.join('\n\n'))
+			if (!ask?.id || ask.at === undefined || state.seen.includes(`ask:${ask.id}`)) continue
+			const age = Date.now() - ask.at
+			if (age > -tolerance && age < catchUpWithin) missed.push(ask)
+		}
+		if (!missed.length) return
+		const lease = await Promise.resolve()
+			.then(() => amp.system.executor.keepAlive())
+			.catch(() => undefined)
+		try {
+			for (const ask of missed) amp.logger.log(`cp-inbox: caught up on an ask for ${ask.peer}: ${await settle(ctx, ask, [])}`)
+		} finally {
+			lease?.unsubscribe()
+		}
+	}
+
 	// Loaded in the inbox's orb, after an update or a restart: each peer
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
 	// their threads and would not know them before their first cpd thread,
 	// and threads waiting on you catch up without waiting for an event.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
+		const id = state.inbox
+		// Amp serves a thread's messages only once the orb has it, which may be
+		// just after the plugin loads.
+		void catchUp(ctx, id).catch(() =>
+			setTimeout(() => void catchUp(ctx, id).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err)), 30_000).unref(),
+		)
 		void serial(async () => {
 			for (const peer of (await readPeers())?.keys() ?? []) {
 				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
@@ -2218,7 +2287,10 @@ function parseAsk(message: string): Ask | undefined {
 	}
 	const old = /^My thread (T-[0-9a-f-]{36}) asks you to (send|follow up on cpd thread ([0-9a-f-]{8,36}) with) ([a-z0-9-]+)[ :]/i.exec(rest)
 	const who = asker(j?.asker) ?? asker(old ? `T-${old[1]!.slice(2).toLowerCase()}` : undefined)
-	const refused = (error: string): Ask => ({ peer, named: peer, asker: who, title: '', message: '', error })
+	const id = typeof j?.id === 'string' && /^[0-9a-f-]{8,64}$/i.test(j.id) ? j.id : undefined
+	const at = typeof j?.at === 'string' ? Date.parse(j.at) : Number.NaN
+	const when = Number.isFinite(at) ? { at } : {}
+	const refused = (error: string): Ask => ({ peer, named: peer, asker: who, title: '', message: '', id, ...when, error })
 	if (/^cp-inbox: for /m.test(rest)) return refused('it held more than one ask')
 	// ask_peer writes through the plugin API, which leaves no mark: an ask a
 	// thread sent itself could name any asker.
@@ -2235,8 +2307,7 @@ function parseAsk(message: string): Ask | undefined {
 		if (j.thread !== undefined && !thread) return refused('its cpd thread is not one')
 		const title = cleanTitle(typeof j.title === 'string' && j.title.trim() ? j.title : text)
 		if (!title) return refused('it has no title')
-		const id = typeof j.id === 'string' && /^[0-9a-f-]{8,64}$/i.test(j.id) ? j.id : undefined
-		return { peer, named, asker: who, title, message: text, thread, id }
+		return { peer, named, asker: who, title, message: text, thread, id, ...when }
 	}
 	// Words an earlier cp-peers wrote for a peer's thread's agent, which
 	// chose what to send: sent as written now, a send could carry what the

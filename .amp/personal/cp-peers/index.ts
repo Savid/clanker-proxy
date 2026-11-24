@@ -179,18 +179,25 @@ export default async function (amp: PluginAPI) {
 			const ask = {
 				// Handled once, however often it reaches the inbox.
 				id: randomUUID(),
+				// An ask the inbox's plugin missed while starting is sent when it
+				// loads, if it is recent.
+				at: new Date().toISOString(),
 				asker: ctx.thread.id,
 				named: peer,
 				message,
 				...(typeof title === 'string' && title.trim() ? { title: title.trim().split('\n', 1)[0] } : {}),
 				...(typeof about === 'string' ? { thread: about } : {}),
 			}
-			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell ${ctx.thread.id}, with send_thread_message, that it may not have been sent.`
+			// The inbox's agent sees it only while the plugin is starting, and
+			// the plugin sends it once loaded: an agent that acted on it could
+			// have it sent twice.
+			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: leave this message be and reply only "left for cp-inbox". The plugin sends it when it runs, and tells the thread that asked.`
 			await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${JSON.stringify(ask)}` })
 			const told = `This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
+			const wait = "If the inbox was asleep, that can take a few minutes. Never send it again: if nothing comes, tell the owner."
 			return typeof about === 'string'
-				? `Passed to your clanker-proxy inbox, which passes it to the conversation handling ${about} with ${name}. ${told}`
-				: `Passed to your clanker-proxy inbox, which sends it to ${name}. ${told}`
+				? `Passed to your clanker-proxy inbox, whose plugin passes it to the conversation handling ${about} with ${name} and tells this thread. ${wait} ${told}`
+				: `Passed to your clanker-proxy inbox, whose plugin sends it to ${name} and tells this thread its cpd thread ID. ${wait} ${told}`
 		},
 	})
 }
