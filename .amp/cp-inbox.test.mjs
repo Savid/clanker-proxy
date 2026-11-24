@@ -1231,6 +1231,9 @@ test("loaded in the inbox, the plugin gives each peer without a thread one, so a
 	assert.deepEqual(f.created.map((c) => c.parent), ['inbox', 'inbox', 'hub-alice'])
 	assert.deepEqual([state.hubs.bob, state.hubs.carol], ['thread-1', 'thread-2'])
 	assert.equal(f.posted.find((p) => /Catching up/.test(p.content)).thread, 'thread-3')
+	// Each is named for ask_peer, though started while a naming pass ran.
+	await f.until(async () => (await f.renames()).filter((c) => c[2] === 'thread-1' || c[2] === 'thread-2').length === 2)
+	assert.deepEqual((await f.renames()).filter((c) => c[2] === 'thread-1' || c[2] === 'thread-2').map((c) => c.slice(2)).sort(), [['thread-1', 'bob'], ['thread-2', 'carol']])
 	// Not the inbox's orb: nothing starts.
 	const g = await fixture(t, undefined, undefined, { peers: [{ name: 'bob', aliases: [] }] })
 	await new Promise((resolve) => setTimeout(resolve, 100))

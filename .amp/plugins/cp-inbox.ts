@@ -433,22 +433,34 @@ export default async function (amp: PluginAPI) {
 	// time, against the title the thread has now: Amp, you or another thread
 	// may have changed it. Without cpd's answer it names them only.
 	let naming: Promise<void> | undefined
-	const nameThreads = (): Promise<void> =>
-		(naming ??= (async () => {
-			const peers = await readPeers()
-			for (const [peer, hub] of Object.entries(state.hubs)) {
-				const current = await amp.threads
-					.get(hub)
-					.title.get()
-					.catch(() => null)
-				const title = peers ? peerTitle(peer, peers.get(peer) ?? []) : current?.split(' (')[0] === peer ? current : peer
-				if (current !== title && !(await threads(['rename', hub, title]))) amp.logger.log(`cp-inbox: could not name ${peer}'s thread`)
-			}
+	// A call while a pass runs asks for one more: a peer's thread started
+	// meanwhile may not be in the pass.
+	let nameAgain = false
+	const nameThreads = (): Promise<void> => {
+		if (naming) {
+			nameAgain = true
+			return naming
+		}
+		naming = (async () => {
+			do {
+				nameAgain = false
+				const peers = await readPeers()
+				for (const [peer, hub] of Object.entries(state.hubs)) {
+					const current = await amp.threads
+						.get(hub)
+						.title.get()
+						.catch(() => null)
+					const title = peers ? peerTitle(peer, peers.get(peer) ?? []) : current?.split(' (')[0] === peer ? current : peer
+					if (current !== title && !(await threads(['rename', hub, title]))) amp.logger.log(`cp-inbox: could not name ${peer}'s thread`)
+				}
+			} while (nameAgain)
 		})()
 			.catch((err) => amp.logger.log('cp-inbox: could not name the peer threads:', err instanceof Error ? err.message : err))
 			.finally(() => {
 				naming = undefined
-			}))
+			})
+		return naming
+	}
 	// resolvePeer is the peer an alias names, or the name as given.
 	const resolvePeer = async (name: string): Promise<string> => {
 		for (const [peer, aliases] of (await readPeers()) ?? []) if (aliases.includes(name)) return peer
