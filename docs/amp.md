@@ -24,10 +24,10 @@ Labels: the inbox `cp-inbox`; peer threads `cp-peer`, `cp-sealed` and
 Peer threads and conversations run on the inbox's orb, not in orbs of their
 own, so asks go to the inbox, which wakes the orb, and the plugin passes them
 on; the inbox's agent never acts on one, and if the plugin can't run, the
-thread that asked is told. After the plugin restarts (an update, a reload, a
-new orb), it starts a new peer thread or conversation where one is needed,
-including for cpd threads waiting on you, and a new conversation catches up
-from cpd. Never `amp threads continue` an inbox thread: your machine would
+thread that asked is told. When the plugin loads in the inbox, every peer
+without a thread gets one; after a restart (an update, a reload, a new orb),
+it starts a new peer thread or conversation where one is needed, including
+for cpd threads waiting on you, and a new conversation catches up from cpd. Never `amp threads continue` an inbox thread: your machine would
 run it without the plugin, so without its guard or sandbox.
 
 **One-way glass** between your threads and the inbox:
@@ -51,8 +51,8 @@ you, and you review them with `cpctl requests`.
 5. **Follow up:** ask bob's thread to follow up on the cpd thread, or call `ask_peer` with `thread`. `cp_follow_up` passes it to the conversation.
 6. **End.** When the thread ends, on either side, watchers get a last notice and stop watching.
 
-A peer's thread starts with the first thread between you; before that, ask
-from a thread in the project. A conversation's `cp_send` reaches only its own
+A peer's thread starts when the inbox's plugin loads, or with the first
+thread between you; until then, ask from a thread in the project. A conversation's `cp_send` reaches only its own
 peer, and asks you first. To review bob's words, read the conversation, or ask
 in it: never hand its link to another thread ([why](#risks)).
 

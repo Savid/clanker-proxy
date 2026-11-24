@@ -1468,6 +1468,27 @@ export default async function (amp: PluginAPI) {
 	}
 	loaded()
 
+	// Loaded in the inbox's orb, after an update or a restart: each peer
+	// whose thread is missing or gone gets one, as ask_peer finds peers by
+	// their threads and would not know them before their first cpd thread,
+	// and threads waiting on you catch up without waiting for an event.
+	if (state.inbox) {
+		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
+		void serial(async () => {
+			for (const peer of (await readPeers())?.keys() ?? []) {
+				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
+				const there = known
+					? await amp.threads
+							.get(known)
+							.labels()
+							.then(() => true, () => false)
+					: false
+				if (!there) await inbox.hub(ctx, peer)
+			}
+			await inbox.sweep(ctx)
+		}).catch((err) => amp.logger.log('cp-inbox: could not start the peer threads:', err instanceof Error ? err.message : err))
+	}
+
 	const { url } = await amp.createWebhook({
 		key: 'cpd',
 		headers: ['webhook-id', 'webhook-timestamp', 'webhook-signature'],

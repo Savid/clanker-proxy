@@ -146,8 +146,9 @@ export default async function (amp: PluginAPI) {
 			} catch {
 				return 'ask_peer: cannot search your threads.'
 			}
-			// A peer's thread starts with the first thread between you.
-			if (!found) return `ask_peer: ${peer} has no thread in your clanker-proxy inbox yet. Ask them first from a thread of that project, with cp_send.`
+			// A peer's thread starts when the inbox loads, or with the first
+			// thread between you.
+			if (!found) return `ask_peer: ${peer} has no thread in your clanker-proxy inbox yet. Reload the inbox's plugins, or ask from a thread of that project, with cp_send.`
 			const { name, thread } = found
 			// The name as asked: the peer's thread resolves it with cpd, and
 			// refuses any peer but its own, so a stale title cannot misroute it.
