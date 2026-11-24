@@ -98,7 +98,8 @@ Triggers) and start a new thread in the project.
 3. Reload the plugins (`plugins: reload`): a plugin can't reload itself.
 
 New orbs start on master, and your other threads load the new `cp-peers` when
-they start; one started before may need a new thread to reach a peer.
+they start. One started before keeps the old one until you run
+`plugins: reload` in it; the inbox tells it so the first time it asks.
 
 ## Names and aliases
 

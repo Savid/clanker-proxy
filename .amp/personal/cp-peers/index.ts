@@ -19,6 +19,10 @@ const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
 const ampThread = /^T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // The label cp-inbox puts on an inbox and its peers' threads.
 const inboxKey = /^inbox-[0-9a-f]{1,12}$/
+// The form of the ask this writes, which cp-inbox reads. Threads keep the
+// cp-peers they started with, so a change only adds optional fields, and
+// raises this and cp-inbox's askFormat.
+const askFormat = 2
 
 interface Peer {
 	name: string
@@ -177,6 +181,7 @@ export default async function (amp: PluginAPI) {
 			const inbox = await inboxOf(amp, thread).catch(() => undefined)
 			if (!inbox) return `ask_peer: cannot tell which of your threads is the clanker-proxy inbox for ${name}. Check that the inbox is not archived, and reload its plugins.`
 			const ask = {
+				format: askFormat,
 				// Handled once, however often it reaches the inbox.
 				id: randomUUID(),
 				// An ask the inbox's plugin missed while starting is sent when it

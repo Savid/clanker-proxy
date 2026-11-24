@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -53,12 +53,14 @@ process.stdout.write(JSON.stringify(found[process.argv[4]] ?? []))
 }
 
 const inbox = 'T-00000000-0000-4000-8000-00000000f001'
+const inboxFormat = Number(/^const askFormat = (\d+)$/m.exec(await readFile(new URL('./plugins/cp-inbox.ts', import.meta.url), 'utf8'))[1])
 const forInbox = (name) => `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: leave this message be and reply only "left for cp-inbox". The plugin sends it when it runs, and tells the thread that asked.`
 // The ask as the inbox reads it.
 const asked = (post) => {
 	const [line, json] = post.content.split('\n\n')
-	const { id, at, ...ask } = JSON.parse(json)
+	const { id, at, format, ...ask } = JSON.parse(json)
 	assert.match(id, /^[0-9a-f-]{36}$/, 'each ask has an ID of its own')
+	assert.equal(format, inboxFormat, "the form cp-inbox reads, so it tells a thread with an older cp-peers to reload")
 	// Dated, so the inbox sends one its plugin missed only while it is recent.
 	assert.ok(Math.abs(Date.now() - Date.parse(at)) < 60_000, 'each ask has the time it was asked')
 	return { thread: post.thread, line, ask }

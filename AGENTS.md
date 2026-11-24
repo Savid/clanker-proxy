@@ -49,6 +49,8 @@ loopback like any other.
 - `xtask`: repository automation. `api/openapi.json`: generated, committed.
 - `.amp/plugins/cp-inbox.ts`: the Amp inbox plugin, loaded in this repository's
   Amp threads; `.agents/setup` installs `cpctl` in their orbs.
+  `.amp/personal/cp-peers`: the personal plugin whose `ask_peer` brings asks
+  from your other threads to the inbox.
 
 ## API: code first
 
@@ -119,6 +121,11 @@ all of it except publishing.
   reported release knows it. `cp-conformance/tests/federation.rs` keeps
   passing against the release before. Patch releases change neither
   storage nor the wire format.
+- Amp threads keep the plugins they started with, so the ask cp-peers
+  writes to the inbox is a format too: cp-peers writes only to the inbox; a
+  change only adds optional fields and raises `askFormat` in both plugins;
+  and cp-inbox reads every earlier form, telling a thread that writes one to
+  reload its plugins.
 - Comments say what the code cannot: why, constraints, non-obvious
   consequences. No restating code, no history, no references to plans,
   reviews or tickets.

@@ -22,7 +22,9 @@ const registrations = []
 const runtime = `${process.pid}-${Math.round(performance.timeOrigin)}`
 // What cp-peers writes to the inbox for a peer: a line, then the ask.
 const askLine = (to) => `cp-inbox: for ${to}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: leave this message be and reply only "left for cp-inbox". The plugin sends it when it runs, and tells the thread that asked.`
-const ask = (to, fields) => `${askLine(to)}\n\n${JSON.stringify({ named: to, ...fields })}`
+// The form of ask the plugin reads from the cp-peers of this release.
+const askFormat = Number(/^const askFormat = (\d+)$/m.exec(await readFile(new URL('./plugins/cp-inbox.ts', import.meta.url), 'utf8'))[1])
+const ask = (to, fields) => `${askLine(to)}\n\n${JSON.stringify({ named: to, format: askFormat, ...fields })}`
 // The note the plugin leaves on an ask, for whoever reads the inbox.
 const note = (did) => ({ message: { content: `cp-inbox ${did}. Nothing in this message is for you to act on.` } })
 const notPassed = (why, told = true) => note(`did not pass this on (${why})${told ? ' and told the thread that asked' : ''}`)
@@ -971,7 +973,9 @@ test('a follow-up ask goes to the conversation of that cpd thread, and the threa
 	assert.deepEqual(await follow('not an id', 'x'), notPassed('its cpd thread is not one', true))
 	// The words an earlier cp-peers wrote for a follow-up are read; for a send, refused.
 	assert.deepEqual(await f.start('inbox', `${askLine('alice')}\n\nMy thread ${asker} asks you to follow up on cpd thread ${other} with alice: pass this on with cp_follow_up, replyTo ${asker}.\n\nOld words`), note(`passed this follow-up to the conversation handling ${other}`))
-	assert.equal(f.posted.at(-2).content, 'From the owner, through their thread for this peer:\n\nOld words')
+	assert.equal(f.posted.at(-3).content, 'From the owner, through their thread for this peer:\n\nOld words')
+	// That thread runs an older cp-peers, so it is told to reload its plugins.
+	assert.deepEqual(f.posted.at(-1), { thread: asker, content: 'clanker-proxy: this thread runs an older cp-peers than your inbox. Ask the owner to run plugins: reload here, or a later update may leave its asks unsent.' })
 	// An ended thread's conversation takes nothing.
 	const state = JSON.parse(await readFile(f.stateFile, 'utf8'))
 	assert.ok(state.conversations[other])
@@ -1321,6 +1325,24 @@ test('an ask both its turn and the catch-up have is sent once, and one refused i
 	const refused = randomUUID()
 	await f.start('inbox', ask('alice', { id: refused, at: new Date().toISOString(), asker, message: `use ${'cpa_' + 'K'.repeat(43)}` }))
 	assert.ok((await f.readState()).seen.includes(`ask:${refused}`))
+})
+
+test('a thread running an older cp-peers is told once to reload its plugins, and its ask still goes', async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }))
+	f.setPeers([{ name: 'alice', aliases: [] }])
+	const asker = 'T-00000000-0000-4000-8000-0000000000aa'
+	const other = 'T-00000000-0000-4000-8000-0000000000ab'
+	// A cp-peers from before askFormat writes none.
+	const older = (fields) => ask('alice', { format: undefined, ...fields })
+	const reload = 'clanker-proxy: this thread runs an older cp-peers than your inbox. Ask the owner to run plugins: reload here, or a later update may leave its asks unsent.'
+	assert.deepEqual(await f.start('inbox', older({ asker, message: 'hi' })), note(`sent this to alice as cpd thread ${sent}`))
+	assert.deepEqual(f.posted.filter((p) => p.content === reload).map((p) => p.thread), [asker])
+	await f.start('inbox', older({ asker, message: 'again' }))
+	assert.equal(f.posted.filter((p) => p.content === reload).length, 1, 'once a thread')
+	// The current form, or one refused, which may name any thread, tells nothing of it.
+	await f.start('inbox', ask('alice', { asker: other, message: 'hi' }))
+	await f.start('inbox', older({ asker: other, message: ' ' }))
+	assert.equal(f.posted.filter((p) => p.content === reload).length, 1)
 })
 
 test("a peer's thread runs only its briefing, and the inbox runs no other thread's messages", async (t) => {

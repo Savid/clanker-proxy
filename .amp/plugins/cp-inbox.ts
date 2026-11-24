@@ -117,6 +117,11 @@ const hubBriefingStart = 'This is my clanker-proxy thread for '
 // An ask that cp-peers brings to the inbox for a peer: a line for the
 // plugin, then the ask as JSON. cp-peers writes it the same way.
 const askLine = /^cp-inbox: for ([a-z0-9](?:-?[a-z0-9])*)'s thread\.[^\n]*\n\n/
+// The form of the ask cp-peers writes, raised with each change to it. A
+// thread keeps the cp-peers it started with, so the plugin reads every
+// earlier form, and tells a thread that writes one to reload its plugins.
+// cp-peers' askFormat is the same number.
+const askFormat = 2
 // How the note the plugin leaves on a message in the inbox ends.
 const noteEnd = ' Nothing in this message is for you to act on.'
 const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(noteEnd)
@@ -196,6 +201,8 @@ interface Ask {
 	id?: string
 	// When cp-peers wrote it, by the asking orb's clock.
 	at?: number
+	// The askFormat of the cp-peers that wrote it.
+	format?: number
 	// Why it is refused as it stands.
 	error?: string
 }
@@ -218,6 +225,7 @@ export default async function (amp: PluginAPI) {
 		return !!labels && !labels.some((l) => inboxLabels.has(l) || l.startsWith('peer-'))
 	}
 	let watchStart: ((event: { thread: { id: ThreadID }; message: string }) => Promise<void>) | undefined
+	let stale = async (_ask: Ask) => {}
 	let notRunning = 'cp-inbox is starting'
 	let loaded!: () => void
 	const ready = new Promise<void>((resolve) => {
@@ -227,6 +235,7 @@ export default async function (amp: PluginAPI) {
 	// returns the note saying which.
 	const settle = async (ctx: Context, ask: Ask, labels: string[]): Promise<string> => {
 		const outcome: Outcome = pass ? await pass(ctx, ask, labels).catch(() => ({ why: 'the inbox could not pass it on' })) : { why: ask.error ?? notRunning }
+		await stale(ask).catch(() => undefined)
 		if (!('why' in outcome)) return `cp-inbox ${outcome.done}.`
 		amp.logger.log(`cp-inbox: an ask for ${ask.peer} was not passed on: ${outcome.why}`)
 		const told = !!ask.asker && (await mayTell(ask.asker).catch(() => false))
@@ -1575,6 +1584,21 @@ export default async function (amp: PluginAPI) {
 		id !== state.inbox &&
 		(state.known.includes(id) || Object.values(state.hubs).includes(id) || Object.values(state.conversations).some((c) => c.amp === id) || sealedLabels(labels))
 	mayTell = mayWatch
+	// A thread whose cp-peers is older than this plugin is told once, as an
+	// update to the ask's form could leave its asks unsent. Only an ask it
+	// could have written counts: a refused one may name any thread.
+	stale = async (ask) => {
+		if (uninstalled || ask.error || !ask.asker || (ask.format ?? 1) >= askFormat || !(await mayWatch(ask.asker))) return
+		const key = `stale:${ask.asker}`
+		const first = await serial(async () => {
+			if (state.seen.includes(key)) return false
+			state.seen.push(key)
+			state.seen.splice(0, state.seen.length - 1000)
+			await saveState(state)
+			return true
+		})
+		if (first) await tell(ask.asker, 'clanker-proxy: this thread runs an older cp-peers than your inbox. Ask the owner to run plugins: reload here, or a later update may leave its asks unsent.')
+	}
 
 	// A message one of your threads sends a conversation puts that thread on
 	// the cpd thread's watch list. Amp marks such a message with the sending
@@ -2290,6 +2314,8 @@ function parseAsk(message: string): Ask | undefined {
 	const id = typeof j?.id === 'string' && /^[0-9a-f-]{8,64}$/i.test(j.id) ? j.id : undefined
 	const at = typeof j?.at === 'string' ? Date.parse(j.at) : Number.NaN
 	const when = Number.isFinite(at) ? { at } : {}
+	// A cp-peers from before askFormat wrote none.
+	const format = typeof j?.format === 'number' && Number.isInteger(j.format) && j.format > 0 ? j.format : 1
 	const refused = (error: string): Ask => ({ peer, named: peer, asker: who, title: '', message: '', id, ...when, error })
 	if (/^cp-inbox: for /m.test(rest)) return refused('it held more than one ask')
 	// ask_peer writes through the plugin API, which leaves no mark: an ask a
@@ -2307,7 +2333,7 @@ function parseAsk(message: string): Ask | undefined {
 		if (j.thread !== undefined && !thread) return refused('its cpd thread is not one')
 		const title = cleanTitle(typeof j.title === 'string' && j.title.trim() ? j.title : text)
 		if (!title) return refused('it has no title')
-		return { peer, named, asker: who, title, message: text, thread, id, ...when }
+		return { peer, named, asker: who, title, message: text, thread, id, ...when, format }
 	}
 	// Words an earlier cp-peers wrote for a peer's thread's agent, which
 	// chose what to send: sent as written now, a send could carry what the
