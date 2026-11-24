@@ -56,8 +56,10 @@ const inbox = 'T-00000000-0000-4000-8000-00000000f001'
 const forInbox = (name) => `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-asker, with send_thread_message, that it may not have been sent.`
 // The ask as the inbox reads it.
 const asked = (post) => {
-	const [line, ask] = post.content.split('\n\n')
-	return { thread: post.thread, line, ask: JSON.parse(ask) }
+	const [line, json] = post.content.split('\n\n')
+	const { id, ...ask } = JSON.parse(json)
+	assert.match(id, /^[0-9a-f-]{36}$/, 'each ask has an ID of its own')
+	return { thread: post.thread, line, ask }
 }
 // Amp's search keeps only a query's last label, so a search names one, and
 // finds every thread that has it: the inbox and its peer threads.

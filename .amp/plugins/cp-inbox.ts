@@ -107,6 +107,8 @@ const peerThreadTools = ['cp_send']
 const followUpPrefix = 'From the owner, through their thread for this peer:'
 // How a conversation's first message starts; the plugin writes all of it.
 const briefingStart = 'You handle clanker-proxy thread '
+// How a peer's thread's one message starts.
+const hubBriefingStart = 'This is my clanker-proxy thread for '
 // An ask that cp-peers brings to the inbox for a peer: a line for the
 // plugin, then the ask as JSON. cp-peers writes it the same way.
 const askLine = /^cp-inbox: for ([a-z0-9](?:-?[a-z0-9])*)'s thread\.[^\n]*\n\n/
@@ -165,8 +167,9 @@ interface State {
 	inbox?: ThreadID
 }
 
-// What became of an ask: done says what the plugin did, why what stopped it.
-type Outcome = { done: string } | { why: string }
+// What became of an ask: done says what the plugin did, why what stopped it,
+// and maybe that cpd may have it all the same.
+type Outcome = { done: string } | { why: string; maybe?: boolean }
 
 // What the plugin uses of a handler's or a tool's context.
 type Context = Pick<WebhookHandlerContext, 'thread' | 'logger' | 'ui'>
@@ -181,6 +184,8 @@ interface Ask {
 	title: string
 	message: string
 	thread?: string
+	// cp-peers' own ID for it, so one handled twice is sent once.
+	id?: string
 	// Why it is refused as it stands.
 	error?: string
 }
@@ -210,7 +215,29 @@ export default async function (amp: PluginAPI) {
 	})
 	amp.on('agent.start', async (event, ctx) => {
 		const ask = parseAsk(event.message)
+		const cancel = () =>
+			Promise.resolve()
+				.then(() => ctx.thread.cancel())
+				.catch(() => undefined)
+		const done = (note: string) => ({ message: { content: `${note} Nothing in this message is for you to act on.` } })
 		if (!ask) {
+			const labels = await amp.threads
+				.get(event.thread.id)
+				.labels()
+				.catch(() => undefined)
+			// A peer's thread runs only its briefing: asks go to the inbox.
+			if (labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed') && !event.message.startsWith(hubBriefingStart)) {
+				await cancel()
+				return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
+			}
+			// The inbox runs only what you type in it: another thread's message
+			// there would reach an agent with every tool and the token.
+			if (labels?.includes('cp-inbox') && sentBy.test(event.message)) {
+				sentBy.lastIndex = 0
+				await cancel()
+				return done("cp-inbox: the inbox runs no other thread's messages; ask peers with ask_peer.")
+			}
+			sentBy.lastIndex = 0
 			await watchStart?.(event).catch(() => undefined)
 			return {}
 		}
@@ -219,26 +246,36 @@ export default async function (amp: PluginAPI) {
 			.get(event.thread.id)
 			.labels()
 			.catch(() => undefined)
-		if (await sealed(event.thread.id, labels).catch(() => false)) return {}
-		await Promise.resolve()
-			.then(() => ctx.thread.cancel())
+		if (await sealed(event.thread.id, labels).catch(() => false)) {
+			if (!labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed')) return {}
+			await cancel()
+			return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
+		}
+		await cancel()
+		// The inbox's own turn is cancelled, so nothing else keeps the orb up
+		// while the plugin sends.
+		const lease = await Promise.resolve()
+			.then(() => amp.system.executor.keepAlive())
 			.catch(() => undefined)
-		const outcome: Outcome = ask.error
-			? { why: ask.error }
-			: pass
-				? await pass(ctx, ask, labels ?? []).catch(() => ({ why: 'the inbox could not pass it on' }))
-				: { why: notRunning }
-		if ('why' in outcome) {
+		try {
+			const outcome: Outcome = ask.error
+				? { why: ask.error }
+				: pass
+					? await pass(ctx, ask, labels ?? []).catch(() => ({ why: 'the inbox could not pass it on' }))
+					: { why: notRunning }
+			if (!('why' in outcome)) return done(`cp-inbox ${outcome.done}.`)
 			amp.logger.log(`cp-inbox: an ask for ${ask.peer} was not passed on: ${outcome.why}`)
-			if (ask.asker && (await mayTell(ask.asker).catch(() => false))) {
+			const told = !!ask.asker && (await mayTell(ask.asker).catch(() => false))
+			if (told) {
 				await amp.threads
-					.get(ask.asker)
-					.appendUserMessage({ type: 'user-message', content: `clanker-proxy: your message for ${ask.peer} was not sent: ${outcome.why}.` })
+					.get(ask.asker!)
+					.appendUserMessage({ type: 'user-message', content: `clanker-proxy: your message for ${ask.peer} ${outcome.maybe ? 'may have been sent' : 'was not sent'}: ${outcome.why}.` })
 					.catch(() => undefined)
 			}
+			return done(`cp-inbox did not pass this on (${outcome.why})${told ? ' and told the thread that asked' : ''}.`)
+		} finally {
+			lease?.unsubscribe()
 		}
-		const note = 'why' in outcome ? `cp-inbox did not pass this on (${outcome.why}) and told the thread that asked.` : `cp-inbox ${outcome.done}.`
-		return { message: { content: `${note} Nothing in this message is for you to act on.` } }
 	})
 
 	// Without its settings or its state the plugin cannot sandbox anything, so
@@ -289,6 +326,9 @@ export default async function (amp: PluginAPI) {
 		refuse(`cannot read ${stateFile}`)
 		return
 	}
+	// Peers' threads no longer need replacing, so v0.8.8's record of which
+	// process started each goes.
+	delete (state as State & { runtimes?: unknown }).runtimes
 	// Peer threads from before the inbox's key label get it, so cp-peers
 	// brings their asks to this inbox, even with several.
 	if (state.inbox) {
@@ -348,6 +388,19 @@ export default async function (amp: PluginAPI) {
 			.catch(() => undefined)
 		clearTimeout(timer)
 		lease.unsubscribe()
+	}
+	// labelsOf reads a thread's labels, or undefined once two tries a second
+	// apart fail, as for a deleted thread: a passing failure must not count
+	// as a thread gone.
+	const labelsOf = async (id: ThreadID): Promise<string[] | undefined> => {
+		for (let i = 0; ; i++) {
+			try {
+				return await amp.threads.get(id).labels()
+			} catch {
+				if (i >= 1) return undefined
+				await new Promise((resolve) => setTimeout(resolve, 1000))
+			}
+		}
 	}
 	const archive = async (id: ThreadID) => {
 		if (!(await threads(['archive', id]))) amp.logger.log('cp-inbox: could not archive a thread')
@@ -412,7 +465,8 @@ export default async function (amp: PluginAPI) {
 		amp.createAgent({ model: await inboxModel(ctx), tools: { include: conversationTools, exclude: ['code_exec', 'tool_search'] } })
 	// A peer's thread answers its briefing, so Amp titles it, and then never
 	// runs: it has no tools.
-	const peerThreadAgent = async (ctx: Context) => amp.createAgent({ model: await inboxModel(ctx), tools: { include: [] } })
+	const peerThreadAgent = async (ctx: Context) =>
+		amp.createAgent({ model: await inboxModel(ctx), tools: { include: [], exclude: ['code_exec', 'tool_search'] } })
 
 	const inbox = {
 		// deliver sends a message to the conversation for a cpd thread,
@@ -523,10 +577,7 @@ export default async function (amp: PluginAPI) {
 		async hub(ctx: Context, peer: string): Promise<ThreadID> {
 			const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
 			if (known) {
-				const labels = await amp.threads
-					.get(known)
-					.labels()
-					.catch(() => undefined)
+				const labels = await labelsOf(known)
 				if (labels?.includes('cp-sealed')) return known
 				// One started with every tool is replaced: it is kept under the
 				// guard with conversations, loses its labels so ask_peer finds
@@ -544,6 +595,7 @@ export default async function (amp: PluginAPI) {
 				const hub = await (await peerThreadAgent(ctx)).createThread({ parentThreadID: ctx.thread.id, visibility: 'private' })
 				await hub.addLabels(['cp-peer', 'cp-sealed', label('peer-' + peer), inboxKey(ctx.thread.id)]).catch(() => undefined)
 				await hub.appendUserMessage({ type: 'user-message', content: hubBriefing(peer) })
+				void keepAwake(hub.id)
 				// Recorded once briefed, so a failed briefing gets a new thread.
 				state.hubs[peer] = hub.id
 				await saveState(state)
@@ -699,7 +751,7 @@ export default async function (amp: PluginAPI) {
 			const where = c
 				? `The owner reads it with the "${button}" button; if it can, the conversation sends this thread a short form of the move.`
 				: `The owner reads it with \`cpctl show ${n.subject}\`.`
-			const content = `clanker-proxy: ${n.peer} ${what} ${n.subject}, a cpd thread you're watching. Their words stay in the conversation that handles it: never look for it or read it. ${where} To follow up, ask ${n.peer}'s thread in the clanker-proxy inbox to follow up on ${n.subject}, or use ask_peer with that thread.`
+			const content = `clanker-proxy: ${n.peer} ${what} ${n.subject}, a cpd thread you're watching. Their words stay in the conversation that handles it: never look for it or read it. ${where} To follow up, use ask_peer with thread ${n.subject}.`
 			for (const id of watchers) {
 				await amp.threads
 					.get(id)
@@ -1005,17 +1057,26 @@ export default async function (amp: PluginAPI) {
 	}
 
 	// followUp passes the owner's message to the conversation handling one of
-	// peer's cpd threads, named by its ID or a prefix, starting a new one in
-	// place of one an earlier plugin process started. Callers run it one at a
-	// time with events, which may be replacing the same conversation.
+	// peer's cpd threads, named by its ID or a prefix that cpd resolves (a
+	// prefix the inbox's conversations alone resolve could name a thread the
+	// peer opened to match), starting a new conversation in place of one an
+	// earlier plugin process started. Callers run it one at a time with
+	// events, which may be replacing the same conversation.
 	const followUp = async (ctx: Context, peer: string, thread: string, message: string): Promise<{ subject: string } | { error: string }> => {
-		const prefix = thread.toLowerCase()
-		const found = Object.entries(state.conversations).filter(([id, c]) => c.peer === peer && id.startsWith(prefix))
-		if (found.length !== 1) {
-			return { error: found.length ? `${thread} matches more than one of ${peer}'s threads; give more of it` : `no conversation here handles ${peer}'s thread ${thread}` }
+		let subject: string
+		try {
+			const { stdout } = await run(cpctl, ['--json', 'show', thread], { timeout: 10_000 })
+			const t = JSON.parse(stdout) as { id?: unknown; peer?: unknown }
+			if (typeof t.id !== 'string' || !threadID.test(t.id)) return { error: `cpd has no thread ${thread}` }
+			if (t.peer !== peer) return { error: `${thread} is not one of ${peer}'s threads` }
+			subject = t.id
+		} catch (err) {
+			return { error: `cpd could not find ${thread}: ${cpctlError(err)}` }
 		}
-		const [[subject, c]] = found as [[string, Conversation]]
+		const c = state.conversations[subject]
+		if (!c || c.peer !== peer) return { error: `no conversation here handles ${peer}'s thread ${subject}` }
 		const unreachable = { error: `the conversation for ${subject} could not be reached; if its cpd thread has ended, send a new one` }
+		if (c.ended) return unreachable
 		const content = `${followUpPrefix}\n\n${message}`
 		try {
 			if (c.runtime === runtime) {
@@ -1023,7 +1084,6 @@ export default async function (amp: PluginAPI) {
 				void keepAwake(c.amp)
 				return { subject }
 			}
-			if (c.ended) return unreachable
 			await retire(c.amp)
 			const next = await inbox.begin(ctx, subject, peer, await inbox.hub(ctx, peer), content, c)
 			await saveState(state)
@@ -1399,40 +1459,65 @@ export default async function (amp: PluginAPI) {
 	// when it cannot. A new orb's state may not name the inbox yet; its label
 	// does.
 	pass = async (ctx, ask, labels) => {
-		const outcome = await serial(async (): Promise<Outcome> => {
-			if (uninstalled) return { why: 'the inbox is uninstalled' }
-			if (ctx.thread.id !== state.inbox && !labels.includes('cp-inbox')) return { why: 'it reached a thread that is not the inbox' }
+		if (uninstalled) return { why: 'the inbox is uninstalled' }
+		if (ctx.thread.id !== state.inbox && !labels.includes('cp-inbox')) return { why: 'it reached a thread that is not the inbox' }
+		if (ask.id && state.seen.includes(`ask:${ask.id}`)) return { done: 'had already handled this ask' }
+		const secret = secretIn(`${ask.title}\n${ask.message}`, cpToken)
+		if (secret) return { why: `it holds ${secret}, which never goes to a peer` }
+		const peers = await readPeers()
+		if (!peers) return { why: 'cpd did not answer' }
+		if (!peers.has(ask.peer)) return { why: `${ask.peer} is not one of this inbox's peers` }
+		// The name as the asker gave it, maybe an alias, must be that peer.
+		const named = peers.has(ask.named) ? ask.named : [...peers].find(([, aliases]) => aliases.includes(ask.named))?.[0]
+		if (named !== ask.peer) return { why: `${ask.named} does not name ${ask.peer}` }
+		const handled = () => {
+			if (!ask.id) return
+			state.seen.push(`ask:${ask.id}`)
+			state.seen.splice(0, state.seen.length - 1000)
+		}
+		// The peer's thread lists the peer for ask_peer and parents the
+		// conversation that takes the answer; state changes go one at a time.
+		await serial(async () => {
 			await markInbox(ctx)
-			const peers = await readPeers()
-			if (!peers) return { why: 'cpd did not answer' }
-			if (!peers.has(ask.peer)) return { why: `${ask.peer} is not one of this inbox's peers` }
-			// The name as the asker gave it, maybe an alias, must be that peer.
-			const named = peers.has(ask.named) ? ask.named : [...peers].find(([, aliases]) => aliases.includes(ask.named))?.[0]
-			if (named !== ask.peer) return { why: `${ask.named} does not name ${ask.peer}` }
-			// It lists the peer for ask_peer, and parents the conversation that
-			// takes the answer.
 			await inbox.hub(ctx, ask.peer)
-			if (ask.thread) {
-				const r = await followUp(ctx, ask.peer, ask.thread, ask.message)
-				if ('error' in r) return { why: r.error }
-				if (ask.asker && (await watch(ask.asker, r.subject))) {
-					await tell(ask.asker, `clanker-proxy: passed your follow-up on ${r.subject} to its conversation. You're watching it: you'll be told of each of ${ask.peer}'s moves, never their words.`)
+			await saveState(state)
+		})
+		let outcome: Outcome
+		if (ask.thread) {
+			const r = await serial(async () => {
+				const r = await followUp(ctx, ask.peer, ask.thread!, ask.message)
+				if (!('error' in r)) {
+					handled()
+					await saveState(state)
 				}
-				return { done: `passed this follow-up to the conversation handling ${r.subject}` }
+				return r
+			})
+			if ('error' in r) return { why: r.error }
+			if (ask.asker && (await watch(ask.asker, r.subject))) {
+				await tell(ask.asker, `clanker-proxy: passed your follow-up on ${r.subject} to its conversation. You're watching it: you'll be told of each of ${ask.peer}'s moves, never their words.`)
+			} else if (ask.asker && (await mayWatch(ask.asker))) {
+				await tell(ask.asker, `clanker-proxy: passed your follow-up on ${r.subject} to its conversation.`)
 			}
+			outcome = { done: `passed this follow-up to the conversation handling ${r.subject}` }
+		} else {
 			let id: string
 			try {
 				id = await sendThread(ask.peer, ask.title, ask.message, false)
 			} catch (err) {
-				return { why: `cpctl could not send it: ${cpctlError(err)}` }
+				// Only cpd's refusal means it was not sent.
+				return { why: `cpctl ${cpctlRefused(err) ? 'could not send it' : 'did not say whether it was sent; check cpctl ls before asking again'}: ${cpctlError(err)}`, maybe: !cpctlRefused(err) }
 			}
+			await serial(async () => {
+				handled()
+				await saveState(state)
+			})
 			if (ask.asker && (await watch(ask.asker, id))) {
 				await tell(ask.asker, `clanker-proxy: sent to ${ask.peer} as cpd thread ${id}. You're watching it: you'll be told of each of ${ask.peer}'s moves, with a short form, never their words.`)
 			} else if (ask.asker && (await mayWatch(ask.asker))) {
 				await tell(ask.asker, `clanker-proxy: sent to ${ask.peer} as cpd thread ${id}.`)
 			}
-			return { done: `sent this to ${ask.peer} as cpd thread ${id}` }
-		})
+			outcome = { done: `sent this to ${ask.peer} as cpd thread ${id}` }
+		}
 		// Woken by an ask, the inbox also catches up on threads waiting on you.
 		void serial(() => inbox.sweep(ctx)).catch(() => undefined)
 		return outcome
@@ -1468,12 +1553,7 @@ export default async function (amp: PluginAPI) {
 		void serial(async () => {
 			for (const peer of (await readPeers())?.keys() ?? []) {
 				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
-				const there = known
-					? await amp.threads
-							.get(known)
-							.labels()
-							.then(() => true, () => false)
-					: false
+				const there = known ? (await labelsOf(known)) !== undefined : false
 				if (!there) await inbox.hub(ctx, peer)
 			}
 			await inbox.sweep(ctx)
@@ -1657,7 +1737,7 @@ function briefing(subject: string, peer: string): string {
 // from; the thread never runs again.
 function hubBriefing(peer: string): string {
 	return [
-		`This is my clanker-proxy thread for ${peer}. Each subthread is a conversation that handles one cpd thread with ${peer}; leave them to it.`,
+		`${hubBriefingStart}${peer}. Each subthread is a conversation that handles one cpd thread with ${peer}; leave them to it.`,
 		'',
 		`The cp-inbox plugin sends my threads' asks for ${peer} itself: nothing here is for you to act on, and you have no tools.`,
 		'',
@@ -2116,37 +2196,77 @@ function parseAsk(message: string): Ask | undefined {
 	const rest = message.slice(m[0].length)
 	const asker = (id: unknown) => (typeof id === 'string' && ampThreadID.test(id) ? (id as ThreadID) : undefined)
 	const name = (n: unknown) => (typeof n === 'string' && peerName.test(n) && n.length <= 39 ? n : undefined)
-	const cpdThread = (t: unknown) => (typeof t === 'string' && /^[0-9a-f-]{8,36}$/i.test(t) ? t : undefined)
+	const cpdThread = (t: unknown) => (typeof t === 'string' && /^[0-9a-f-]{8,36}$/i.test(t) ? t.toLowerCase() : undefined)
 	let j: Record<string, unknown> | undefined
 	try {
 		const parsed: unknown = JSON.parse(rest.split('\n', 1)[0]!)
-		j = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined
+		j = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined
 	} catch {
 		j = undefined
 	}
-	const sent = /^My thread (T-[0-9a-f-]{36}) asks you to send ([a-z0-9-]+) this, with replyTo T-[0-9a-f-]{36}\.[^\n]*\n\n([\s\S]+)$/.exec(rest)
-	const followed = /^My thread (T-[0-9a-f-]{36}) asks you to follow up on cpd thread ([0-9a-f-]{8,36}) with ([a-z0-9-]+): pass this on with cp_follow_up, replyTo T-[0-9a-f-]{36}\.\n\n([\s\S]+)$/.exec(rest)
-	const who = asker(j?.asker) ?? asker(sent?.[1]) ?? asker(followed?.[1])
+	const old = /^My thread (T-[0-9a-f-]{36}) asks you to (send|follow up on cpd thread ([0-9a-f-]{8,36}) with) ([a-z0-9-]+)[ :]/i.exec(rest)
+	const who = asker(j?.asker) ?? asker(old ? `T-${old[1]!.slice(2).toLowerCase()}` : undefined)
 	const refused = (error: string): Ask => ({ peer, named: peer, asker: who, title: '', message: '', error })
 	if (/^cp-inbox: for /m.test(rest)) return refused('it held more than one ask')
+	// ask_peer writes through the plugin API, which leaves no mark: an ask a
+	// thread sent itself could name any asker.
+	if (sentBy.test(rest)) {
+		sentBy.lastIndex = 0
+		return refused('asks come only from ask_peer')
+	}
 	if (j) {
 		const text = typeof j.message === 'string' ? j.message : ''
 		if (!text.trim()) return refused('it had no message')
+		const named = name(j.named)
+		if (!named) return refused('it names no peer')
 		const thread = cpdThread(j.thread)
 		if (j.thread !== undefined && !thread) return refused('its cpd thread is not one')
-		const title = typeof j.title === 'string' && j.title.trim() ? j.title.trim() : titleOf(text)
-		return { peer, named: name(j.named) ?? peer, asker: who, title, message: text, thread }
+		const title = cleanTitle(typeof j.title === 'string' && j.title.trim() ? j.title : text)
+		if (!title) return refused('it has no title')
+		const id = typeof j.id === 'string' && /^[0-9a-f-]{8,64}$/i.test(j.id) ? j.id : undefined
+		return { peer, named, asker: who, title, message: text, thread, id }
 	}
-	if (sent) return { peer, named: name(sent[2]) ?? peer, asker: who, title: titleOf(sent[3]!), message: sent[3]! }
-	if (followed) return { peer, named: peer, asker: who, title: '', message: followed[4]!, thread: followed[2] }
+	// Words an earlier cp-peers wrote for a peer's thread's agent, which
+	// chose what to send: sent as written now, a send could carry what the
+	// asker meant for that agent alone. A follow-up still goes to a
+	// conversation, which chooses.
+	const followed = /^My thread (T-[0-9a-f-]{36}) asks you to follow up on cpd thread ([0-9a-f-]{8,36}) with ([a-z0-9-]+): pass this on with cp_follow_up, replyTo T-[0-9a-f-]{36}\.\n\n([\s\S]+)$/i.exec(rest)
+	if (followed) {
+		if (followed[3]!.toLowerCase() !== peer) return refused(`it names ${followed[3]!.toLowerCase()}, not ${peer}`)
+		return { peer, named: peer, asker: who, title: '', message: followed[4]!, thread: followed[2]!.toLowerCase() }
+	}
+	if (old) return refused('asks are now sent to the peer as written, so ask again from a thread started after the update')
 	return refused('cp-inbox cannot read it')
 }
 
-// titleOf is a cpd thread's title from its message: the first line, cut to
-// cpd's 200 characters.
-function titleOf(message: string): string {
-	const line = message.trim().split('\n', 1)[0]!.trim()
+// cleanTitle is a cpd thread's title from text: its first line, with tabs,
+// control and invisible characters as spaces, cut to cpd's 200 characters.
+function cleanTitle(text: string): string {
+	const line = (text.trim().split('\n', 1)[0] ?? '')
+		.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
+		.replace(/\s+/g, ' ')
+		.trim()
 	return [...line].length > 200 ? `${[...line].slice(0, 199).join('')}…` : line
+}
+
+// secretIn names a credential in text, if any: a clanker-proxy token, this
+// inbox's own, or a private key.
+function secretIn(text: string, token: string): string | undefined {
+	if (token && text.includes(token)) return "the inbox's token"
+	if (/\bcp[oap]_[A-Za-z0-9_-]{43}\b/.test(text)) return 'a clanker-proxy token'
+	if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text)) return 'a private key'
+	return undefined
+}
+
+// cpctlRefused says whether cpctl's failure is cpd's own refusal, so nothing
+// was sent; a timeout or a lost answer leaves it unknown.
+function cpctlRefused(err: unknown): boolean {
+	try {
+		const e = JSON.parse(String((err as { stderr?: unknown }).stderr)).error
+		return [3, 4, 5, 6].includes(e?.exit) || (typeof e?.status === 'number' && e.status >= 400 && e.status < 500)
+	} catch {
+		return false
+	}
 }
 
 // inboxKey labels an inbox and its peers' threads, so cp-peers brings an ask

@@ -5,11 +5,12 @@
 // And it keeps your threads from reading the inbox's. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 
 import type { PluginAPI, ToolCallResult } from '@ampcode/plugin'
 
-export const description = "Ask your clanker-proxy peers from any thread: ask_peer hands the question to that peer's thread in your inbox project."
+export const description = "Ask your clanker-proxy peers from any thread: ask_peer brings the question to your inbox, whose plugin sends it."
 
 const run = promisify(execFile)
 // The plugin API cannot search threads; the amp CLI, signed in as you, can.
@@ -86,7 +87,7 @@ async function labelled(amp: PluginAPI, name: string): Promise<Peer | undefined>
 // puts the sender on that cpd thread's watch list. Amp runs read_thread and
 // code_exec, and what code_exec calls, without tool.call, so those can still
 // read one an agent finds.
-const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|peer-)/i
+const inboxLabel = /label:\s*(?:clanker-proxy|cp-peer|cp-inbox|cp-sealed|peer-|inbox-)/i
 const threadIDs = /T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 function guardInbox(amp: PluginAPI): void {
@@ -98,7 +99,7 @@ function guardInbox(amp: PluginAPI): void {
 			found = amp.threads
 				.get(id as `T-${string}`)
 				.labels()
-				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer') || l.includes('cp-sealed'))
+				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer') || l.includes('cp-sealed') || l.includes('cp-inbox'))
 			checked.set(id, found)
 			found.catch(() => checked.delete(id))
 		}
@@ -176,6 +177,8 @@ export default async function (amp: PluginAPI) {
 			const inbox = await inboxOf(amp, thread).catch(() => undefined)
 			if (!inbox) return `ask_peer: cannot tell which of your threads is the clanker-proxy inbox for ${name}. Check that the inbox is not archived, and reload its plugins.`
 			const ask = {
+				// Handled once, however often it reaches the inbox.
+				id: randomUUID(),
 				asker: ctx.thread.id,
 				named: peer,
 				message,

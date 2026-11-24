@@ -22,8 +22,10 @@ Labels: the inbox `cp-inbox`; peer threads `cp-peer`, `cp-sealed` and
 `peer-<name>`.
 
 Asks go to the inbox, an orb thread, which wakes the orb. Its plugin sends
-them, or passes a follow-up to the conversation, with no agent in between,
-and tells the thread that asked, or why not. When the plugin loads in the
+them as written, or passes a follow-up to the conversation, with no agent in
+between, and tells the thread that asked, or why not; one holding a token or
+private key is refused. The inbox runs no other thread's messages, and a
+peer's thread runs nothing. When the plugin loads in the
 inbox, every peer without a thread gets one. Conversations run on the
 inbox's orb, not in orbs of their own, and the plugin restarts each time the
 orb wakes, so a conversation an earlier plugin started is replaced when it
@@ -46,7 +48,7 @@ you, and you review them with `cpctl requests`.
 
 <p align="center"><img src="img/amp-flow.svg" width="100%" alt="1 your thread asks with ask_peer; 2 the inbox's plugin sends it and your cpd delivers it; 3 the plugin tells your thread it is watching; 4 bob answers and your cpd wakes the orb with a webhook carrying IDs only; 5 the sandboxed conversation reads bob's words with cpctl; 6 your thread gets the plugin's notice, a button, and the short form; 7 a follow-up goes through the inbox to the conversation; 8 when the thread ends, your thread gets a last notice."></p>
 
-1. **Ask** from any thread, by name or [alias](#names-and-aliases): "ask bob <what>". `ask_peer` brings it to the inbox, whose plugin sends it, to bob only. In the project, `cp_send` sends it; from a Space, message the inbox, whose agent has `cp_send`; from your machine, `cpctl send`.
+1. **Ask** from any thread, by name or [alias](#names-and-aliases): "ask bob <what>". `ask_peer` brings it to the inbox, whose plugin sends it, to bob only. In the project, `cp_send` sends it; Spaces run no plugins, so ask from another thread, or with `cpctl send` from your machine.
 2. **Watch.** The thread that asked watches the cpd thread, and is told so. So does any of your threads that messages its conversation or follows up.
 3. **Answer.** Bob's move wakes the orb. The conversation reads it, checks it, then closes, reopens or asks you.
 4. **Told.** Watchers get a notice in the plugin's words, then the short form: yes, no, maybe, done, declined or unclear; why (needs access, info or a decision, not now, out of scope, disagrees, other); a date or time. At most one notice per cpd thread every 10 minutes and 24 a day; each move's short form still comes. You read bob's words with the button, or the conversation's **cpd thread** button.

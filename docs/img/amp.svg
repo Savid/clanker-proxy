@@ -44,7 +44,7 @@
 <rect x="36" y="246" width="176" height="82" rx="12" class="box" stroke="#22d3ee" stroke-opacity=".6" stroke-width="1.4"/>
 <text x="50" y="272" class="h c">a Space</text>
 <text x="50" y="292" class="s">no plugins</text>
-<text x="50" y="312" class="s">messages the inbox</text>
+<text x="50" y="312" class="s">no ask_peer</text>
 <text x="40" y="96" class="s">never sees bob's words</text>
 
 <!-- the one-way glass -->
