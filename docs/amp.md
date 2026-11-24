@@ -99,7 +99,8 @@ Triggers) and start a new thread in the project.
 
 New orbs start on master, and your other threads load the new `cp-peers` when
 they start. One started before keeps the old one until you run
-`plugins: reload` in it; the inbox tells it so the first time it asks.
+`plugins: reload` in it; from v0.8.9 on, the inbox tells such a thread so
+the first time it asks.
 
 ## Names and aliases
 

@@ -17,7 +17,7 @@
 
 import { execFile } from 'node:child_process'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -125,6 +125,12 @@ const askFormat = 2
 // How the note the plugin leaves on a message in the inbox ends.
 const noteEnd = ' Nothing in this message is for you to act on.'
 const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(noteEnd)
+// An ask is claimed on disk before it is settled, by whichever of its own
+// turn and a catch-up, in any of the orb's plugin processes, gets there
+// first, and never settled again, even after a restart midway, when cpd may
+// have it already. Claims outlast the catch-up's window.
+const claimDir = join(stateDir, 'asks')
+const keepClaims = 2 * catchUpWithin
 // The plugin process this is. A thread the plugin starts runs on the client
 // running the plugin, not in an orb of its own: a message there never wakes
 // the orb, and once that client restarts (each time the orb wakes), or
@@ -232,8 +238,23 @@ export default async function (amp: PluginAPI) {
 		loaded = resolve
 	})
 	// settle passes an ask on, or tells the thread that asked why not, and
-	// returns the note saying which.
-	const settle = async (ctx: Context, ask: Ask, labels: string[]): Promise<string> => {
+	// returns the note saying which. In this process, every caller of one ask
+	// gets the note of its one settling; in another, or after a restart, its
+	// claim leaves it be.
+	const settling = new Map<string, Promise<string>>()
+	const settle = (ctx: Context, ask: Ask, labels: string[]): Promise<string> => {
+		const key = askKey(ask)
+		if (!key) return settleOnce(ctx, ask, labels)
+		const known = settling.get(key)
+		if (known) return known
+		const settled = claim(key)
+			.catch(() => true)
+			.then((first) => (first ? settleOnce(ctx, ask, labels) : 'cp-inbox had already handled this ask.'))
+			.finally(() => settling.delete(key))
+		settling.set(key, settled)
+		return settled
+	}
+	const settleOnce = async (ctx: Context, ask: Ask, labels: string[]): Promise<string> => {
 		const outcome: Outcome = pass ? await pass(ctx, ask, labels).catch(() => ({ why: 'the inbox could not pass it on' })) : { why: ask.error ?? notRunning }
 		await stale(ask).catch(() => undefined)
 		if (!('why' in outcome)) return `cp-inbox ${outcome.done}.`
@@ -1538,7 +1559,7 @@ export default async function (amp: PluginAPI) {
 				id = await sendThread(ask.peer, ask.title, ask.message, false)
 			} catch (err) {
 				// Only cpd's refusal means it was not sent.
-				return { why: `cpctl ${cpctlRefused(err) ? 'could not send it' : 'did not say whether it was sent; check cpctl ls before asking again'}: ${cpctlError(err)}`, maybe: !cpctlRefused(err) }
+				return { why: `cpctl ${cpctlRefused(err) ? 'could not send it' : 'did not say whether it was sent; the owner can check with cpctl ls before it is asked again'}: ${cpctlError(err)}`, maybe: !cpctlRefused(err) }
 			}
 			await serial(async () => {
 				handled()
@@ -1555,31 +1576,7 @@ export default async function (amp: PluginAPI) {
 		void serial(() => inbox.sweep(ctx)).catch(() => undefined)
 		return outcome
 	}
-	// An ask's own turn and the catch-up at load can have it at once: it is
-	// settled once, and both get that outcome. One refused is never tried
-	// again, as the thread that asked was told it was not sent.
-	const passing = new Map<string, Promise<Outcome>>()
-	pass = (ctx, ask, labels) => {
-		const id = ask.id
-		if (!id) return passOn(ctx, ask, labels)
-		const settling = passing.get(id)
-		if (settling) return settling
-		const settled = passOn(ctx, ask, labels)
-			.then(async (outcome) => {
-				if ('why' in outcome && !uninstalled) {
-					await serial(async () => {
-						if (state.seen.includes(`ask:${id}`)) return
-						state.seen.push(`ask:${id}`)
-						state.seen.splice(0, state.seen.length - 1000)
-						await saveState(state)
-					})
-				}
-				return outcome
-			})
-			.finally(() => passing.delete(id))
-		passing.set(id, settled)
-		return settled
-	}
+	pass = passOn
 	sealed = async (id, labels) =>
 		id !== state.inbox &&
 		(state.known.includes(id) || Object.values(state.hubs).includes(id) || Object.values(state.conversations).some((c) => c.amp === id) || sealedLabels(labels))
@@ -1591,7 +1588,7 @@ export default async function (amp: PluginAPI) {
 		if (uninstalled || ask.error || !ask.asker || (ask.format ?? 1) >= askFormat || !(await mayWatch(ask.asker))) return
 		const key = `stale:${ask.asker}`
 		const first = await serial(async () => {
-			if (state.seen.includes(key)) return false
+			if (uninstalled || state.seen.includes(key)) return false
 			state.seen.push(key)
 			state.seen.splice(0, state.seen.length - 1000)
 			await saveState(state)
@@ -1617,18 +1614,45 @@ export default async function (amp: PluginAPI) {
 	}
 	loaded()
 
+	// recentMessages reads the inbox's last 20 user messages a few at a time:
+	// one Amp will not return, being too large, costs only itself.
+	const recentMessages = async (id: ThreadID) => {
+		const thread = amp.threads.get(id)
+		const read = (offset: number, limit: number) => thread.messages({ from: 'end', offset, limit, roles: ['user'] })
+		const found: Awaited<ReturnType<typeof read>> = []
+		let failed = false
+		for (let offset = 0; offset < 20; offset += 5) {
+			const page = await read(offset, 5).catch(() => undefined)
+			if (page) {
+				found.push(...page)
+				if (page.length < 5) break
+				continue
+			}
+			for (let i = offset; i < offset + 5; i++) {
+				const one = await read(i, 1).catch(() => undefined)
+				if (one) found.push(...one)
+				else failed = true
+			}
+		}
+		if (failed && !found.length) throw new Error("the inbox's messages could not be read")
+		return found
+	}
+
 	// Amp can start the inbox's turn for an ask that woke the orb before the
-	// plugin runs: the inbox's agent gets it, told to leave it be, and no note
-	// follows. Each such ask from the last hour is settled now.
+	// plugin runs: the inbox's agent gets it, and no note follows. Each such
+	// ask from the last hour that nothing has claimed is settled now.
 	const catchUp = async (ctx: Context, id: ThreadID) => {
+		if (uninstalled) return
+		await pruneClaims()
 		const missed: Ask[] = []
-		for (const m of await amp.threads.get(id).messages({ from: 'end', limit: 20, roles: ['user'] })) {
-			if (m.role !== 'user') continue
-			const texts = m.content.flatMap((b) => (b.type === 'text' ? [b.text] : []))
+		for (const m of await recentMessages(id)) {
+			if (m.role !== 'user' || !Array.isArray(m.content)) continue
+			const texts = m.content.flatMap((b) => (b?.type === 'text' && typeof b.text === 'string' ? [b.text] : []))
 			if (texts.slice(1).some(isNote)) continue
 			// All of it, so Amp's mark on a message another thread sent is read.
 			const ask = parseAsk(texts.join('\n\n'))
-			if (!ask?.id || ask.at === undefined || state.seen.includes(`ask:${ask.id}`)) continue
+			const key = ask && askKey(ask)
+			if (!ask || !key || ask.at === undefined || state.seen.includes(`ask:${ask.id}`) || (await claimed(key))) continue
 			const age = Date.now() - ask.at
 			if (age > -tolerance && age < catchUpWithin) missed.push(ask)
 		}
@@ -1650,11 +1674,12 @@ export default async function (amp: PluginAPI) {
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
 		const id = state.inbox
-		// Amp serves a thread's messages only once the orb has it, which may be
-		// just after the plugin loads.
-		void catchUp(ctx, id).catch(() =>
-			setTimeout(() => void catchUp(ctx, id).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err)), 30_000).unref(),
-		)
+		// Amp may serve the inbox's messages only once the orb has the thread,
+		// just after the plugin loads, so the catch-up runs again shortly;
+		// claims keep the two from settling an ask twice.
+		const catchUpNow = () => catchUp(ctx, id).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err))
+		void catchUpNow()
+		setTimeout(() => void catchUpNow(), 30_000).unref()
 		void serial(async () => {
 			for (const peer of (await readPeers())?.keys() ?? []) {
 				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
@@ -2290,6 +2315,39 @@ function label(s: string): string {
 	return s.slice(0, 32).replace(/-+$/, '')
 }
 
+// askKey names an ask's claim: its ID, apart for a copy refused as it
+// stands, so a forged copy with a real ask's ID cannot claim the real one.
+function askKey(ask: Ask): string | undefined {
+	return ask.id && `${ask.id.toLowerCase()}${ask.error ? '-refused' : ''}`
+}
+
+// claim takes an ask's claim, and says whether it was free.
+async function claim(key: string): Promise<boolean> {
+	await mkdir(claimDir, { recursive: true, mode: 0o700 })
+	try {
+		await writeFile(join(claimDir, key), '', { flag: 'wx', mode: 0o600 })
+		return true
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+		throw err
+	}
+}
+
+function claimed(key: string): Promise<boolean> {
+	return lstat(join(claimDir, key)).then(
+		() => true,
+		() => false,
+	)
+}
+
+async function pruneClaims(): Promise<void> {
+	const now = Date.now()
+	for (const name of await readdir(claimDir).catch(() => [] as string[])) {
+		const s = await lstat(join(claimDir, name)).catch(() => undefined)
+		if (s && now - s.mtimeMs > keepClaims) await rm(join(claimDir, name), { force: true })
+	}
+}
+
 // parseAsk reads an ask cp-peers brought to the inbox: a JSON line, or, from
 // a thread that loaded an earlier cp-peers, the words it wrote for a peer's
 // thread's agent. A message holding more than one ask is refused whole: the
@@ -2322,7 +2380,9 @@ function parseAsk(message: string): Ask | undefined {
 	// thread sent itself could name any asker.
 	if (sentBy.test(rest)) {
 		sentBy.lastIndex = 0
-		return refused('asks come only from ask_peer')
+		// Amp's last mark names the thread that sent it, which hears why.
+		const sender = [...rest.matchAll(sentBy)].at(-1)?.[1] as ThreadID | undefined
+		return { ...refused('asks come only from ask_peer'), asker: sender }
 	}
 	if (j) {
 		const text = typeof j.message === 'string' ? j.message : ''

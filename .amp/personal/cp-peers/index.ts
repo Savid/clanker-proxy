@@ -194,12 +194,13 @@ export default async function (amp: PluginAPI) {
 				...(typeof about === 'string' ? { thread: about } : {}),
 			}
 			// The inbox's agent sees it only while the plugin is starting, and
-			// the plugin sends it once loaded: an agent that acted on it could
-			// have it sent twice.
-			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: leave this message be and reply only "left for cp-inbox". The plugin sends it when it runs, and tells the thread that asked.`
+			// the plugin sends it once loaded. The agent only tells the thread
+			// that asked to wait: one told it may not have gone would ask again,
+			// and one told nothing would not hear of a plugin that never runs.
+			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: do nothing with this message but tell ${ctx.thread.id}, with send_thread_message, that the inbox got its ask while starting and sends it once its plugin runs, so it must not be sent again.`
 			await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${JSON.stringify(ask)}` })
 			const told = `This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
-			const wait = "If the inbox was asleep, that can take a few minutes. Never send it again: if nothing comes, tell the owner."
+			const wait = 'If the inbox was asleep, that can take a few minutes. Never send it again unless the owner says to: if nothing comes, tell the owner.'
 			return typeof about === 'string'
 				? `Passed to your clanker-proxy inbox, whose plugin passes it to the conversation handling ${about} with ${name} and tells this thread. ${wait} ${told}`
 				: `Passed to your clanker-proxy inbox, whose plugin sends it to ${name} and tells this thread its cpd thread ID. ${wait} ${told}`
