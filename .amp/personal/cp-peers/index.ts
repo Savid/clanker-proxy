@@ -19,6 +19,10 @@ const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
 const ampThread = /^T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // The label cp-inbox puts on an inbox and its peers' threads.
 const inboxKey = /^inbox-[0-9a-f]{1,12}$/
+// The form of the ask this writes, which cp-inbox reads. Threads keep the
+// cp-peers they started with, so a change only adds optional fields, and
+// raises this and cp-inbox's askFormat.
+const askFormat = 2
 
 interface Peer {
 	name: string
@@ -177,20 +181,29 @@ export default async function (amp: PluginAPI) {
 			const inbox = await inboxOf(amp, thread).catch(() => undefined)
 			if (!inbox) return `ask_peer: cannot tell which of your threads is the clanker-proxy inbox for ${name}. Check that the inbox is not archived, and reload its plugins.`
 			const ask = {
+				format: askFormat,
 				// Handled once, however often it reaches the inbox.
 				id: randomUUID(),
+				// An ask the inbox's plugin missed while starting is sent when it
+				// loads, if it is recent.
+				at: new Date().toISOString(),
 				asker: ctx.thread.id,
 				named: peer,
 				message,
 				...(typeof title === 'string' && title.trim() ? { title: title.trim().split('\n', 1)[0] } : {}),
 				...(typeof about === 'string' ? { thread: about } : {}),
 			}
-			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell ${ctx.thread.id}, with send_thread_message, that it may not have been sent.`
+			// The inbox's agent sees it only while the plugin is starting, and
+			// the plugin sends it once loaded. The agent only tells the thread
+			// that asked to wait: one told it may not have gone would ask again,
+			// and one told nothing would not hear of a plugin that never runs.
+			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: do nothing with this message but tell ${ctx.thread.id}, with send_thread_message, that the inbox got its ask while starting and sends it once its plugin runs, so it must not be sent again.`
 			await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${JSON.stringify(ask)}` })
 			const told = `This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
+			const wait = 'If the inbox was asleep, that can take a few minutes. Never send it again unless the owner says to: if nothing comes, tell the owner.'
 			return typeof about === 'string'
-				? `Passed to your clanker-proxy inbox, which passes it to the conversation handling ${about} with ${name}. ${told}`
-				: `Passed to your clanker-proxy inbox, which sends it to ${name}. ${told}`
+				? `Passed to your clanker-proxy inbox, whose plugin passes it to the conversation handling ${about} with ${name} and tells this thread. ${wait} ${told}`
+				: `Passed to your clanker-proxy inbox, whose plugin sends it to ${name} and tells this thread its cpd thread ID. ${wait} ${told}`
 		},
 	})
 }

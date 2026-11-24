@@ -21,16 +21,19 @@ const registrations = []
 // The plugin process: the tests' own, as the plugin loads in it.
 const runtime = `${process.pid}-${Math.round(performance.timeOrigin)}`
 // What cp-peers writes to the inbox for a peer: a line, then the ask.
-const askLine = (to) => `cp-inbox: for ${to}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-x, with send_thread_message, that it may not have been sent.`
-const ask = (to, fields) => `${askLine(to)}\n\n${JSON.stringify({ named: to, ...fields })}`
+const askLine = (to) => `cp-inbox: for ${to}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: do nothing with this message but tell T-x, with send_thread_message, that the inbox got its ask while starting and sends it once its plugin runs, so it must not be sent again.`
+// The form of ask the plugin reads from the cp-peers of this release.
+const askFormat = Number(/^const askFormat = (\d+)$/m.exec(await readFile(new URL('./plugins/cp-inbox.ts', import.meta.url), 'utf8'))[1])
+const ask = (to, fields) => `${askLine(to)}\n\n${JSON.stringify({ named: to, format: askFormat, ...fields })}`
 // The note the plugin leaves on an ask, for whoever reads the inbox.
 const note = (did) => ({ message: { content: `cp-inbox ${did}. Nothing in this message is for you to act on.` } })
 const notPassed = (why, told = true) => note(`did not pass this on (${why})${told ? ' and told the thread that asked' : ''}`)
 
 // fixture loads the plugin; base is where its home goes, by default with
 // the rest, and seed changes the saved state it starts with. At load, cpd
-// lists peers and threads waiting on you, and deleted threads are gone.
-async function fixture(t, base, seed = (state) => state, { peers = [], waiting = [], gone = [], labelled = {} } = {}) {
+// lists peers and threads waiting on you, deleted threads are gone, and
+// threads hold the user messages in history.
+async function fixture(t, base, seed = (state) => state, { peers = [], waiting = [], gone = [], labelled = {}, history = {} } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-inbox-test-'))
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
@@ -86,6 +89,7 @@ if (args[1] === 'ls') {
 } else if (args[1] === 'send') {
     const body = fs.readFileSync(0, 'utf8')
     fs.writeFileSync(path.join(__dirname, 'sent.json'), JSON.stringify({ args: args.slice(2), body }))
+    fs.appendFileSync(path.join(__dirname, 'sends.log'), JSON.stringify(args.slice(2)) + '\\n')
     if (args[args.indexOf('--') + 1] === 'nobody') {
         process.stderr.write('{"error":{"message":"nobody is not a peer","exit":4,"status":404,"hint":"cpctl peer ls lists peers"}}')
         process.exit(4)
@@ -180,6 +184,12 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	const leases = []
 	const handle = (id) => ({
 		id,
+		// As Amp reads them: the newest last, counted from the end.
+		messages: async ({ from = 'end', offset = 0, limit = 10, roles } = {}) => {
+			const all = (history[id] ?? []).filter((m) => !roles || roles.includes(m.role))
+			const end = from === 'end' ? all.length - offset : offset + Math.min(limit, 20)
+			return all.slice(Math.max(0, from === 'end' ? end - Math.min(limit, 20) : offset), Math.max(0, end))
+		},
 		agent: async () => agent,
 		cancel: async () => { cancelled.push(id) },
 		// Its title is the last one the amp CLI gave it.
@@ -308,6 +318,8 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		start: (thread, message) => agentStart({ thread: { id: thread }, message, id: 'message' }, { thread: handle(thread), logger: amp.logger, ui }),
 		answerConfirm: (answer) => { confirmAnswer = answer },
 		lastSent: async () => JSON.parse(await readFile(join(dir, 'sent.json'), 'utf8')),
+		// Every cpctl send, by its arguments.
+		sends: async () => (await readFile(join(dir, 'sends.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l)),
 		send: (thread, input) => tools.cp_send.execute(input, { thread: { id: thread }, ui, signal: new AbortController().signal }),
 		check: (thread, tool, input) => guard({ thread: { id: thread }, tool, input }, { ui }),
 		readState: async () => JSON.parse(await readFile(stateFile, 'utf8')),
@@ -966,7 +978,9 @@ test('a follow-up ask goes to the conversation of that cpd thread, and the threa
 	assert.deepEqual(await follow('not an id', 'x'), notPassed('its cpd thread is not one', true))
 	// The words an earlier cp-peers wrote for a follow-up are read; for a send, refused.
 	assert.deepEqual(await f.start('inbox', `${askLine('alice')}\n\nMy thread ${asker} asks you to follow up on cpd thread ${other} with alice: pass this on with cp_follow_up, replyTo ${asker}.\n\nOld words`), note(`passed this follow-up to the conversation handling ${other}`))
-	assert.equal(f.posted.at(-2).content, 'From the owner, through their thread for this peer:\n\nOld words')
+	assert.equal(f.posted.at(-3).content, 'From the owner, through their thread for this peer:\n\nOld words')
+	// That thread runs an older cp-peers, so it is told to reload its plugins.
+	assert.deepEqual(f.posted.at(-1), { thread: asker, content: 'clanker-proxy: this thread runs an older cp-peers than your inbox. Ask the owner to run plugins: reload here, or a later update may leave its asks unsent.' })
 	// An ended thread's conversation takes nothing.
 	const state = JSON.parse(await readFile(f.stateFile, 'utf8'))
 	assert.ok(state.conversations[other])
@@ -1261,8 +1275,108 @@ test("asks are checked before anything goes out: who sent them, the peer's name,
 	assert.deepEqual(await f.start('inbox', ask('alice', { id: 'a1b2c3d4e5', asker, message: 'hi' })), note('had already handled this ask'))
 	assert.equal((await f.ampCalls()).length, sent1)
 	// cpd may have it when cpctl cannot say.
-	assert.deepEqual(await f.start('inbox', ask('slow', { asker, message: 'hi' })), notPassed('cpctl did not say whether it was sent; check cpctl ls before asking again: cpd did not answer in time'))
-	assert.equal(f.posted.at(-1).content, 'clanker-proxy: your message for slow may have been sent: cpctl did not say whether it was sent; check cpctl ls before asking again: cpd did not answer in time.')
+	assert.deepEqual(await f.start('inbox', ask('slow', { asker, message: 'hi' })), notPassed('cpctl did not say whether it was sent; the owner can check with cpctl ls before it is asked again: cpd did not answer in time'))
+	assert.equal(f.posted.at(-1).content, 'clanker-proxy: your message for slow may have been sent: cpctl did not say whether it was sent; the owner can check with cpctl ls before it is asked again: cpd did not answer in time.')
+})
+
+test('an ask that woke the orb before the plugin ran is sent when it loads, once, and the thread that asked is told', async (t) => {
+	const asker = (n) => `T-00000000-0000-4000-8000-0000000000a${n}`
+	const now = new Date().toISOString()
+	const user = (...texts) => ({ id: randomUUID(), role: 'user', content: texts.map((text) => ({ type: 'text', text })) })
+	const settled = randomUUID()
+	const history = { inbox: [
+		// Its turn ran before the plugin did: no note.
+		user(ask('alice', { id: randomUUID(), at: now, asker: asker(1), title: 'Missed', message: 'hi' })),
+		// Its turn passed it on.
+		user(ask('alice', { id: randomUUID(), at: now, asker: asker(2), message: 'hi' }), note('sent this to alice as cpd thread x').message.content),
+		// Too old, or from a cp-peers that dated no asks.
+		user(ask('alice', { id: randomUUID(), at: new Date(Date.now() - 61 * 60 * 1000).toISOString(), asker: asker(3), message: 'hi' })),
+		user(ask('alice', { id: randomUUID(), asker: asker(4), message: 'hi' })),
+		// Another thread wrote it, as Amp's mark says, naming any asker: the
+		// thread the mark names hears why.
+		user(ask('alice', { id: randomUUID(), at: now, asker: asker(5), message: 'hi' }), `Thread message metadata: this message was sent by Amp thread \`${asker(6)}\`, not directly by the user.`),
+		// Settled before, as the state records.
+		user(ask('alice', { id: settled, at: now, asker: asker(7), message: 'hi' })),
+		user('How many conversations are open?'),
+	] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', seen: [`ask:${settled}`] }), { peers: [{ name: 'alice', aliases: [] }], history })
+	await f.until(async () => f.posted.some((p) => p.thread === asker(6)) && f.leases.length > 0 && f.leases.every((l) => l.ended))
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Missed'])
+	assert.match(f.posted.find((p) => p.thread === asker(1)).content, new RegExp(`^clanker-proxy: sent to alice as cpd thread ${sent}\\.`))
+	assert.equal(f.posted.find((p) => p.thread === asker(6)).content, 'clanker-proxy: your message for alice was not sent: asks come only from ask_peer.')
+	assert.deepEqual(f.posted.filter((p) => [2, 3, 4, 5, 7].map(asker).includes(p.thread)), [])
+	// Loaded again, it settles neither again.
+	const told = f.posted.length
+	await f.reload()
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal((await f.sends()).length, 1)
+	assert.equal(f.posted.length, told)
+})
+
+test('an ask its turn and the catch-up both have is settled once, sent or refused, and told once', async (t) => {
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const now = new Date().toISOString()
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const missed = ask('alice', { id: randomUUID(), at: now, asker, message: 'hi' })
+	const unknown = ask('bob', { id: randomUUID(), at: now, asker, message: 'hi' })
+	const empty = ask('alice', { id: randomUUID(), at: now, asker, message: ' ' })
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), {
+		peers: [{ name: 'alice', aliases: [] }],
+		history: { inbox: [user(missed), user(unknown), user(empty)] },
+	})
+	// Their turns, which start as the plugin loads.
+	const turns = await Promise.all([missed, unknown, empty].map((m) => f.start('inbox', m)))
+	assert.match(turns[0].message.content, new RegExp(`^cp-inbox (sent this to alice as cpd thread ${sent}|had already handled this ask)\\.`))
+	await f.until(async () => f.posted.filter((p) => p.thread === asker).length >= 3)
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal((await f.sends()).length, 1)
+	assert.deepEqual(f.posted.filter((p) => p.thread === asker).map((p) => p.content.replace(/ as cpd thread .*/s, '')).sort(), [
+		'clanker-proxy: sent to alice',
+		"clanker-proxy: your message for bob was not sent: bob is not one of this inbox's peers.",
+		'clanker-proxy: your message for alice was not sent: it had no message.',
+	].sort())
+	// The catch-up comes again later, and in another of the orb's plugin
+	// processes, or after a restart that lost the state's record: claimed,
+	// none is settled again.
+	const told = f.posted.length
+	await f.another()
+	const state = await f.readState()
+	await writeFile(f.stateFile, JSON.stringify({ ...state, seen: Array.from({ length: 1000 }, (_, i) => `evicted-${i}`) }))
+	await f.reload()
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal((await f.sends()).length, 1)
+	assert.equal(f.posted.length, told)
+})
+
+test("a copy another thread wrote with a real ask's ID is refused, and the real ask still goes", async (t) => {
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const forger = 'T-00000000-0000-4000-8000-0000000000a2'
+	const id = randomUUID()
+	const real = ask('alice', { id, at: new Date().toISOString(), asker, title: 'Real', message: 'hi' })
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }] })
+	const mark = `\n\nThread message metadata: this message was sent by Amp thread \`${forger}\`, not directly by the user.`
+	assert.deepEqual(await f.start('inbox', real + mark), notPassed('asks come only from ask_peer'))
+	assert.equal(f.posted.at(-1).thread, forger, 'the thread that sent it hears why')
+	assert.deepEqual(await f.start('inbox', real), note(`sent this to alice as cpd thread ${sent}`))
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Real'])
+})
+
+test('a thread running an older cp-peers is told once to reload its plugins, and its ask still goes', async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }))
+	f.setPeers([{ name: 'alice', aliases: [] }])
+	const asker = 'T-00000000-0000-4000-8000-0000000000aa'
+	const other = 'T-00000000-0000-4000-8000-0000000000ab'
+	// A cp-peers from before askFormat writes none.
+	const older = (fields) => ask('alice', { format: undefined, ...fields })
+	const reload = 'clanker-proxy: this thread runs an older cp-peers than your inbox. Ask the owner to run plugins: reload here, or a later update may leave its asks unsent.'
+	assert.deepEqual(await f.start('inbox', older({ asker, message: 'hi' })), note(`sent this to alice as cpd thread ${sent}`))
+	assert.deepEqual(f.posted.filter((p) => p.content === reload).map((p) => p.thread), [asker])
+	await f.start('inbox', older({ asker, message: 'again' }))
+	assert.equal(f.posted.filter((p) => p.content === reload).length, 1, 'once a thread')
+	// The current form, or one refused, which may name any thread, tells nothing of it.
+	await f.start('inbox', ask('alice', { asker: other, message: 'hi' }))
+	await f.start('inbox', older({ asker: other, message: ' ' }))
+	assert.equal(f.posted.filter((p) => p.content === reload).length, 1)
 })
 
 test("a peer's thread runs only its briefing, and the inbox runs no other thread's messages", async (t) => {

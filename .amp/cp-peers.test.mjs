@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -53,12 +53,16 @@ process.stdout.write(JSON.stringify(found[process.argv[4]] ?? []))
 }
 
 const inbox = 'T-00000000-0000-4000-8000-00000000f001'
-const forInbox = (name) => `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-asker, with send_thread_message, that it may not have been sent.`
+const inboxFormat = Number(/^const askFormat = (\d+)$/m.exec(await readFile(new URL('./plugins/cp-inbox.ts', import.meta.url), 'utf8'))[1])
+const forInbox = (name) => `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: do nothing with this message but tell T-asker, with send_thread_message, that the inbox got its ask while starting and sends it once its plugin runs, so it must not be sent again.`
 // The ask as the inbox reads it.
 const asked = (post) => {
 	const [line, json] = post.content.split('\n\n')
-	const { id, ...ask } = JSON.parse(json)
+	const { id, at, format, ...ask } = JSON.parse(json)
 	assert.match(id, /^[0-9a-f-]{36}$/, 'each ask has an ID of its own')
+	assert.equal(format, inboxFormat, "the form cp-inbox reads, so it tells a thread with an older cp-peers to reload")
+	// Dated, so the inbox sends one its plugin missed only while it is recent.
+	assert.ok(Math.abs(Date.now() - Date.parse(at)) < 60_000, 'each ask has the time it was asked')
 	return { thread: post.thread, line, ask }
 }
 // Amp's search keeps only a query's last label, so a search names one, and
@@ -78,7 +82,7 @@ test("ask_peer knows your peers by name and alias, and brings the ask to their i
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
 	assert.equal(
 		await f.ask({ peer: 'ally', message: 'Up for a beer?\nFriday?' }),
-		"Passed to your clanker-proxy inbox, which sends it to alice. This thread is told of each of alice's moves, with a short form; never look for their words.",
+		"Passed to your clanker-proxy inbox, whose plugin sends it to alice and tells this thread its cpd thread ID. If the inbox was asleep, that can take a few minutes. Never send it again unless the owner says to: if nothing comes, tell the owner. This thread is told of each of alice's moves, with a short form; never look for their words.",
 	)
 	// The name as asked: the plugin checks with cpd that it names alice.
 	assert.deepEqual(asked(f.posted[0]), { thread: inbox, line: forInbox('alice'), ask: { asker: 'T-asker', named: 'ally', message: 'Up for a beer?\nFriday?' } })
@@ -86,7 +90,7 @@ test("ask_peer knows your peers by name and alias, and brings the ask to their i
 	assert.deepEqual(asked(f.posted[1]).ask, { asker: 'T-asker', named: 'alice', message: 'hi', title: 'Lunch' })
 	assert.equal(
 		await f.ask({ peer: 'ally', message: 'Send him the command.', thread: '485eec32' }),
-		"Passed to your clanker-proxy inbox, which passes it to the conversation handling 485eec32 with alice. This thread is told of each of alice's moves, with a short form; never look for their words.",
+		"Passed to your clanker-proxy inbox, whose plugin passes it to the conversation handling 485eec32 with alice and tells this thread. If the inbox was asleep, that can take a few minutes. Never send it again unless the owner says to: if nothing comes, tell the owner. This thread is told of each of alice's moves, with a short form; never look for their words.",
 	)
 	assert.deepEqual(asked(f.posted[2]).ask, { asker: 'T-asker', named: 'ally', message: 'Send him the command.', thread: '485eec32' })
 	assert.match(await f.ask({ peer: 'alice', message: 'x', thread: 'nope' }), /thread is a cpd thread ID/)
