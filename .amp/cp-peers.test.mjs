@@ -88,9 +88,16 @@ test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes
 	const bob = 'T-00000000-0000-4000-8000-0000000000b0'
 	const f = await load(t, {
 		'label:cp-peer archived:false': [{ id: hub, title: 'alice (ally)' }, { id: bob, title: 'bob' }],
-		'label:cp-inbox archived:false label:inbox-00000000f001': [{ id: inbox }],
+		// Amp's search keeps only a query's last label, so a search names one,
+		// and finds every thread that has it: the inbox and its peer threads.
+		'label:inbox-00000000f001 archived:false': [{ id: hub }, { id: inbox }],
 		'label:cp-inbox archived:false': [{ id: inbox }, { id: other }],
-	}, {}, { [hub]: ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-00000000f001'], [bob]: ['cp-peer', 'cp-sealed', 'peer-bob'] })
+	}, {}, {
+		[hub]: ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-00000000f001'],
+		[bob]: ['cp-peer', 'cp-sealed', 'peer-bob'],
+		[inbox]: ['cp-inbox', 'inbox-00000000f001'],
+		[other]: ['cp-inbox', 'inbox-00000000f002'],
+	})
 	assert.equal(
 		await f.ask({ peer: 'ally', message: 'Up for a beer?' }),
 		"Passed to your clanker-proxy inbox, which hands it to alice's thread to send. This thread is told of each of alice's moves, with a short form; never look for their words.",
@@ -106,7 +113,7 @@ test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes
 	const one = await load(t, {
 		'label:cp-peer archived:false': [{ id: bob, title: 'bob' }],
 		'label:cp-inbox archived:false': [{ id: inbox }],
-	}, {}, { [bob]: ['cp-peer', 'cp-sealed', 'peer-bob'] })
+	}, {}, { [bob]: ['cp-peer', 'cp-sealed', 'peer-bob'], [inbox]: ['cp-inbox', 'inbox-00000000f001'] })
 	await one.ask({ peer: 'bob', message: 'hi' })
 	assert.equal(one.posted[0].thread, inbox)
 	assert.match(one.posted[0].content, /^cp-inbox: for bob's thread\. [^\n]*\n\nMy thread T-asker asks you to send bob this/)
@@ -123,10 +130,12 @@ test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
 	const bob = 'T-00000000-0000-4000-8000-0000000000b0'
 	const dave = 'T-00000000-0000-4000-8000-0000000000d0'
+	const daveTalk = 'T-00000000-0000-4000-8000-0000000000d1'
 	const f = await load(t, {
 		'label:cp-peer archived:false': [{ id: hub, title: 'alice (bob)' }, { id: bob, title: 'bob' }, { id: dave, title: 'Clanker-proxy dave thread' }],
-		'label:cp-peer archived:false label:peer-dave': [{ id: dave, title: 'Clanker-proxy dave thread' }],
-	})
+		// Dave's conversations carry his label too.
+		'label:peer-dave archived:false': [{ id: daveTalk, title: 'Fix the build' }, { id: dave, title: 'Clanker-proxy dave thread' }],
+	}, {}, { [dave]: ['cp-peer', 'cp-sealed', 'peer-dave'], [daveTalk]: ['clanker-proxy', 'peer-dave'] })
 	await f.ask({ peer: 'bob', message: 'hi' })
 	await f.ask({ peer: 'dave', message: 'hi' })
 	assert.deepEqual(f.posted.map((p) => p.thread), [bob, dave])
