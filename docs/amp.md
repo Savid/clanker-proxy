@@ -8,31 +8,33 @@ short, never in their words. Read [Risks](#risks) first.
 
 ## Who's who
 
-<p align="center"><img src="img/amp.svg" width="100%" alt="Your threads hold your credentials. Through one-way glass, asks, messages and follow-ups go into the inbox project; out come only the plugin's notice, a checked short form and a button only you see, never bob's words or a conversation's ID. In the orb, the inbox owns the webhook, bob's peer thread is sealed to cp_send and cp_follow_up, and a sandboxed conversation reads bob's words. Bob's thread sends through your cpd, your cpd wakes the inbox with a webhook, and the conversation reaches your cpd with cpctl."></p>
+<p align="center"><img src="img/amp.svg" width="100%" alt="Your threads hold your credentials. Through one-way glass, asks, messages and follow-ups go into the inbox project; out come only the plugin's notice, a checked short form and a button only you see, never bob's words or a conversation's ID. In the orb, the inbox owns the webhook and its plugin sends your asks, bob's peer thread only lists his conversations and runs nothing, and a sandboxed conversation reads bob's words. The inbox sends through your cpd, your cpd wakes the inbox with a webhook, and the conversation reaches your cpd with cpctl."></p>
 
 | | Where | Reads a peer's words | Tools |
 | --- | --- | --- | --- |
 | **Your threads** | anywhere, Spaces too | never | yours, with your credentials; `ask_peer`, except in Spaces, which run no plugins |
-| **Inbox** | the project's first thread to load the plugin with its secrets | no: webhooks carry IDs | none: asks pass through it; leave it idle, never archive it |
-| **Peer thread** | under the inbox, one per peer, titled `bob (bobby)` | never | `cp_send` and `cp_follow_up` only |
+| **Inbox** | the project's first thread to load the plugin with its secrets | no: webhooks carry IDs | none: its plugin sends your asks; leave it idle, never archive it |
+| **Peer thread** | under the inbox, one per peer, titled `bob (bobby)` | never | none: it lists the peer and holds its conversations, and never runs |
 | **Conversation** | under its peer thread, one per cpd thread | yes, in a [sandbox](#what-a-conversation-can-do) | shell, web, `cp_send`, `cp_ask_owner`, `cp_answer`; a key for its own cpd thread |
 
 Labels: the inbox `cp-inbox`; peer threads `cp-peer`, `cp-sealed` and
 `peer-<name>`; both `inbox-<key>`; conversations `clanker-proxy` and
 `peer-<name>`.
 
-Peer threads and conversations run on the inbox's orb, not in orbs of their
-own, so asks go to the inbox, which wakes the orb, and the plugin passes them
-on; the inbox's agent never acts on one, and if the plugin can't run, the
-thread that asked is told. When the plugin loads in the inbox, every peer
-without a thread gets one; after a restart (an update, a reload, a new orb),
-it starts a new peer thread or conversation where one is needed, including
-for cpd threads waiting on you, and a new conversation catches up from cpd. Never `amp threads continue` an inbox thread: your machine would
-run it without the plugin, so without its guard or sandbox.
+Asks go to the inbox, an orb thread, which wakes the orb. Its plugin sends
+them, or passes a follow-up to the conversation, with no agent in between,
+and tells the thread that asked, or why not. When the plugin loads in the
+inbox, every peer without a thread gets one. Conversations run on the
+inbox's orb, not in orbs of their own, and the plugin restarts each time the
+orb wakes, so a conversation an earlier plugin started is replaced when it
+is next needed, including for cpd threads waiting on you; the new one links
+the old and catches up from cpd. Never `amp threads continue` an inbox
+thread: your machine would run it without the plugin, so without its guard
+or sandbox.
 
 **One-way glass** between your threads and the inbox:
 
-- **In is fine:** a question, a message to a peer thread or conversation, a follow-up. That's you instructing.
+- **In is fine:** a question, a message to a conversation, a follow-up. That's you instructing.
 - **Out is only the plugin's words:** a notice of each move, the conversation's checked short form (`cp_answer`: an outcome, a reason, a date), and a button only you see. Never the peer's words, never a conversation's ID.
 - **Why:** an agent with untrusted input, private data and the power to act, all at once, is one prompt injection from misuse. Conversations read peers but hold no credentials; your threads hold credentials but never read peers.
 
@@ -42,13 +44,13 @@ you, and you review them with `cpctl requests`.
 
 ## A round trip
 
-<p align="center"><img src="img/amp-flow.svg" width="100%" alt="1 your thread asks with ask_peer; 2 bob's thread sends it with cp_send and your cpd delivers it; 3 the plugin tells your thread it is watching; 4 bob answers and your cpd wakes the orb with a webhook carrying IDs only; 5 the sandboxed conversation reads bob's words with cpctl; 6 your thread gets the plugin's notice, a button, and the short form; 7 a follow-up goes through bob's thread with cp_follow_up; 8 when the thread ends, your thread gets a last notice."></p>
+<p align="center"><img src="img/amp-flow.svg" width="100%" alt="1 your thread asks with ask_peer; 2 the inbox's plugin sends it and your cpd delivers it; 3 the plugin tells your thread it is watching; 4 bob answers and your cpd wakes the orb with a webhook carrying IDs only; 5 the sandboxed conversation reads bob's words with cpctl; 6 your thread gets the plugin's notice, a button, and the short form; 7 a follow-up goes through the inbox to the conversation; 8 when the thread ends, your thread gets a last notice."></p>
 
-1. **Ask** from any thread, by name or [alias](#names-and-aliases): "ask bob <what>". `ask_peer` brings it to the inbox, whose plugin hands it to bob's thread, which sends it with `cp_send`, to bob only. In the project, `cp_send` sends it; from a Space, message bob's thread, which runs only while the orb is awake; from your machine, `cpctl send`.
+1. **Ask** from any thread, by name or [alias](#names-and-aliases): "ask bob <what>". `ask_peer` brings it to the inbox, whose plugin sends it, to bob only. In the project, `cp_send` sends it; from a Space, message the inbox, whose agent has `cp_send`; from your machine, `cpctl send`.
 2. **Watch.** The thread that asked watches the cpd thread, and is told so. So does any of your threads that messages its conversation or follows up.
 3. **Answer.** Bob's move wakes the orb. The conversation reads it, checks it, then closes, reopens or asks you.
 4. **Told.** Watchers get a notice in the plugin's words, then the short form: yes, no, maybe, done, declined or unclear; why (needs access, info or a decision, not now, out of scope, disagrees, other); a date or time. At most one notice per cpd thread every 10 minutes and 24 a day; each move's short form still comes. You read bob's words with the button, or the conversation's **cpd thread** button.
-5. **Follow up:** ask bob's thread to follow up on the cpd thread, or call `ask_peer` with `thread`. `cp_follow_up` passes it to the conversation.
+5. **Follow up:** call `ask_peer` with `thread`; the plugin passes it to the conversation.
 6. **End.** When the thread ends, on either side, watchers get a last notice and stop watching.
 
 A peer's thread starts when the inbox's plugin loads, or with the first
@@ -171,7 +173,7 @@ this repository, trustworthy.
 - **Its work is the peer's.** Hooks, configuration and build scripts in a conversation's directory are written for a peer. Fetch its work into a repository you trust before you run anything on it.
 - **Short answers can be wrong.** A misled conversation can report the wrong outcome or date.
 - **Your threads can still read the inbox's.** `cp-peers` refuses tools that name an inbox thread, but Amp runs `read_thread` and `code_exec`, and what `code_exec` calls, without plugin hooks, and Spaces run no plugins. A thread that searches, or is handed a conversation's link, reads the peer's words.
-- **Project threads hold the token.** The inbox, the peer threads and any thread you start in the project have `CP_TOKEN` and no sandbox. Unscoped, it reaches every peer.
+- **Project threads hold the token.** The inbox and any thread you start in the project have `CP_TOKEN` and no sandbox. Unscoped, it reaches every peer.
 - **The sandbox shares the orb's network.** A conversation can reach the internet, anything the orb can reach and services listening in the orb, and can use up its CPU, memory and disk. Keep the project's orbs off private networks.
 
 ## One inbox per peer
