@@ -172,22 +172,78 @@ interface Ask {
 	peer: string
 	content: string
 	asker?: ThreadID
+	// Why it is refused as it stands.
+	error?: string
 }
 
 export default async function (amp: PluginAPI) {
+	// Asks for a peer's thread come to the inbox, whose agent has every tool
+	// and must never take one, whatever state the plugin is in: this is
+	// registered before anything can fail or wait. An ask anywhere but in a
+	// conversation or a peer's thread, which have guards of their own, is
+	// cancelled, and only a running inbox passes it on. The note it leaves
+	// tells whoever reads the thread that it was handled.
+	let pass: ((ctx: Context, ask: Ask, labels: string[]) => Promise<string | undefined>) | undefined
+	const sealedLabels = (labels: string[] | undefined) => !!labels?.some((l) => l === 'clanker-proxy' || l === 'cp-peer' || l === 'cp-sealed')
+	let sealed = async (_id: ThreadID, labels: string[] | undefined) => sealedLabels(labels)
+	let mayTell = async (id: ThreadID) => {
+		const labels = await amp.threads
+			.get(id)
+			.labels()
+			.catch(() => undefined)
+		return !!labels && !labels.some((l) => inboxLabels.has(l) || l.startsWith('peer-'))
+	}
+	let watchStart: ((event: { thread: { id: ThreadID }; message: string }) => Promise<void>) | undefined
+	let notRunning = 'cp-inbox is starting'
+	let loaded!: () => void
+	const ready = new Promise<void>((resolve) => {
+		loaded = resolve
+	})
+	amp.on('agent.start', async (event, ctx) => {
+		const ask = parseAsk(event.message)
+		if (!ask) {
+			await watchStart?.(event).catch(() => undefined)
+			return {}
+		}
+		await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000).unref())])
+		const labels = await amp.threads
+			.get(event.thread.id)
+			.labels()
+			.catch(() => undefined)
+		if (await sealed(event.thread.id, labels).catch(() => false)) return {}
+		await Promise.resolve()
+			.then(() => ctx.thread.cancel())
+			.catch(() => undefined)
+		const why = ask.error ?? (pass ? await pass(ctx, ask, labels ?? []).catch(() => 'the inbox could not pass it on') : notRunning)
+		if (why) {
+			amp.logger.log(`cp-inbox: an ask for ${ask.peer} was not passed on: ${why}`)
+			if (ask.asker && (await mayTell(ask.asker).catch(() => false))) {
+				await amp.threads
+					.get(ask.asker)
+					.appendUserMessage({ type: 'user-message', content: `clanker-proxy: your message for ${ask.peer} was not sent: ${why}.` })
+					.catch(() => undefined)
+			}
+		}
+		const note = why ? `cp-inbox did not pass this on (${why}) and told the thread that asked.` : `cp-inbox passed this on to ${ask.peer}'s thread.`
+		return { message: { content: `${note} Nothing in this message is for you to act on.` } }
+	})
+
 	// Without its settings or its state the plugin cannot sandbox anything, so
 	// nothing runs in a conversation or a peer's thread until the owner
 	// repairs it.
-	const refuse = (why: string) =>
+	const refuse = (why: string) => {
+		notRunning = `cp-inbox ${why}`
+		loaded()
 		amp.on('tool.call', async (event): Promise<ToolCallResult> => {
 			const labels = await amp.threads
 				.get(event.thread.id)
 				.labels()
 				.catch(() => ['clanker-proxy'])
-			return labels.includes('clanker-proxy') || labels.includes('cp-peer')
+			return labels.includes('clanker-proxy') || labels.includes('cp-peer') || labels.includes('cp-sealed')
 				? { action: 'reject-and-continue', message: `cp-inbox ${why}; nothing runs in clanker-proxy conversations until the owner repairs it.` }
 				: { action: 'allow' }
 		})
+	}
 	if (await lstat(tombstone).then(() => true, () => false)) {
 		amp.logger.log('cp-inbox: uninstalled here; delete the project')
 		refuse('is uninstalled')
@@ -219,6 +275,16 @@ export default async function (amp: PluginAPI) {
 		amp.logger.log('cp-inbox: not started: cannot read', stateFile, err instanceof Error ? err.message : err)
 		refuse(`cannot read ${stateFile}`)
 		return
+	}
+	// Peer threads from before the inbox's key label get it, so cp-peers
+	// brings their asks to this inbox, even with several.
+	if (state.inbox) {
+		const key = inboxKey(state.inbox)
+		for (const id of [state.inbox, ...Object.values(state.hubs)]) {
+			void Promise.resolve()
+				.then(() => amp.threads.get(id).addLabels([key]))
+				.catch(() => undefined)
+		}
 	}
 	let lastSweep = 0
 	let uninstalled = false
@@ -253,6 +319,23 @@ export default async function (amp: PluginAPI) {
 			() => true,
 			() => false,
 		)
+	// The threads the plugin starts run in the orb but are not what keeps it
+	// awake: a lease holds it up while one works on a message, for at most
+	// 15 minutes.
+	const keepAwake = async (id: ThreadID) => {
+		const lease = await Promise.resolve()
+			.then(() => amp.system.executor.keepAlive())
+			.catch(() => undefined)
+		if (!lease) return
+		const limit = 15 * 60_000
+		const timer = setTimeout(() => lease.unsubscribe(), limit)
+		timer.unref()
+		await Promise.resolve()
+			.then(() => amp.threads.get(id).waitForResponse({ timeoutMs: limit }))
+			.catch(() => undefined)
+		clearTimeout(timer)
+		lease.unsubscribe()
+	}
 	const archive = async (id: ThreadID) => {
 		if (!(await threads(['archive', id]))) amp.logger.log('cp-inbox: could not archive a thread')
 	}
@@ -323,10 +406,11 @@ export default async function (amp: PluginAPI) {
 		// deliver sends a message to the conversation for a cpd thread,
 		// starting one, with the standing instructions, if there is none, its
 		// Amp thread is gone, or another plugin process started it, unless the
-		// cpd thread has ended: then there is nothing for a new one to do. It
-		// returns false when a limit held the message back or nobody needs
-		// it, and throws when delivery failed, so Amp retries.
-		async deliver(ctx: Context, subject: string, peer: string, message: string, ended = false): Promise<boolean> {
+		// cpd thread has ended: then there is nothing for a new one to do, but
+		// read why (mustRead) in place of one that cannot. It returns false
+		// when a limit held the message back or nobody needs it, and throws
+		// when delivery failed, so Amp retries.
+		async deliver(ctx: Context, subject: string, peer: string, message: string, ended = false, mustRead = false): Promise<boolean> {
 			const now = Date.now()
 			state.wakes = state.wakes.filter((t) => now - t < day)
 			let c: Conversation | undefined = state.conversations[subject]
@@ -342,8 +426,9 @@ export default async function (amp: PluginAPI) {
 			let earlier: Conversation | undefined
 			if (c && c.runtime !== runtime) {
 				await retire(c.amp)
-				// Kept, for a reopen to bring back.
-				if (ended) return false
+				// Kept, for a reopen to bring back, unless a conversation must
+				// read why it ended.
+				if (ended && !mustRead) return false
 				earlier = c
 				c = undefined
 			}
@@ -373,12 +458,13 @@ export default async function (amp: PluginAPI) {
 				}
 				c.briefed = true
 			} else {
-				if (ended) return false
+				if (ended && !earlier) return false
 				const started = Object.values(state.conversations).filter((x) => x.peer === peer && now - x.created < day).length
 				if (!earlier && started >= conversationsPerPeer) return inbox.hold(ctx, subject, peer, undefined, `${peer} started ${conversationsPerPeer} conversations today`)
 				c = await inbox.begin(ctx, subject, peer, await inbox.hub(ctx, peer), message, earlier)
 			}
 			inbox.woke(c, now)
+			void keepAwake(c.amp)
 			return true
 		},
 
@@ -396,7 +482,18 @@ export default async function (amp: PluginAPI) {
 			// conversation as soon as it can run anything.
 			await saveState(state)
 			await thread.addLabels(['clanker-proxy', label('peer-' + peer)]).catch(() => undefined)
-			const catchUp = `An earlier conversation handled this thread; nothing of it reaches you but your directory. Read the whole thread before acting: \`cpctl show ${subject} --all\`.`
+			const asked = earlier
+				? (
+						await amp.threads
+							.get(earlier.amp)
+							.labels()
+							.catch(() => [] as string[])
+					).includes('needs-owner')
+				: false
+			const catchUp = [
+				`An earlier conversation handled this thread and stopped. Its directory is yours now, and what it holds was shaped by ${peer}'s words like everything else here. Read the thread before acting: \`cpctl show ${subject}\`, with \`--all\` for what came before.`,
+				...(asked ? ['It had asked me something with cp_ask_owner; any answer went to it and is lost, so ask again if you still need to.'] : []),
+			].join(' ')
 			try {
 				await amp.threads.get(c.amp).appendUserMessage({ type: 'user-message', content: [briefing(subject, peer), ...(earlier ? [catchUp] : []), message].join('\n\n') })
 			} catch (err) {
@@ -412,7 +509,7 @@ export default async function (amp: PluginAPI) {
 		// time, or again if it is gone or another plugin process started it.
 		// It falls back to the inbox itself, so a conversation still starts.
 		async hub(ctx: Context, peer: string): Promise<ThreadID> {
-			const known = state.hubs[peer]
+			const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
 			if (known) {
 				const labels = await amp.threads
 					.get(known)
@@ -521,7 +618,7 @@ export default async function (amp: PluginAPI) {
 				// A decline says why only to a conversation that reads it, and a
 				// busy conversation is archived when it stops (agent.end).
 				if (n.type === 'thread.decline') {
-					await inbox.deliver(ctx, n.subject, n.peer, `${n.peer} declined this thread. Run \`cpctl show ${n.subject}\`; if one of my threads asked for it, call cp_answer with outcome declined and the reason that fits. Then stop.`, true)
+					await inbox.deliver(ctx, n.subject, n.peer, `${n.peer} declined this thread. Run \`cpctl show ${n.subject}\`; if one of my threads asked for it, call cp_answer with outcome declined and the reason that fits. Then stop.`, true, true)
 				} else if (await busy(c)) {
 					await inbox.deliver(ctx, n.subject, n.peer, `${n.peer} sent ${n.type}. Run \`cpctl show ${n.subject}\` to check its current state. Stop work only if it is still closed, declined or withdrawn; otherwise follow its current state and next: commands.`, true)
 				} else {
@@ -637,7 +734,7 @@ export default async function (amp: PluginAPI) {
 		// sweep wakes threads that are your turn but have no conversation, or
 		// whose notifications were held, such as events lost while the inbox
 		// thread was archived.
-		async sweep(ctx: WebhookHandlerContext): Promise<void> {
+		async sweep(ctx: Context & { signal?: AbortSignal }): Promise<void> {
 			if (Date.now() - lastSweep < sweepEvery) return
 			lastSweep = Date.now()
 			let threads: { id: string; peer: string; state: string }[]
@@ -652,8 +749,10 @@ export default async function (amp: PluginAPI) {
 			for (const t of threads) {
 				if (woken >= sweepMax) break
 				if (!threadID.test(t.id) || !peerName.test(t.peer) || !states.has(t.state)) continue
+				// One that another plugin process started runs no more: deliver
+				// replaces it.
 				const c = state.conversations[t.id]
-				if (c && (!c.held || (await busy(c)))) continue
+				if (c && c.runtime === runtime && (!c.held || (await busy(c)))) continue
 				const message = `Catching up: ${t.peer}'s thread is waiting on you (state: ${t.state}). Run \`cpctl show ${t.id}\` and continue.`
 				if (await inbox.deliver(ctx, t.id, t.peer, message)) woken++
 			}
@@ -697,7 +796,7 @@ export default async function (amp: PluginAPI) {
 			.get(id)
 			.labels()
 			.catch(() => ['cp-peer'])
-		return labels.includes('cp-peer') ? '' : undefined
+		return labels.includes('cp-peer') || labels.includes('cp-sealed') ? '' : undefined
 	}
 
 	// labelled lists your threads with a label, through the amp CLI, which can
@@ -919,16 +1018,25 @@ export default async function (amp: PluginAPI) {
 			const unreachable = `cp_follow_up: could not reach the conversation for ${subject}. If its cpd thread has ended, send a new one with cp_send; otherwise try again.`
 			const content = `${followUpPrefix}\n\n${message}`
 			try {
-				if (c.runtime === runtime) {
-					await amp.threads.get(c.amp).appendUserMessage({ type: 'user-message', content })
-				} else {
+				// One at a time with events, which may be replacing the same
+				// conversation.
+				const reached = await serial(async () => {
+					const current = state.conversations[subject] ?? c
+					if (current.runtime === runtime) {
+						await amp.threads.get(current.amp).appendUserMessage({ type: 'user-message', content })
+						void keepAwake(current.amp)
+						return true
+					}
 					// Nothing with this plugin runs it: a new conversation under
 					// this peer's thread takes over, unless the cpd thread ended.
-					if (c.ended) return unreachable
-					await retire(c.amp)
-					await inbox.begin(ctx, subject, peer, ctx.thread.id, content, c)
+					if (current.ended) return false
+					await retire(current.amp)
+					const next = await inbox.begin(ctx, subject, peer, ctx.thread.id, content, current)
 					await saveState(state)
-				}
+					void keepAwake(next.amp)
+					return true
+				})
+				if (!reached) return unreachable
 			} catch {
 				return unreachable
 			}
@@ -1307,28 +1415,18 @@ export default async function (amp: PluginAPI) {
 		})
 	}
 
-	// The inbox's own turn ends at once, so the orb could pause before the
-	// peer's thread has sent: a lease keeps it up for a few minutes.
-	const keepAwake = async () => {
-		const lease = await Promise.resolve()
-			.then(() => amp.system.executor.keepAlive())
-			.catch(() => undefined)
-		if (lease) setTimeout(() => lease.unsubscribe(), 3 * 60_000).unref()
-	}
 
 	// An ask from one of your threads comes to the inbox, an orb thread, so
 	// it wakes the orb, which a message to the peer's thread would not. The
-	// inbox's agent never takes it: the plugin passes it to the peer's thread,
-	// starting one if this process has none, and tells the thread that asked
-	// if it cannot.
-	const passOn = async (ctx: Context, ask: Ask): Promise<void> => {
-		await Promise.resolve()
-			.then(() => ctx.thread.cancel())
-			.catch(() => undefined)
+	// plugin passes it to the peer's thread, starting one if this process has
+	// none, and says why when it cannot. A new orb's state may not name the
+	// inbox yet; its label does.
+	pass = async (ctx, ask, labels) => {
 		const why = await serial(async (): Promise<string | undefined> => {
 			if (uninstalled) return 'the inbox is uninstalled'
+			if (ctx.thread.id !== state.inbox && !labels.includes('cp-inbox')) return 'it reached a thread that is not the inbox'
 			await markInbox(ctx)
-			if (!state.hubs[ask.peer]) {
+			if (!Object.hasOwn(state.hubs, ask.peer)) {
 				const peers = await readPeers()
 				if (!peers) return 'cpd did not answer'
 				if (!peers.has(ask.peer)) return `${ask.peer} is not one of this inbox's peers`
@@ -1340,43 +1438,35 @@ export default async function (amp: PluginAPI) {
 			} catch {
 				return `${ask.peer}'s thread could not be reached`
 			}
-			void keepAwake()
+			void keepAwake(hub)
 			return undefined
-		}).catch(() => 'the inbox could not pass it on')
-		if (!why) return
-		ctx.logger.log(`cp-inbox: an ask for ${ask.peer} was not passed on: ${why}`)
-		if (ask.asker && (await mayWatch(ask.asker))) {
-			await amp.threads
-				.get(ask.asker)
-				.appendUserMessage({ type: 'user-message', content: `clanker-proxy: your message for ${ask.peer} was not sent: ${why}.` })
-				.catch(() => undefined)
-		}
+		})
+		// Woken by an ask, the inbox also catches up on threads waiting on you.
+		void serial(() => inbox.sweep(ctx)).catch(() => undefined)
+		return why
 	}
+	// Labels that cannot be read seal nothing: the ask is cancelled.
+	sealed = async (id, labels) =>
+		id !== state.inbox &&
+		(state.known.includes(id) || Object.values(state.hubs).includes(id) || Object.values(state.conversations).some((c) => c.amp === id) || sealedLabels(labels))
+	mayTell = mayWatch
 
 	// A message one of your threads sends a conversation puts that thread on
 	// the cpd thread's watch list. Amp marks such a message with the sending
 	// thread; a peer's words reach a conversation only as tool results, never
 	// as a message, so they cannot carry the mark. The inbox's own threads
 	// never watch.
-	amp.on('agent.start', async (event, ctx) => {
-		const ask = event.thread.id === state.inbox ? parseAsk(event.message) : undefined
-		if (ask) {
-			await passOn(ctx, ask)
-			return {}
-		}
-		try {
-			// Amp appends its mark, so the last one is the sender's: an earlier
-			// one is quoted. The plugin's own messages carry no mark of Amp's.
-			if (event.message.startsWith(followUpPrefix) || event.message.startsWith(briefingStart)) return {}
-			const sender = [...event.message.matchAll(sentBy)].at(-1)?.[1] as ThreadID | undefined
-			if (!sender || sender === event.thread.id) return {}
-			const subject = await conversationFor(event.thread.id)
-			if (subject && (await watch(sender, subject))) amp.logger.log(`cp-inbox: ${sender} watches ${subject.slice(0, 8)}`)
-		} catch {
-			// Not watching is the safe failure: the thread just isn't told.
-		}
-		return {}
-	})
+	watchStart = async (event) => {
+		// Amp appends its mark, so the last one is the sender's: an earlier
+		// one is quoted. The plugin's own messages carry no mark of Amp's.
+		if (event.message.startsWith(followUpPrefix) || event.message.startsWith(briefingStart)) return
+		const sender = [...event.message.matchAll(sentBy)].at(-1)?.[1] as ThreadID | undefined
+		if (!sender || sender === event.thread.id) return
+		const subject = await conversationFor(event.thread.id)
+		// Not watching is the safe failure: the thread just isn't told.
+		if (subject && (await watch(sender, subject))) amp.logger.log(`cp-inbox: ${sender} watches ${subject.slice(0, 8)}`)
+	}
+	loaded()
 
 	const { url } = await amp.createWebhook({
 		key: 'cpd',
@@ -2006,13 +2096,15 @@ function label(s: string): string {
 	return s.slice(0, 32).replace(/-+$/, '')
 }
 
-// parseAsk reads an ask cp-peers brought to the inbox.
+// parseAsk reads an ask cp-peers brought to the inbox. A message holding
+// more than one is refused whole: the rest would go to the first peer.
 function parseAsk(message: string): Ask | undefined {
 	const m = askLine.exec(message)
 	const content = m ? message.slice(m[0].length) : ''
 	if (!m || m[1]!.length > 39 || !content.trim()) return undefined
 	const asker = /^My thread (T-[0-9a-f-]+) asks you /.exec(content)?.[1]
-	return { peer: m[1]!, content, asker: asker && ampThreadID.test(asker) ? (asker as ThreadID) : undefined }
+	const ask: Ask = { peer: m[1]!, content, asker: asker && ampThreadID.test(asker) ? (asker as ThreadID) : undefined }
+	return /^cp-inbox: for /m.test(content) ? { ...ask, error: 'it held more than one ask' } : ask
 }
 
 // inboxKey labels an inbox and its peers' threads, so cp-peers brings an ask
@@ -2047,7 +2139,8 @@ async function saveState(state: State): Promise<void> {
 		if (c.ended && now - c.ended > keepEnded) delete state.conversations[subject]
 	}
 	await mkdir(stateDir, { recursive: true, mode: 0o700 })
-	const tmp = stateFile + '.tmp'
+	// Saves can overlap; each writes its own file and renames it whole.
+	const tmp = `${stateFile}.${process.pid}-${randomBytes(6).toString('hex')}.tmp`
 	await writeFile(tmp, JSON.stringify(state), { mode: 0o600 })
 	await rename(tmp, stateFile)
 }

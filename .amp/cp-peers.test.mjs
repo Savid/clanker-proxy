@@ -97,7 +97,7 @@ test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes
 	)
 	assert.deepEqual(f.posted, [{
 		thread: inbox,
-		content: `cp-inbox: for alice's thread. Only the cp-inbox plugin acts on this message. If you can read it, the plugin is not running here: tell T-asker, with send_thread_message, that cp-inbox is not running and nothing was sent, and do nothing else.\n\nMy thread T-asker asks you to send ally this, with replyTo T-asker. ally is my alias for alice: give cp_send "ally", and it checks that with cpd.\n\nUp for a beer?`,
+		content: `cp-inbox: for alice's thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell T-asker, with send_thread_message, that it may not have been sent.\n\nMy thread T-asker asks you to send ally this, with replyTo T-asker. ally is my alias for alice: give cp_send "ally", and it checks that with cpd.\n\nUp for a beer?`,
 	}])
 	// Bob's thread is from before the label, and two inboxes could hold it.
 	await f.ask({ peer: 'bob', message: 'hi' })
@@ -110,6 +110,14 @@ test("ask_peer brings the ask to the peer's inbox, which wakes for it and passes
 	await one.ask({ peer: 'bob', message: 'hi' })
 	assert.equal(one.posted[0].thread, inbox)
 	assert.match(one.posted[0].content, /^cp-inbox: for bob's thread\. [^\n]*\n\nMy thread T-asker asks you to send bob this/)
+	// A keyed thread whose inbox is gone gets the ask itself, never another
+	// inbox's.
+	const gone = await load(t, {
+		'label:cp-peer archived:false': [{ id: hub, title: 'alice' }],
+		'label:cp-inbox archived:false': [{ id: other }],
+	}, {}, { [hub]: ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-00000000f001'] })
+	await gone.ask({ peer: 'alice', message: 'hi' })
+	assert.deepEqual(gone.posted.map((p) => p.thread), [hub])
 })
 
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
@@ -133,7 +141,8 @@ test('ask_peer stays out of the inbox project, and away without peers', async (t
 test("your threads can write into the inbox's threads but not read them, as they hold peers' words", async (t) => {
 	const conversation = 'T-00000000-0000-4000-8000-0000000000c1'
 	const mine = 'T-00000000-0000-4000-8000-0000000000e1'
-	const f = await load(t, {}, {}, { [conversation]: ['clanker-proxy', 'peer-alice'], [hub]: ['cp-peer'], [mine]: ['work'] })
+	const retired = 'T-00000000-0000-4000-8000-0000000000c2'
+	const f = await load(t, {}, {}, { [conversation]: ['clanker-proxy', 'peer-alice'], [hub]: ['cp-peer'], [mine]: ['work'], [retired]: ['cp-sealed'] })
 	const allow = { action: 'allow' }
 	assert.deepEqual(await f.call('read_thread', { threadID: mine, goal: 'x' }), allow)
 	for (const [tool, input] of [
@@ -144,6 +153,7 @@ test("your threads can write into the inbox's threads but not read them, as they
 		['get_thread_status', { threadID: conversation }],
 		['find_thread', { query: 'label:clanker-proxy beer' }],
 		['read_thread', { threadID: 'T-00000000-0000-4000-8000-0000000000f9' }],
+		['read_thread', { threadID: retired }],
 	]) {
 		const v = await f.call(tool, input)
 		assert.equal(v.action, 'reject-and-continue', `${tool} ${JSON.stringify(input)}`)

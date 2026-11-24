@@ -45,12 +45,12 @@ async function peers(): Promise<Peer[]> {
 }
 
 // inboxOf is the inbox a peer's thread is under, by the label they share,
-// or, for a thread from before that label, your only inbox.
+// or, for a thread from before that label, your only inbox. Never another:
+// a keyed thread whose inbox is gone gets the ask itself.
 async function inboxOf(amp: PluginAPI, thread: string): Promise<string | undefined> {
 	const key = (await amp.threads.get(thread as `T-${string}`).labels().catch(() => [] as string[])).find((l) => inboxKey.test(l))
 	const ids = (found: unknown[]) => found.flatMap((t: any) => (typeof t?.id === 'string' && ampThread.test(t.id) ? [t.id as string] : []))
-	const keyed = key ? ids(await search(`label:cp-inbox archived:false label:${key}`)) : []
-	const inboxes = keyed.length ? keyed : ids(await search('label:cp-inbox archived:false'))
+	const inboxes = ids(await search(key ? `label:cp-inbox archived:false label:${key}` : 'label:cp-inbox archived:false'))
 	return inboxes.length === 1 ? inboxes[0] : undefined
 }
 
@@ -82,7 +82,7 @@ function guardInbox(amp: PluginAPI): void {
 			found = amp.threads
 				.get(id as `T-${string}`)
 				.labels()
-				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer'))
+				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer') || l.includes('cp-sealed'))
 			checked.set(id, found)
 			found.catch(() => checked.delete(id))
 		}
@@ -165,7 +165,7 @@ export default async function (amp: PluginAPI) {
 			// thread when it needs one.
 			const inbox = await inboxOf(amp, thread).catch(() => undefined)
 			if (inbox) {
-				const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message. If you can read it, the plugin is not running here: tell ${ctx.thread.id}, with send_thread_message, that cp-inbox is not running and nothing was sent, and do nothing else.`
+				const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell ${ctx.thread.id}, with send_thread_message, that it may not have been sent.`
 				await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${content}` })
 				return `Passed to your clanker-proxy inbox, which hands it to ${name}'s thread to send. ${told}`
 			}
