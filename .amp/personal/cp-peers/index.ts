@@ -1,9 +1,9 @@
 // cp-peers: a personal Amp plugin, loaded in every thread of yours. Its
 // ask_peer tool knows your clanker-proxy peers by name and alias, and hands a
-// question for one to that peer's thread in your inbox project, which sends
-// it with cp_send. The asking thread is told of each of the peer's moves,
-// with a short form, never their words. And it keeps your threads from
-// reading the inbox's. See docs/amp.md.
+// question for one to your inbox, which passes it to that peer's thread,
+// which sends it with cp_send. The asking thread is told of each of the
+// peer's moves, with a short form, never their words. And it keeps your
+// threads from reading the inbox's. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -17,6 +17,8 @@ const run = promisify(execFile)
 const ampCLI = process.env.CP_INBOX_AMP || 'amp'
 const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
 const ampThread = /^T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+// The label cp-inbox puts on an inbox and its peers' threads.
+const inboxKey = /^inbox-[0-9a-f]{1,12}$/
 
 interface Peer {
 	name: string
@@ -40,6 +42,16 @@ async function peers(): Promise<Peer[]> {
 		if (typeof t?.id !== 'string' || !ampThread.test(t.id) || !title || !named(title[1]!)) return []
 		return [{ name: title[1]!, aliases: (title[2] ?? '').split(', ').filter(named), thread: t.id }]
 	})
+}
+
+// inboxOf is the inbox a peer's thread is under, by the label they share,
+// or, for a thread from before that label, your only inbox. Never another:
+// a keyed thread whose inbox is gone gets the ask itself.
+async function inboxOf(amp: PluginAPI, thread: string): Promise<string | undefined> {
+	const key = (await amp.threads.get(thread as `T-${string}`).labels().catch(() => [] as string[])).find((l) => inboxKey.test(l))
+	const ids = (found: unknown[]) => found.flatMap((t: any) => (typeof t?.id === 'string' && ampThread.test(t.id) ? [t.id as string] : []))
+	const inboxes = ids(await search(key ? `label:cp-inbox archived:false label:${key}` : 'label:cp-inbox archived:false'))
+	return inboxes.length === 1 ? inboxes[0] : undefined
 }
 
 // labelled finds a peer's thread by its label, before cp-inbox has titled it.
@@ -70,7 +82,7 @@ function guardInbox(amp: PluginAPI): void {
 			found = amp.threads
 				.get(id as `T-${string}`)
 				.labels()
-				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer'))
+				.then((l) => l.includes('clanker-proxy') || l.includes('cp-peer') || l.includes('cp-sealed'))
 			checked.set(id, found)
 			found.catch(() => checked.delete(id))
 		}
@@ -145,8 +157,20 @@ export default async function (amp: PluginAPI) {
 				typeof about === 'string'
 					? `My thread ${ctx.thread.id} asks you to follow up on cpd thread ${about} with ${name}: pass this on with cp_follow_up, replyTo ${ctx.thread.id}.\n\n${message}`
 					: `My thread ${ctx.thread.id} asks you to send ${peer} this, with replyTo ${ctx.thread.id}.${alias}\n\n${message}`
+			const told = `This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
+			// A peer's thread runs on the client that runs the inbox, not in an
+			// orb of its own: a message there never wakes the orb, and waits for
+			// ever once that client restarts. The inbox, an orb thread, wakes
+			// for one, and its plugin passes it on, starting a new peer's
+			// thread when it needs one.
+			const inbox = await inboxOf(amp, thread).catch(() => undefined)
+			if (inbox) {
+				const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin is not running here: do nothing with it but tell ${ctx.thread.id}, with send_thread_message, that it may not have been sent.`
+				await amp.threads.get(inbox as `T-${string}`).appendUserMessage({ type: 'user-message', content: `${forInbox}\n\n${content}` })
+				return `Passed to your clanker-proxy inbox, which hands it to ${name}'s thread to send. ${told}`
+			}
 			await amp.threads.get(thread).appendUserMessage({ type: 'user-message', content })
-			return `Passed to ${name}'s thread in your clanker-proxy inbox, which sends it. This thread is told of each of ${name}'s moves, with a short form; never look for their words.`
+			return `Passed to ${name}'s thread in your clanker-proxy inbox, which sends it. ${told}`
 		},
 	})
 }
