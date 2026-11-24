@@ -596,3 +596,43 @@ async fn one_daemon_per_directory_and_nothing_stored_without_a_port() {
     assert!(!fresh.0.join(cpd::DB_FILE).exists());
     assert!(!fresh.0.join(cpd::TOKEN_FILE).exists());
 }
+
+#[tokio::test]
+async fn data_a_later_release_upgraded_points_back_to_its_copy() {
+    use cp_core::Sql as _;
+    let dir = temp_dir("later");
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let sql = cp_sqlite::Sqlite::open(&dir.0.join(cpd::DB_FILE)).unwrap();
+    for s in cp_core::STATEMENTS {
+        sql.execute(s, &[]).unwrap();
+    }
+    sql.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+        &[(cp_core::SCHEMA_VERSION + 1).to_string().into()],
+    )
+    .unwrap();
+    drop(sql);
+    let start = || {
+        Daemon::start(Options {
+            dir: dir.0.clone(),
+            name: Some(cp_thread::Name::try_from("alice").unwrap()),
+            url: None,
+            listen: "127.0.0.1:0".parse().unwrap(),
+            version: "test".into(),
+        })
+    };
+    let Err(e) = start().await else {
+        panic!("started on data from a later release");
+    };
+    assert!(e.contains("newer release") && !e.contains("go back"), "{e}");
+    let copy = dir.0.join(format!(
+        "{}.schema-{}",
+        cpd::DB_FILE,
+        cp_core::SCHEMA_VERSION
+    ));
+    std::fs::write(&copy, b"").unwrap();
+    let Err(e) = start().await else {
+        panic!("started on data from a later release");
+    };
+    assert!(e.contains(&format!("go back to {}", copy.display())), "{e}");
+}

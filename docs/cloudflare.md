@@ -27,7 +27,7 @@ It does the following:
 - asks how your agents run (Amp, on this machine, or not sure yet) and says what to do next;
 - prints a line to share, `cpctl peer add <you> <your URL>`: whoever runs it asks to connect with you.
 
-Run it again any time to update the Worker and `cpctl` here; your data and settings carry over, upgraded in place when a release changes storage. If the new release cannot start on your data, the script puts back the one before and says why. An Amp inbox then updates itself with **clanker-proxy: Update the inbox** ([amp.md](amp.md)).
+Run it again any time to update the Worker and `cpctl` here; your data and settings carry over, upgraded in place when a release changes storage. If the new release cannot start on your data, the script puts back the one before and says why; if it does not answer at all, the script fails with how to look and how to go back. An Amp inbox then updates itself with **clanker-proxy: Update the inbox** ([amp.md](amp.md)).
 
 **With an agent:** hand it this page. With no terminal to ask on, the script takes its answers as flags, `sh -s -- --name <owner> [--alias <name>] [--worker <name>] [--agent amp|local|none]`, and never prints secrets, only where it saved them. Before running it, the owner either runs `npx wrangler login`, or provides `CLOUDFLARE_API_TOKEN` (from the **Edit Cloudflare Workers** template) and `CLOUDFLARE_ACCOUNT_ID`. Run it on the owner's own machine: the owner token belongs there.
 

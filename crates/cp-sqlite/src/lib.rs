@@ -52,26 +52,43 @@ impl Sqlite {
             }
         }
         create_private(&tmp).map_err(|e| fs("create", &tmp, e))?;
-        let to = tmp
-            .to_str()
-            .ok_or_else(|| SqlError(format!("{} is not UTF-8", tmp.display())))?;
-        self.conn
-            .execute("VACUUM INTO ?1", [to])
-            .map_err(|e| sql_err(&e))?;
-        // SQLite does not sync what VACUUM INTO writes.
-        std::fs::File::open(&tmp)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| fs("sync", &tmp, e))?;
-        std::fs::rename(&tmp, path).map_err(|e| fs("rename", &tmp, e))?;
+        let write = || {
+            let to = tmp
+                .to_str()
+                .ok_or_else(|| SqlError(format!("{} is not UTF-8", tmp.display())))?;
+            self.conn
+                .execute("VACUUM INTO ?1", [to])
+                .map_err(|e| sql_err(&e))?;
+            // SQLite does not sync what VACUUM INTO writes.
+            std::fs::File::open(&tmp)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| fs("sync", &tmp, e))?;
+            std::fs::rename(&tmp, path).map_err(|e| fs("rename", &tmp, e))
+        };
+        if let Err(e) = write() {
+            // A partial copy holds the disk space going back may need.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
         #[cfg(unix)]
         {
             let dir = path
                 .parent()
                 .filter(|d| !d.as_os_str().is_empty())
                 .unwrap_or(Path::new("."));
-            std::fs::File::open(dir)
-                .and_then(|d| d.sync_all())
-                .map_err(|e| fs("sync", dir, e))?;
+            match std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+                // Some filesystems cannot sync a directory; the copy is in
+                // place regardless, as SQLite also assumes.
+                Err(e)
+                    if !matches!(
+                        e.kind(),
+                        std::io::ErrorKind::Unsupported | std::io::ErrorKind::InvalidInput
+                    ) =>
+                {
+                    return Err(fs("sync", dir, e));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

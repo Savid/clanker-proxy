@@ -30,7 +30,8 @@ pub const SCHEMA_VERSION: u32 = BASE + MIGRATIONS.len() as u32;
 
 /// Statements creating schema `BASE` on empty storage, before `MIGRATIONS`
 /// run. Frozen: changes go in `MIGRATIONS`. The first creates `meta`,
-/// which records the version.
+/// whose `schema_version` row every release reads, so it stays where it is
+/// for good: data without it is refused.
 pub const STATEMENTS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,

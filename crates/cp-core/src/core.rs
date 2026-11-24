@@ -68,6 +68,7 @@ fn identity(
 
 /// The schema version of stored data, or `None` on empty storage, changing
 /// nothing: a host reads it to back up data before `Core::open` migrates it.
+/// Data without a version is refused, never taken for empty storage.
 pub fn stored_version<S: Sql>(sql: &S) -> Result<Option<u32>, Error> {
     let has_meta = sql
         .query_one(
@@ -78,13 +79,18 @@ pub fn stored_version<S: Sql>(sql: &S) -> Result<Option<u32>, Error> {
     if !has_meta {
         return Ok(None);
     }
-    sql.query_one("SELECT value FROM meta WHERE key = 'schema_version'", &[])?
-        .map(|r| {
-            r.text(0)?.parse::<u32>().map_err(|_| {
+    match sql.query_one("SELECT value FROM meta WHERE key = 'schema_version'", &[])? {
+        Some(r) => {
+            r.text(0)?.parse::<u32>().map(Some).map_err(|_| {
                 Error::new(ErrorKind::Internal, "stored schema version is not a number")
             })
-        })
-        .transpose()
+        }
+        None if sql.query_one("SELECT 1 FROM meta", &[])?.is_some() => Err(Error::new(
+            ErrorKind::Internal,
+            "stored data has no schema version",
+        )),
+        None => Ok(None),
+    }
 }
 
 impl<S: Sql, R: Runtime> Core<S, R> {
@@ -121,7 +127,7 @@ impl<S: Sql, R: Runtime> Core<S, R> {
                 return Err(Error::new(
                     ErrorKind::Internal,
                     format!(
-                        "stored data is schema version {v}, older than this release upgrades from (schema {UPGRADES_FROM})"
+                        "stored data is schema version {v}, older than this release upgrades from (schema {UPGRADES_FROM}); upgrade it with an earlier release first, or start from empty storage"
                     ),
                 ));
             }

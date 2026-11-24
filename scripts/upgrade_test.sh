@@ -40,8 +40,11 @@ case $(uname -s)/$(uname -m) in
     *) fail "no release build for $(uname -s)/$(uname -m)" ;;
 esac
 # A branch behind the latest release upgrades from the one it is built
-# on: data from a newer release is refused, rightly.
-previous=${CP_PREVIOUS:-$(git -C "$root" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)}
+# on: data from a newer release is refused, rightly. A release commit
+# upgrades from the release before its own.
+here=$(git -C "$root" tag --points-at HEAD --list 'v[0-9]*' 2>/dev/null | sed 's/^/--exclude=/')
+# shellcheck disable=SC2086 # one option per tag; tags have no spaces
+previous=${CP_PREVIOUS:-$(git -C "$root" describe --tags --abbrev=0 --match 'v[0-9]*' $here 2>/dev/null || true)}
 if [ -z "$previous" ]; then
     previous=$(curl -fsSIL --retry 3 -o /dev/null -w '%{url_effective}' "$repo/releases/latest" | sed 's|.*/||')
 fi
@@ -64,8 +67,15 @@ mkdir "$work/old"
 tar -xzf "$work/$archive" -C "$work/old"
 old=$work/old
 
-(cd "$root" && cargo build --quiet --locked -p cpd -p cpctl) || fail "build"
-new=${CARGO_TARGET_DIR:-$root/target}/debug
+# Where cargo put them, wherever its configuration says.
+built=$(cd "$root" && cargo build --quiet --locked -p cpd -p cpctl --message-format=json-render-diagnostics |
+    python3 -I -c 'import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("reason") == "compiler-artifact" and m.get("executable"):
+        print(m["executable"])') || fail "build"
+new=$(printf '%s\n' "$built" | sed -n 's|/cpd$||p')
+if [ ! -x "$new/cpd" ] || [ ! -x "$new/cpctl" ]; then fail "build: no cpd and cpctl side by side"; fi
 
 # start <dir> <port> <cpd> [<name>]: a daemon on loopback, in $work/<dir>,
 # named after it unless named; $started is its process.
@@ -136,12 +146,15 @@ befriend() {
     eventually "$1 and $4 did not become peers" holds '"status":"active"' ctl "$1" "$2" "$3" peer show "$4" --json
 }
 
-# Data made by the previous release: a peer, a thread both wrote in, an
-# agent token and a webhook.
+# Data made by the previous release, in every table a migration may
+# change: a peer with an alias, a thread both wrote in, a former peer, a
+# request waiting, an agent token, and a webhook with deliveries.
 start alice 18561 "$old/cpd"
 alice_pid=$started
 start bob 18562 "$old/cpd"
+ctl alice 18561 "$old/cpctl" webhook add hook http://127.0.0.1:9/hook >/dev/null || fail "webhook add"
 befriend alice 18561 "$old/cpctl" bob 18562 "$old/cpctl"
+ctl alice 18561 "$old/cpctl" peer alias bob robert >/dev/null || fail "peer alias"
 ref=$(ctl alice 18561 "$old/cpctl" send bob "Upgrade test" -m "Before the upgrade" --json |
     sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
 [ -n "$ref" ] || fail "alice could not send"
@@ -149,16 +162,33 @@ eventually "bob did not get the thread" holds "$ref" ctl bob 18562 "$old/cpctl" 
 ctl bob 18562 "$old/cpctl" reply "$ref" -m "Seen before" >/dev/null || fail "bob could not reply"
 eventually "alice did not get bob's reply" holds "Seen before" ctl alice 18561 "$old/cpctl" show "$ref" --all --json
 ctl alice 18561 "$old/cpctl" token add agent -o "$work/agent.token" >/dev/null || fail "token add"
-ctl alice 18561 "$old/cpctl" webhook add hook http://127.0.0.1:9/hook >/dev/null || fail "webhook add"
+start eve 18567 "$old/cpd"
+eve_pid=$started
+befriend eve 18567 "$old/cpctl" alice 18561 "$old/cpctl"
+ctl eve 18567 "$old/cpctl" send alice "Before eve left" -m "From a former peer" >/dev/null || fail "eve could not send"
+eventually "alice did not get eve's thread" holds "Before eve left" ctl alice 18561 "$old/cpctl" ls --json
+ctl alice 18561 "$old/cpctl" peer rm eve >/dev/null || fail "peer rm"
+stop "$eve_pid"
+start dave 18564 "$old/cpd"
+ctl dave 18564 "$old/cpctl" peer add alice http://127.0.0.1:18561 -m "upgrade test" >/dev/null || fail "dave could not ask alice"
 
-# Alice upgrades in place.
+# Alice upgrades in place. A migration of an empty table cannot fail on
+# its rows, so every table has some, but the approval that is in flight
+# for seconds.
 stop "$alice_pid"
+for table in $(query "$work/alice/cp.db" "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"); do
+    [ "$table" != peering_op ] || continue
+    [ "$(query "$work/alice/cp.db" "SELECT EXISTS (SELECT 1 FROM \"$table\")")" = 1 ] ||
+        fail "$previous left $table empty: make data for it above"
+done
 before=$(stored "$work/alice/cp.db")
 start alice 18561 "$new/cpd"
 alice_pid=$started
 A() { ctl alice 18561 "$new/cpctl" "$@"; }
 holds alice A me || fail "upgraded: lost the owner's name"
 holds '"status":"active"' A peer show bob --json || fail "upgraded: lost the peer"
+holds robert A peer show bob --json || fail "upgraded: lost the peer's alias"
+holds "Before eve left" A ls --json || fail "upgraded: lost the former peer's thread"
 holds "Before the upgrade" A show "$ref" --all --json || fail "upgraded: lost alice's message"
 holds "Seen before" A show "$ref" --all --json || fail "upgraded: lost bob's message"
 holds '"name":"agent"' A token ls --json || fail "upgraded: lost the agent token"
@@ -182,9 +212,14 @@ eventually "bob did not get alice's reply from $previous" holds "After the upgra
 ctl bob 18562 "$old/cpctl" send alice "From the old release" -m "Mixed releases" >/dev/null || fail "bob could not send"
 eventually "alice did not get bob's thread" holds "From the old release" A ls --json
 start carol 18563 "$old/cpd"
-start dave 18564 "$old/cpd"
+start frank 18568 "$old/cpd"
 befriend carol 18563 "$old/cpctl" alice 18561 "$new/cpctl"
-befriend alice 18561 "$new/cpctl" dave 18564 "$old/cpctl"
+befriend alice 18561 "$new/cpctl" frank 18568 "$old/cpctl"
+# The request dave made before the upgrade.
+id=$(A requests --json | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$id" ] || fail "upgraded: lost dave's request"
+A approve "$id" >/dev/null || fail "upgraded: could not approve dave's request"
+eventually "dave and alice did not become peers" holds '"status":"active"' ctl dave 18564 "$old/cpctl" peer show alice --json
 
 # A migration ran: the copy cpd kept is what the earlier release reads,
 # restored as README.md says, while the migrated data is refused.
@@ -206,8 +241,14 @@ if [ "$(stored "$work/alice/cp.db")" != "$before" ]; then
     rm -f "$work/back/cp.db-wal" "$work/back/cp.db-shm"
     cp "$work/back/cp.db.schema-$before" "$work/back/cp.db"
     start back 18566 "$old/cpd" alice
+    # The last writes before the upgrade too: a copy made earlier would
+    # lack them.
     holds '"status":"active"' ctl back 18566 "$old/cpctl" peer show bob --json ||
         fail "the copy restored does not hold the peer"
+    holds "Seen before" ctl back 18566 "$old/cpctl" show "$ref" --all --json ||
+        fail "the copy restored does not hold bob's reply"
+    holds "upgrade test" ctl back 18566 "$old/cpctl" requests --json ||
+        fail "the copy restored does not hold dave's request"
     start alice 18561 "$new/cpd"
 fi
 

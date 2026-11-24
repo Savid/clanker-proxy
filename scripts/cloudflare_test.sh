@@ -38,14 +38,18 @@ case $1 in
         done
         echo "Deployed"
         echo "  https://cp-test.fake.workers.dev" ;;
-    rollback) [ -z "${FAKE_ROLLBACK_FAILS:-}" ] || exit 1 ;;
+    rollback)
+        [ -z "${FAKE_ROLLBACK_FAILS:-}" ] || exit 1
+        # The release before reads the data, unless it was refused too.
+        [ -n "${FAKE_STILL_STALE:-}" ] || rm -f "$FAKE_DIR/stale" ;;
     *) exit 1 ;;
 esac
 FAKE
 chmod 755 "$work/wrangler"
 
 # The Worker: answers /api/v1/me, and makes agent tokens. With a "stale"
-# file, it refuses its stored data.
+# file, it refuses its stored data; with a "down" file, it fails as
+# Cloudflare does when a Worker throws.
 cat >"$work/worker.py" <<'PY'
 import http.server, os, sys
 work = sys.argv[2]
@@ -56,6 +60,12 @@ class H(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body.encode())
     def do_GET(self):
+        if os.path.exists(os.path.join(work, "down")):
+            self.send_response(500)
+            self.send_header("content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html>Error 1101: Worker threw exception</html>")
+            return
         if os.path.exists(os.path.join(work, "stale")):
             self.answer('{"title":"Service Unavailable","status":503,"detail":"the daemon cannot start: stored data is schema version 5, older than this release upgrades from (schema 7)"}', 503)
             return
@@ -86,7 +96,7 @@ done
 
 run() {
     HOME=$work/home XDG_CONFIG_HOME='' XDG_DATA_HOME='' CP_NO_TTY=1 \
-        CP_WRANGLER=$work/wrangler FAKE_DIR=$work \
+        CP_WRANGLER=$work/wrangler FAKE_DIR=$work CP_UPDATE_TRIES=6 \
         sh "$script" --bundle "$work/bundle.tar.gz" "$@" >"$work/out" 2>&1
 }
 token_file=$work/home/.config/clanker-proxy/cp-test.token
@@ -221,7 +231,7 @@ if grep -q '^login' "$work/cpctl-calls"; then fail "update: replaced another log
 # with cpctl's login for this URL, or not at all.
 mv "$token_file" "$work/token.away"
 run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "unchecked update failed"
-grep -q 'Deployed local to http://127.0.0.1:18519\.' "$work/out" || fail "unchecked update: says it was checked"
+grep -q 'Deployed local to http://127.0.0.1:18519, which answers\.' "$work/out" || fail "unchecked update: says it was checked"
 if grep -q 'now runs\|cpctl peer add' "$work/out"; then fail "unchecked update: claims what it did not check"; fi
 printf 'url=http://127.0.0.1:18519\ntoken=%s\n' "$(cat "$work/token.away")" >"$login"
 run_existing --worker cp-test --url "http://127.0.0.1:$port" || fail "update with a login failed"
@@ -243,15 +253,35 @@ grep -q '^rollback --name cp-test ' "$work/calls" || fail "refused: not rolled b
 grep -q 'cp-test is back on the release it ran before' "$work/out" || fail "refused: no word of the rollback"
 grep -q 'npx wrangler delete --name cp-test' "$work/out" || fail "refused: no way to start fresh"
 grep -q 'cp-test was not updated' "$work/out" || fail "refused: no failure line"
+: >"$work/stale"
 (export FAKE_ROLLBACK_FAILS=1; run_existing --worker cp-test --url "http://127.0.0.1:$port") && fail "updated over data it cannot read"
-grep -q 'npx wrangler rollback --name cp-test$' "$work/out" || fail "refused: no way back when the rollback fails"
+grep -q 'cp-test runs local, which cannot start; .*npx wrangler rollback --name cp-test$' "$work/out" ||
+    fail "refused: no way back when the rollback fails"
+if grep -q 'back on the release' "$work/out"; then fail "refused: claims a rollback that failed"; fi
+(export FAKE_STILL_STALE=1; run_existing --worker cp-test --url "http://127.0.0.1:$port") && fail "updated over data it cannot read"
+grep -q 'does not answer on the release before either' "$work/out" || fail "refused twice: claims the rollback worked"
 rm "$work/token.away" 2>/dev/null || :
 mv "$token_file" "$work/token.away"
 run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "updated over data it cannot read, unchecked"
 grep -q 'cp-test is back on the release it ran before' "$work/out" || fail "refused without a token: not noticed"
 mv "$work/token.away" "$token_file"
+: >"$work/stale"
 run_existing --worker cp-test --start-over && fail "accepted --start-over"
 grep -q 'unknown option --start-over' "$work/out" || fail "--start-over: wrong reason"
 rm "$work/stale"
+
+# A release that fails before it can say why is not an update, checked or
+# not; whether to roll back is the owner's call.
+: >"$work/down"
+: >"$work/calls"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "down: reported as updated"
+grep -q 'did not answer as local' "$work/out" || fail "down: not noticed"
+grep -q 'npx wrangler rollback --name cp-test' "$work/out" || fail "down: no way back"
+if grep -q '^rollback' "$work/calls"; then fail "down: rolled back without a refusal"; fi
+mv "$token_file" "$work/token.away"
+run_existing --worker cp-test --url "http://127.0.0.1:$port" && fail "down: reported as deployed, unchecked"
+grep -q 'cp-test may not be serving' "$work/out" || fail "down, unchecked: no failure line"
+mv "$work/token.away" "$token_file"
+rm "$work/down"
 
 echo "cloudflare setup tests passed"

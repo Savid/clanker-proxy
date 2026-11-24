@@ -40,7 +40,8 @@ EOF
 
 # A terminal to ask on and show secrets to, even though this script
 # arrives on standard input.
-# CP_NO_TTY, CP_WRANGLER and CP_CPCTL exist for scripts/cloudflare_test.sh.
+# CP_NO_TTY, CP_WRANGLER, CP_CPCTL and CP_UPDATE_TRIES exist for
+# scripts/cloudflare_test.sh.
 tty=
 if [ -z "${CP_NO_TTY:-}" ] && (: </dev/tty >/dev/tty) 2>/dev/null; then
     tty=/dev/tty
@@ -330,20 +331,45 @@ share() {
     note "cpctl requests, approve it: cpctl approve <id>."
 }
 
+# health: asks the Worker once whether it answers (0), cannot start on its
+# data (1), or neither (2). It needs no token.
+health() {
+    rm -f "$tmp/health.json"
+    code=$(curl -sS --max-time 10 -o "$tmp/health.json" -w '%{http_code}' "$url/api/v1/health" 2>/dev/null) || code=''
+    if [ -s "$tmp/health.json" ] && grep -q '"detail":"the daemon cannot start: ' "$tmp/health.json"; then
+        return 1
+    fi
+    [ "$code" = 200 ] || return 2
+}
+
 # The new release cannot start on the Worker's data, which it left as it
 # was: put back the release that ran before, and stop.
 refused() { # refused <why>
     heads_up "$version cannot start on $worker's data: $1."
-    if wr rollback --name "$worker" --message "cloudflare.sh: $version cannot start on this data" --yes >"$tmp/rollback.log" 2>&1; then
-        done_ "$worker is back on the release it ran before; its data is as it was."
-    else
-        tail -n 5 "$tmp/rollback.log" >&2
-        note "Put back the release it ran before with: npx wrangler rollback --name $worker"
-    fi
     case $1 in
         *"older than this release upgrades from"*)
-            note "To start fresh instead: npx wrangler delete --name $worker, then run this again." ;;
+            fresh="To start fresh instead: npx wrangler delete --name $worker, then run this again." ;;
+        *) fresh='' ;;
     esac
+    if ! wr rollback --name "$worker" --message "cloudflare.sh: $version cannot start on this data" --yes >"$tmp/rollback.log" 2>&1; then
+        tail -n 5 "$tmp/rollback.log" >&2
+        [ -z "$fresh" ] || note "$fresh"
+        fail "$worker runs $version, which cannot start; put back the release before with: npx wrangler rollback --name $worker"
+    fi
+    # The release before can be one that was refused too, after a rollback
+    # that failed; the new one can answer for a few seconds more.
+    n=0
+    until health; do
+        n=$((n + 1))
+        [ "$n" -lt "$tries" ] || break
+        sleep 2
+    done
+    if [ "$n" -lt "$tries" ]; then
+        done_ "$worker is back on the release it ran before; its data is as it was."
+    else
+        heads_up "$worker does not answer on the release before either; choose one that does with: npx wrangler deployments list --name $worker, then npx wrangler rollback <version-id> --name $worker"
+    fi
+    [ -z "$fresh" ] || note "$fresh"
     fail "$worker was not updated"
 }
 
@@ -364,33 +390,42 @@ if [ -n "$existing" ]; then
     fi
     # Until the new release answers, or cannot start on the stored data:
     # data from a newer release, older than it upgrades from, or a
-    # migration that failed and rolled back. Health needs no token; the
-    # owner's view also says which release answers.
-    i=0
+    # migration that failed and rolled back. The owner's view says which
+    # release answers; without a token, a few seconds give a refusal time
+    # to show. Anything else, such as a migration over the CPU limit,
+    # fails before it can say why. Tests shorten the wait.
+    tries=${CP_UPDATE_TRIES:-30}
+    i=0 healthy=''
     while :; do
-        curl -sS "$url/api/v1/health" >"$tmp/health.json" 2>/dev/null || :
-        if grep -q '"detail":"the daemon cannot start: ' "$tmp/health.json"; then
+        if health; then
+            healthy=yes
+        elif [ "$?" = 1 ]; then
             refused "$(node -e 'try { process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).detail).replace(/^the daemon cannot start: /, "")) } catch {}' <"$tmp/health.json")"
+        else
+            healthy=''
         fi
         if [ -s "$tmp/auth" ]; then
-            curl -sS -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
+            curl -sS --max-time 10 -H @"$tmp/auth" "$url/api/v1/me" >"$tmp/me.json" 2>/dev/null || :
             if grep -q '"name":' "$tmp/me.json" && { [ "$version" = local ] || grep -q "\"version\":\"$version\"" "$tmp/me.json"; }; then
                 owner=$(sed -n 's/.*"name":"\([^"]*\)".*/\1/p' "$tmp/me.json")
                 break
             fi
-        elif [ "$i" -ge 4 ]; then
+        elif [ -n "$healthy" ] && [ "$i" -ge 4 ]; then
             break
         fi
         i=$((i + 1))
-        [ "$i" -lt 30 ] || break
+        if [ "$i" -ge "$tries" ]; then
+            heads_up "$url did not answer as $version within a minute."
+            note "See why: npx wrangler tail --name $worker"
+            note "If it stays down, put back the release before: npx wrangler rollback --name $worker"
+            fail "$worker may not be serving"
+        fi
         sleep 2
     done
     if [ -n "$owner" ]; then
         done_ "Updated: $url now runs $version."
-    elif [ -s "$tmp/auth" ]; then
-        heads_up "Deployed $version, but $url did not answer as $version within a minute."
     else
-        done_ "Deployed $version to $url."
+        done_ "Deployed $version to $url, which answers."
     fi
     install_cpctl
     # A setup from before cpctl login: log it in, unless it is logged in

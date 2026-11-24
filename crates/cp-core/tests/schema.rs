@@ -25,25 +25,31 @@ fn stored_version(sql: &Sqlite) -> String {
         .to_string()
 }
 
-/// Storage at schema `BASE`, with an owner and a peer.
+/// Storage at schema `UPGRADES_FROM`, the oldest this build upgrades, with
+/// an owner and a peer.
 fn oldest() -> Sqlite {
     let sql = Sqlite::memory().unwrap();
     for s in STATEMENTS {
         sql.execute(s, &[]).unwrap();
     }
-    for (k, v) in [
-        ("schema_version", BASE.to_string()),
-        ("name", "alice".into()),
-    ] {
-        sql.execute(
-            "INSERT INTO meta (key, value) VALUES (?, ?)",
-            &[k.into(), v.into()],
-        )
-        .unwrap();
-    }
+    sql.execute(
+        "INSERT INTO meta (key, value) VALUES ('name', 'alice')",
+        &[],
+    )
+    .unwrap();
     sql.execute(
         "INSERT INTO peers (name, url, key, status, added_at) VALUES ('bob', 'https://bob.test', 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'active', 1)",
         &[],
+    )
+    .unwrap();
+    for m in &MIGRATIONS[..usize::try_from(UPGRADES_FROM - BASE).unwrap()] {
+        for s in *m {
+            sql.execute(s, &[]).unwrap();
+        }
+    }
+    sql.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+        &[UPGRADES_FROM.to_string().into()],
     )
     .unwrap();
     sql
@@ -107,7 +113,19 @@ fn the_stored_version_reads_without_changing_anything() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(cp_core::stored_version(&oldest()).unwrap(), Some(BASE));
+    assert_eq!(
+        cp_core::stored_version(&oldest()).unwrap(),
+        Some(UPGRADES_FROM)
+    );
+    // Data whose version row is gone is not taken for empty storage, which
+    // would run every migration over it.
+    let unversioned = oldest();
+    unversioned
+        .execute("DELETE FROM meta WHERE key = 'schema_version'", &[])
+        .unwrap();
+    assert!(cp_core::stored_version(&unversioned).is_err());
+    let clock = Clock::new();
+    assert!(Core::open(unversioned, runtime(&clock, 1), config()).is_err());
 }
 
 /// Shipped storage never changes: deployed data has run it, so an edit
