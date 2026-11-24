@@ -49,16 +49,33 @@ async function peers(): Promise<Peer[]> {
 // a keyed thread whose inbox is gone gets the ask itself.
 async function inboxOf(amp: PluginAPI, thread: string): Promise<string | undefined> {
 	const key = (await amp.threads.get(thread as `T-${string}`).labels().catch(() => [] as string[])).find((l) => inboxKey.test(l))
-	const ids = (found: unknown[]) => found.flatMap((t: any) => (typeof t?.id === 'string' && ampThread.test(t.id) ? [t.id as string] : []))
-	const inboxes = ids(await search(key ? `label:cp-inbox archived:false label:${key}` : 'label:cp-inbox archived:false'))
+	const inboxes = key ? await withLabels(amp, key, 'cp-inbox') : await withLabels(amp, 'cp-inbox')
 	return inboxes.length === 1 ? inboxes[0] : undefined
 }
 
+// withLabels lists your unarchived threads with every label given. Amp's
+// search keeps only the last label: term of a query, so it searches the
+// first label and reads each result's labels for the rest.
+async function withLabels(amp: PluginAPI, first: string, ...rest: string[]): Promise<string[]> {
+	const ids = (await search(`label:${first} archived:false`)).flatMap((t: any) => (typeof t?.id === 'string' && ampThread.test(t.id) ? [t.id as string] : []))
+	const kept = await Promise.all(
+		ids.map(async (id) => {
+			const labels = await amp.threads
+				.get(id as `T-${string}`)
+				.labels()
+				.catch(() => undefined)
+			return labels && [first, ...rest].every((l) => labels.includes(l)) ? id : undefined
+		}),
+	)
+	return kept.filter((id): id is string => id !== undefined)
+}
+
 // labelled finds a peer's thread by its label, before cp-inbox has titled it.
-async function labelled(name: string): Promise<Peer | undefined> {
-	// cp-inbox's labels are cut to Amp's 32 characters.
-	const [t]: any[] = await search(`label:cp-peer archived:false label:${`peer-${name}`.slice(0, 32).replace(/-+$/, '')}`)
-	return typeof t?.id === 'string' && ampThread.test(t.id) ? { name, aliases: [], thread: t.id } : undefined
+async function labelled(amp: PluginAPI, name: string): Promise<Peer | undefined> {
+	// cp-inbox's labels are cut to Amp's 32 characters. Conversations carry
+	// the peer's label too.
+	const [thread] = await withLabels(amp, `peer-${name}`.slice(0, 32).replace(/-+$/, ''), 'cp-peer')
+	return thread ? { name, aliases: [], thread } : undefined
 }
 
 // Peers' words live in the inbox's conversations, under its peers' threads.
@@ -142,7 +159,7 @@ export default async function (amp: PluginAPI) {
 				// Read now: aliases may have changed since this thread started.
 				// A name beats an alias.
 				const all = await peers()
-				found = all.find((p) => p.name === peer) ?? all.find((p) => p.aliases.includes(peer)) ?? (await labelled(peer))
+				found = all.find((p) => p.name === peer) ?? all.find((p) => p.aliases.includes(peer)) ?? (await labelled(amp, peer))
 			} catch {
 				return 'ask_peer: cannot search your threads.'
 			}
