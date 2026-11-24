@@ -22,8 +22,9 @@ const registrations = []
 const runtime = `${process.pid}-${Math.round(performance.timeOrigin)}`
 
 // fixture loads the plugin; base is where its home goes, by default with
-// the rest, and seed changes the saved state it starts with.
-async function fixture(t, base, seed = (state) => state) {
+// the rest, and seed changes the saved state it starts with. At load, cpd
+// lists peers and threads waiting on you, and deleted threads are gone.
+async function fixture(t, base, seed = (state) => state, { peers = [], waiting = [], gone = [], labelled = {} } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), 'cp-inbox-test-'))
 	const stateFile = join(dir, 'cp-inbox', 'state.json')
 	const responseFile = join(dir, 'response.json')
@@ -35,7 +36,7 @@ async function fixture(t, base, seed = (state) => state) {
 	const realFetch = globalThis.fetch
 	// What the broker passed on to cpd, the peers cpd lists, and self-revocations.
 	const forwarded = []
-	let peerList = []
+	let peerList = peers
 	const revoked = []
 	let revokeStatus = 204
 	let daemonVersion = 'v9.9.9'
@@ -75,7 +76,7 @@ const path = require('node:path')
 const args = process.argv.slice(2)
 if (args[0] !== '--json') process.exit(2)
 if (args[1] === 'ls') {
-    process.stdout.write('{"threads":[]}')
+    process.stdout.write(JSON.stringify({ threads: ${JSON.stringify(waiting)} }))
 } else if (args[1] === 'send') {
     const body = fs.readFileSync(0, 'utf8')
     fs.writeFileSync(path.join(__dirname, 'sent.json'), JSON.stringify({ args: args.slice(2), body }))
@@ -149,9 +150,10 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	const commands = {}
 	// Quick actions, with the thread they were added to.
 	const buttons = []
-	const labels = {}
-	// Threads whose messages fail, as an archived one's do.
+	const labels = { ...labelled }
+	// Threads whose messages fail, as an archived one's do, and deleted ones.
 	const failing = new Set()
+	const deleted = new Set(gone)
 	// Threads whose turn the plugin cancelled, and its keep-awake leases.
 	const cancelled = []
 	const leases = []
@@ -163,7 +165,10 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		title: { get: async () => (await ampCalls()).filter((c) => c[1] === 'rename' && c[2] === id).at(-1)?.[3] ?? null },
 		state: { get: async () => threadState },
 		waitForResponse: async () => undefined,
-		labels: async () => labels[id] ?? [],
+		labels: async () => {
+			if (deleted.has(id)) throw new Error('not found')
+			return labels[id] ?? []
+		},
 		addLabels: async (l) => { labels[id] = [...new Set([...(labels[id] ?? []), ...l])] },
 		setLabels: async (l) => { labels[id] = l },
 		createQuickAction: (definition) => {
@@ -193,6 +198,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	}
 	const amp = {
 		logger: { log: (...args) => logs.push(args) },
+		ui,
 		system: { executor: { keepAlive: async () => {
 			const lease = { ended: false, unsubscribe() { lease.ended = true } }
 			leases.push(lease)
@@ -271,7 +277,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		},
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices, cancelled, leases, handle, ui,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
-		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing,
+		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing, deleted,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		idle: () => { threadState = 'idle' },
 		end: (thread) => agentEnd({ thread: { id: thread } }),
@@ -1088,10 +1094,8 @@ test('an ask reaches no agent when the plugin cannot run: the turn is cancelled 
 })
 
 test('after a restart, a thread waiting on you is caught up by a new conversation, which hears of an unanswered question to you', async (t) => {
-	const f = await fixture(t, undefined, earlier)
+	const f = await fixture(t, undefined, earlier, { waiting: [{ id: subject, peer: 'alice', state: 'acked' }] })
 	f.labels.conversation = ['clanker-proxy', 'needs-owner']
-	const cpctl = join(f.dir, 'cpctl')
-	await writeFile(cpctl, (await readFile(cpctl, 'utf8')).replace(`process.stdout.write('{"threads":[]}')`, `process.stdout.write(JSON.stringify({ threads: [{ id: ${JSON.stringify(subject)}, peer: 'alice', state: 'acked' }] }))`), { mode: 0o700 })
 	await f.respond({ state: 'acked' })
 	// Any event runs the catch-up; a peering request touches no conversation.
 	await f.deliver(f.event('peering.requested', undefined, false, 'abcdef01'))
@@ -1183,4 +1187,25 @@ test("updating moves the orb's checkout, cpctl and cp-peers to the release the d
 	await f.command('cp-update', 'inbox')
 	assert.equal(f.confirms.length, before)
 	assert.match(f.notices.at(-1), /cannot read your daemon's release; nothing was updated|cannot read your daemon's release \(/)
+})
+
+test("loaded in the inbox, the plugin gives each peer without a thread one, so ask_peer knows them, and catches up", async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...earlier(s), inbox: 'inbox', hubs: { alice: 'hub-alice', carol: 'hub-carol' }, runtimes: { 'hub-alice': runtime, 'hub-carol': 'gone' } }), {
+		peers: [{ name: 'alice', aliases: [] }, { name: 'bob', aliases: [] }, { name: 'carol', aliases: [] }],
+		waiting: [{ id: subject, peer: 'alice', state: 'acked' }],
+		gone: ['hub-carol'],
+		labelled: { 'hub-alice': ['cp-peer', 'cp-sealed', 'peer-alice'] },
+	})
+	await f.until(async () => f.posted.some((p) => /Catching up/.test(p.content)))
+	const state = await f.readState()
+	// Bob had none and carol's is gone; alice's stays, and the conversation
+	// waiting on you starts under it.
+	assert.equal(state.hubs.alice, 'hub-alice')
+	assert.deepEqual(f.created.map((c) => c.parent), ['inbox', 'inbox', 'hub-alice'])
+	assert.deepEqual([state.hubs.bob, state.hubs.carol], ['thread-1', 'thread-2'])
+	assert.equal(f.posted.find((p) => /Catching up/.test(p.content)).thread, 'thread-3')
+	// Not the inbox's orb: nothing starts.
+	const g = await fixture(t, undefined, undefined, { peers: [{ name: 'bob', aliases: [] }] })
+	await new Promise((resolve) => setTimeout(resolve, 100))
+	assert.deepEqual(g.created, [])
 })
