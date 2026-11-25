@@ -1670,7 +1670,10 @@ export default async function (amp: PluginAPI) {
 	// Loaded in the inbox's orb, after an update or a restart: each peer
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
 	// their threads and would not know them before their first cpd thread,
-	// and threads waiting on you catch up without waiting for an event.
+	// and threads waiting on you catch up without waiting for an event. A
+	// peer's thread from before they were sealed is replaced too: it tells
+	// its agent it sends asks, with a tool that went with the process that
+	// started it, so what you type there fails.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
 		const id = state.inbox
@@ -1683,8 +1686,8 @@ export default async function (amp: PluginAPI) {
 		void serial(async () => {
 			for (const peer of (await readPeers())?.keys() ?? []) {
 				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
-				const there = known ? (await labelsOf(known)) !== undefined : false
-				if (!there) await inbox.hub(ctx, peer)
+				const labels = known ? await labelsOf(known) : undefined
+				if (!labels?.includes('cp-sealed')) await inbox.hub(ctx, peer)
 			}
 			await inbox.sweep(ctx)
 		}).catch((err) => amp.logger.log('cp-inbox: could not start the peer threads:', err instanceof Error ? err.message : err))
@@ -1864,12 +1867,14 @@ function briefing(subject: string, peer: string): string {
 }
 
 // hubBriefing is the first message of a peer's thread, which Amp titles it
-// from; the thread never runs again.
+// from. The plugin cancels any later turn, but only while the process that
+// started the thread runs; after that, what you type there reaches this
+// agent, which must not point you at running it somewhere with tools.
 function hubBriefing(peer: string): string {
 	return [
 		`${hubBriefingStart}${peer}. Each subthread is a conversation that handles one cpd thread with ${peer}; leave them to it.`,
 		'',
-		`The cp-inbox plugin sends my threads' asks for ${peer} itself: nothing here is for you to act on, and you have no tools.`,
+		`The cp-inbox plugin sends my threads' asks for ${peer} itself: nothing here is for you to act on, and you have no tools. Nothing is ever sent from this thread. If I ask you something here later, reply only that, and that ask_peer in any of my other threads sends to ${peer}.`,
 		'',
 		'Reply "ready" and stop.',
 	].join('\n')

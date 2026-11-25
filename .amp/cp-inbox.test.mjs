@@ -1254,6 +1254,29 @@ test("loaded in the inbox, the plugin gives each peer without a thread one, so a
 	assert.deepEqual(g.created, [])
 })
 
+test("loaded in the inbox, the plugin replaces a peer's thread from before they were sealed, whose agent would try to send", async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', hubs: { alice: 'old-hub', bob: 'hub-bob' } }), {
+		peers: [{ name: 'alice', aliases: [] }, { name: 'bob', aliases: [] }],
+		labelled: { 'old-hub': ['cp-peer', 'peer-alice', 'inbox-b', 'mine'], 'hub-bob': ['cp-peer', 'cp-sealed', 'peer-bob', 'inbox-b'] },
+	})
+	await f.until(async () => (await f.readState()).hubs.alice === 'thread-1')
+	const state = await f.readState()
+	// Bob's is sealed already, and stays.
+	assert.deepEqual(state.hubs, { alice: 'thread-1', bob: 'hub-bob' })
+	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }])
+	assert.deepEqual(f.labels['thread-1'], ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b'])
+	// Its briefing has its agent answer what you type there, once nothing
+	// cancels the turn.
+	assert.match(f.posted.find((p) => p.thread === 'thread-1').content, /Nothing is ever sent from this thread\. If I ask you something here later, reply only that, and that ask_peer in any of my other threads sends to alice\./)
+	// The old one is retired: ask_peer no longer finds it, and the guard
+	// holds it like a conversation.
+	assert.deepEqual(f.labels['old-hub'], ['mine'])
+	assert.ok(f.cancelled.includes('old-hub'))
+	assert.deepEqual((await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2]), ['old-hub'])
+	assert.ok(state.known.includes('old-hub'))
+	assert.equal((await f.check('old-hub', 'shell_command', { cmd: 'ls' })).action, 'modify')
+})
+
 test("asks are checked before anything goes out: who sent them, the peer's name, secrets, repeats, the title and an unknown outcome", async (t) => {
 	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }))
 	f.setPeers([{ name: 'alice', aliases: [] }, { name: 'slow', aliases: [] }])
