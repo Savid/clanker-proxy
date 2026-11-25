@@ -126,9 +126,10 @@ all of it except publishing.
   change only adds optional fields and raises `askFormat` in both plugins;
   and cp-inbox reads every earlier form that reaches the inbox, telling a
   thread that writes one to reload its plugins. A cp-peers before v0.8.9
-  may write to the peer's thread instead, which nothing reads once the
+  may write to the peer's thread instead, where nothing sends them once the
   process that started it is gone: those asks are lost, and only a reload
-  of the asking thread stops it.
+  of the asking thread stops it. A change to a peer thread's briefing
+  raises `hubLabel`, so the inbox replaces the old ones when it loads.
 - Comments say what the code cannot: why, constraints, non-obvious
   consequences. No restating code, no history, no references to plans,
   reviews or tickets.

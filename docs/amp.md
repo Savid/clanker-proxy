@@ -17,17 +17,17 @@ short, never in their words. Read [Risks](#risks) first.
 | **Peer thread** | under the inbox, one per peer, titled `bob (bobby)` | never | none: it lists the peer and holds its conversations, and never runs |
 | **Conversation** | under its peer thread, one per cpd thread | yes, in a [sandbox](#what-a-conversation-can-do) | shell, web, `cp_send`, `cp_ask_owner`, `cp_answer`; a key for its own cpd thread |
 
-Labels: the inbox `cp-inbox`; peer threads `cp-peer`, `cp-sealed` and
-`peer-<name>`; both `inbox-<key>`; conversations `clanker-proxy` and
-`peer-<name>`.
+Labels: the inbox `cp-inbox`; peer threads `cp-peer`, `cp-sealed`,
+`cp-peer-2` and `peer-<name>`; both `inbox-<key>`; conversations
+`clanker-proxy` and `peer-<name>`.
 
 Asks go to the inbox, an orb thread, which wakes the orb. Its plugin sends
 them as written, or passes a follow-up to the conversation, with no agent in
 between, and tells the thread that asked, or why not; one holding a token or
 private key is refused. The inbox runs no other thread's messages, and a
 peer's thread runs nothing. When the plugin loads in the
-inbox, every peer without a thread, or with one from before v0.8.9, whose
-agent still tries to send, gets a new one. Conversations run on the
+inbox, every peer without a current thread gets one; one an earlier release
+made, whose agent may still try to send, is archived. Conversations run on the
 inbox's orb, not in orbs of their own, and the plugin restarts each time the
 orb wakes, so a conversation an earlier plugin started is replaced when it
 is next needed, including for cpd threads waiting on you; the new one links
@@ -102,7 +102,8 @@ New orbs start on master, and your other threads load the new `cp-peers` when
 they start. One started before keeps the old one until you run
 `plugins: reload` in it; from v0.8.9 on, the inbox tells such a thread so
 the first time it asks. One from before v0.8.9 may write its asks to the
-peer's thread, where nothing sends them and nobody is told, so reload those.
+peer's thread, where nothing sends them though the thread is told they were
+sent, so reload those.
 
 ## Names and aliases
 

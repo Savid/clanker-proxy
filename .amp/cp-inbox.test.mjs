@@ -509,7 +509,7 @@ test('a conversation runs as its own agent, briefed on its sandbox', async (t) =
 	assert.deepEqual(f.agents.map((a) => a.model), ['anthropic/claude-opus-5-5', 'anthropic/claude-opus-5-5'])
 	// The peer's thread only sends and follows up.
 	assert.deepEqual(f.agents[0].tools, { include: [], exclude: ['code_exec', 'tool_search'] }, "a peer's thread has no tools, nor code mode")
-	assert.deepEqual(f.labels[f.created[0].id], ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b'])
+	assert.deepEqual(f.labels[f.created[0].id], ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice', 'inbox-b'])
 	const { include, exclude } = f.agents[1].tools
 	assert.deepEqual(exclude, ['code_exec', 'tool_search'])
 	assert.deepEqual(include, ['shell_command', 'shell_command_status', 'shell_command_kill', 'web_search', 'read_web_page', 'todo_read', 'todo_write', 'get_current_time', 'cp_ask_owner', 'cp_send', 'cp_answer'])
@@ -997,7 +997,7 @@ const earlier = (s) => ({
 
 test("a conversation another plugin process started is replaced, never written to; the peer's thread, which never runs, stays", async (t) => {
 	const f = await fixture(t, undefined, earlier)
-	f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b']
+	f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice', 'inbox-b']
 	await f.respond({ state: 'acked' })
 	await f.deliver(f.event('thread.reply', 'acked', true))
 	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'old-hub' }])
@@ -1005,7 +1005,7 @@ test("a conversation another plugin process started is replaced, never written t
 	assert.deepEqual(f.cancelled, ['conversation'])
 	const archived = (await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2])
 	assert.deepEqual(archived, ['conversation'])
-	assert.deepEqual(f.labels['old-hub'], ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b'])
+	assert.deepEqual(f.labels['old-hub'], ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice', 'inbox-b'])
 	const first = f.posted.at(-1)
 	assert.equal(first.thread, 'thread-1')
 	assert.match(first.content, new RegExp(`^You handle clanker-proxy thread ${subject} with alice`))
@@ -1039,7 +1039,7 @@ test("an ended cpd thread's conversation from another plugin process is retired,
 
 test("a follow-up for a conversation another plugin process started goes to a new one under the peer's thread", async (t) => {
 	const f = await fixture(t, undefined, (s) => ({ ...earlier(s), inbox: 'inbox' }))
-	f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'peer-alice']
+	f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice']
 	f.setPeers([{ name: 'alice', aliases: [] }])
 	await f.respond({ state: 'acked' })
 	assert.deepEqual(await f.start('inbox', ask('alice', { thread: subject.slice(0, 8), message: 'Send him the kubectl command.' })), note(`passed this follow-up to the conversation handling ${subject}`))
@@ -1054,7 +1054,7 @@ test("a follow-up for a conversation another plugin process started goes to a ne
 	assert.deepEqual(f.labels['T-00000000-0000-4000-8000-0000000000e1'], ['work'])
 	// An ended one is not brought back.
 	const g = await fixture(t, undefined, (s) => ({ ...earlier(s), inbox: 'inbox', conversations: { [subject]: { ...earlier(s).conversations[subject], ended: Date.now() } } }))
-	g.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'peer-alice']
+	g.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice']
 	g.setPeers([{ name: 'alice', aliases: [] }])
 	await g.respond({ state: 'closed' })
 	assert.match((await g.start('inbox', ask('alice', { thread: subject, message: 'x' }))).message.content, /could not be reached; if its cpd thread has ended, send a new one/)
@@ -1160,7 +1160,7 @@ test('a decline on a conversation another plugin process started is read by a ne
 test('a follow-up and an event for the same conversation another process started make one new conversation', async (t) => {
 	for (const order of ['event first', 'follow-up first']) {
 		const f = await fixture(t, undefined, (s) => ({ ...earlier(s), inbox: 'inbox' }))
-		f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'peer-alice']
+		f.labels['old-hub'] = ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice']
 		f.setPeers([{ name: 'alice', aliases: [] }])
 		await f.respond({ state: 'acked' })
 		const follow = () => f.start('inbox', ask('alice', { thread: subject, message: 'Send him the kubectl command.' }))
@@ -1235,7 +1235,7 @@ test("loaded in the inbox, the plugin gives each peer without a thread one, so a
 		peers: [{ name: 'alice', aliases: [] }, { name: 'bob', aliases: [] }, { name: 'carol', aliases: [] }],
 		waiting: [{ id: subject, peer: 'alice', state: 'acked' }],
 		gone: ['hub-carol'],
-		labelled: { 'hub-alice': ['cp-peer', 'cp-sealed', 'peer-alice'] },
+		labelled: { 'hub-alice': ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice'] },
 	})
 	await f.until(async () => f.posted.some((p) => /Catching up/.test(p.content)))
 	const state = await f.readState()
@@ -1254,23 +1254,24 @@ test("loaded in the inbox, the plugin gives each peer without a thread one, so a
 	assert.deepEqual(g.created, [])
 })
 
-test("loaded in the inbox, the plugin replaces a peer's thread from before they were sealed, whose agent would try to send", async (t) => {
+test("loaded in the inbox, the plugin replaces a peer's thread an earlier release briefed, whose agent may try to send", async (t) => {
 	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', hubs: { alice: 'old-hub', bob: 'hub-bob' } }), {
 		peers: [{ name: 'alice', aliases: [] }, { name: 'bob', aliases: [] }],
-		labelled: { 'old-hub': ['cp-peer', 'peer-alice', 'inbox-b', 'mine'], 'hub-bob': ['cp-peer', 'cp-sealed', 'peer-bob', 'inbox-b'] },
+		labelled: { 'old-hub': ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b', 'mine'], 'hub-bob': ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-bob', 'inbox-b'] },
 	})
 	await f.until(async () => (await f.readState()).hubs.alice === 'thread-1')
 	const state = await f.readState()
-	// Bob's is sealed already, and stays.
+	// Alice's has v0.8.8's labels, sealed but briefed to send; bob's is
+	// current, and stays.
 	assert.deepEqual(state.hubs, { alice: 'thread-1', bob: 'hub-bob' })
 	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }])
-	assert.deepEqual(f.labels['thread-1'], ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b'])
+	assert.deepEqual(f.labels['thread-1'], ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice', 'inbox-b'])
 	// Its briefing has its agent answer what you type there, once nothing
 	// cancels the turn.
-	assert.match(f.posted.find((p) => p.thread === 'thread-1').content, /Nothing is ever sent from this thread\. If I ask you something here later, reply only that, and that ask_peer in any of my other threads sends to alice\./)
+	assert.match(f.posted.find((p) => p.thread === 'thread-1').content, /Whatever I write here later, reply with exactly this and nothing else: "Nothing written here is sent, so this was not\. To reach alice, use ask_peer in any of your threads outside the inbox\." Never suggest commands/)
 	// The old one is retired: ask_peer no longer finds it, and the guard
 	// holds it like a conversation.
-	assert.deepEqual(f.labels['old-hub'], ['mine'])
+	assert.deepEqual(f.labels['old-hub'], ['cp-sealed', 'mine'])
 	assert.ok(f.cancelled.includes('old-hub'))
 	assert.deepEqual((await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2]), ['old-hub'])
 	assert.ok(state.known.includes('old-hub'))
@@ -1404,7 +1405,7 @@ test('a thread running an older cp-peers is told once to reload its plugins, and
 
 test("a peer's thread runs only its briefing, and the inbox runs no other thread's messages", async (t) => {
 	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }))
-	f.labels.hub = ['cp-peer', 'cp-sealed', 'peer-alice']
+	f.labels.hub = ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice']
 	f.labels.inbox = ['cp-inbox']
 	assert.deepEqual(await f.start('hub', "This is my clanker-proxy thread for alice. Each subthread …"), {})
 	assert.match((await f.start('hub', 'Please send alice the plan.')).message.content, /this thread runs nothing; ask_peer brings asks/)
@@ -1417,7 +1418,7 @@ test("a peer's thread runs only its briefing, and the inbox runs no other thread
 
 test('a peer thread whose labels cannot be read for a moment is kept, not doubled', async (t) => {
 	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', hubs: { alice: 'hub' } }))
-	f.labels.hub = ['cp-peer', 'cp-sealed', 'peer-alice']
+	f.labels.hub = ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice']
 	f.setPeers([{ name: 'alice', aliases: [] }])
 	f.flaky.add('hub')
 	await f.start('inbox', ask('alice', { message: 'hi' }))

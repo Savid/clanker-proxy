@@ -114,6 +114,11 @@ const followUpPrefix = 'From the owner, through their thread for this peer:'
 const briefingStart = 'You handle clanker-proxy thread '
 // How a peer's thread's one message starts.
 const hubBriefingStart = 'This is my clanker-proxy thread for '
+// The label of a peer's thread briefed as hubBriefing now does, raised with
+// each change to it. One without it is replaced when the plugin loads: up
+// to v0.8.8, cp-sealed ones too, its agent was told to send asks, with a
+// tool that went with the process that started the thread.
+const hubLabel = 'cp-peer-2'
 // An ask that cp-peers brings to the inbox for a peer: a line for the
 // plugin, then the ask as JSON. cp-peers writes it the same way.
 const askLine = /^cp-inbox: for ([a-z0-9](?:-?[a-z0-9])*)'s thread\.[^\n]*\n\n/
@@ -626,15 +631,16 @@ export default async function (amp: PluginAPI) {
 
 		// hub returns the peer's thread, starting it under the inbox the first
 		// time, or again if it is gone. It falls back to the inbox itself, so
-		// a conversation still starts.
-		async hub(ctx: Context, peer: string): Promise<ThreadID> {
+		// a conversation still starts. read is the labels the caller just
+		// read: a second read that failed would leave the old thread unretired.
+		async hub(ctx: Context, peer: string, read?: string[]): Promise<ThreadID> {
 			const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
 			if (known) {
-				const labels = await labelsOf(known)
-				if (labels?.includes('cp-sealed')) return known
-				// One started with every tool is replaced: it is kept under the
-				// guard with conversations, loses its labels so ask_peer finds
-				// the new one, and is retired.
+				const labels = read ?? (await labelsOf(known))
+				if (labels?.includes(hubLabel)) return known
+				// One an earlier release briefed is replaced: it is kept under
+				// the guard with conversations, loses its labels so ask_peer
+				// finds the new one, and is retired.
 				if (labels) {
 					state.known.push(known)
 					await amp.threads
@@ -646,7 +652,7 @@ export default async function (amp: PluginAPI) {
 			}
 			try {
 				const hub = await (await peerThreadAgent(ctx)).createThread({ parentThreadID: ctx.thread.id, visibility: 'private' })
-				await hub.addLabels(['cp-peer', 'cp-sealed', label('peer-' + peer), inboxKey(ctx.thread.id)]).catch(() => undefined)
+				await hub.addLabels(['cp-peer', 'cp-sealed', hubLabel, label('peer-' + peer), inboxKey(ctx.thread.id)]).catch(() => undefined)
 				await hub.appendUserMessage({ type: 'user-message', content: hubBriefing(peer) })
 				void keepAwake(hub.id)
 				// Recorded once briefed, so a failed briefing gets a new thread.
@@ -1404,11 +1410,13 @@ export default async function (amp: PluginAPI) {
 			await mkdir(stateDir, { recursive: true, mode: 0o700 })
 			await writeFile(tombstone, '')
 			await step('Archived its peer threads and conversations', async () => {
-				// The thread running this goes last.
+				// The thread running this goes last. Peer threads started while
+				// you confirmed go too.
 				const here = ctx.thread?.id
+				const all = [...new Set([...ids, ...state.known, ...Object.values(state.hubs)])]
 				let archived = 0
-				for (const id of [...ids.filter((id) => id !== here), ...ids.filter((id) => id === here)]) if (await threads(['archive', id])) archived++
-				return `${archived} of ${ids.length}`
+				for (const id of [...all.filter((id) => id !== here), ...all.filter((id) => id === here)]) if (await threads(['archive', id])) archived++
+				return `${archived} of ${all.length}`
 			})
 			await step("Deleted this project's CP_URL and CP_TOKEN", async () => {
 				const project = process.env.AMP_PROJECT_ID
@@ -1671,9 +1679,8 @@ export default async function (amp: PluginAPI) {
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
 	// their threads and would not know them before their first cpd thread,
 	// and threads waiting on you catch up without waiting for an event. A
-	// peer's thread from before they were sealed is replaced too: it tells
-	// its agent it sends asks, with a tool that went with the process that
-	// started it, so what you type there fails.
+	// peer's thread an earlier release briefed is replaced too, as what you
+	// type there may reach an agent told it can send.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
 		const id = state.inbox
@@ -1685,11 +1692,13 @@ export default async function (amp: PluginAPI) {
 		setTimeout(() => void catchUpNow(), 30_000).unref()
 		void serial(async () => {
 			for (const peer of (await readPeers())?.keys() ?? []) {
+				// Uninstall archives what the state lists, and runs outside serial.
+				if (uninstalled) return
 				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
 				const labels = known ? await labelsOf(known) : undefined
-				if (!labels?.includes('cp-sealed')) await inbox.hub(ctx, peer)
+				if (!labels?.includes(hubLabel)) await inbox.hub(ctx, peer, labels)
 			}
-			await inbox.sweep(ctx)
+			if (!uninstalled) await inbox.sweep(ctx)
 		}).catch((err) => amp.logger.log('cp-inbox: could not start the peer threads:', err instanceof Error ? err.message : err))
 	}
 
@@ -1874,7 +1883,7 @@ function hubBriefing(peer: string): string {
 	return [
 		`${hubBriefingStart}${peer}. Each subthread is a conversation that handles one cpd thread with ${peer}; leave them to it.`,
 		'',
-		`The cp-inbox plugin sends my threads' asks for ${peer} itself: nothing here is for you to act on, and you have no tools. Nothing is ever sent from this thread. If I ask you something here later, reply only that, and that ask_peer in any of my other threads sends to ${peer}.`,
+		`The cp-inbox plugin sends my threads' asks for ${peer} itself: nothing here is for you to act on, and you have no tools. Whatever I write here later, reply with exactly this and nothing else: "Nothing written here is sent, so this was not. To reach ${peer}, use ask_peer in any of your threads outside the inbox." Never suggest commands, retries, continuing or reloading this thread, or that anything may have been sent.`,
 		'',
 		'Reply "ready" and stop.',
 	].join('\n')
