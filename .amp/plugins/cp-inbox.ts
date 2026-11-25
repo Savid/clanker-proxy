@@ -460,6 +460,17 @@ export default async function (amp: PluginAPI) {
 			.catch(() => undefined)
 		await archive(id)
 	}
+	// retireHub retires a peer's thread an earlier release briefed: kept
+	// under the guard with conversations, it loses its labels, so ask_peer
+	// no longer finds it.
+	const retireHub = async (id: ThreadID, labels: string[]) => {
+		state.known.push(id)
+		await amp.threads
+			.get(id)
+			.setLabels(labels.filter((l) => l !== 'cp-peer' && !l.startsWith('peer-') && !l.startsWith('inbox-')))
+			.catch(() => undefined)
+		await retire(id)
+	}
 
 	// readPeers is each peer's aliases, the other names you gave them in cpd,
 	// by name; undefined when cpd cannot say.
@@ -638,17 +649,7 @@ export default async function (amp: PluginAPI) {
 			if (known) {
 				const labels = read ?? (await labelsOf(known))
 				if (labels?.includes(hubLabel)) return known
-				// One an earlier release briefed is replaced: it is kept under
-				// the guard with conversations, loses its labels so ask_peer
-				// finds the new one, and is retired.
-				if (labels) {
-					state.known.push(known)
-					await amp.threads
-						.get(known)
-						.setLabels(labels.filter((l) => l !== 'cp-peer' && !l.startsWith('peer-') && !l.startsWith('inbox-')))
-						.catch(() => undefined)
-					await retire(known)
-				}
+				if (labels) await retireHub(known, labels)
 			}
 			try {
 				const hub = await (await peerThreadAgent(ctx)).createThread({ parentThreadID: ctx.thread.id, visibility: 'private' })
@@ -1409,9 +1410,11 @@ export default async function (amp: PluginAPI) {
 			uninstalled = true
 			await mkdir(stateDir, { recursive: true, mode: 0o700 })
 			await writeFile(tombstone, '')
+			// What is already running, such as the load replacing peer threads,
+			// stops at its next check; its threads are archived with the rest.
+			await Promise.race([serial(async () => undefined), new Promise((resolve) => setTimeout(resolve, 30_000).unref())])
 			await step('Archived its peer threads and conversations', async () => {
-				// The thread running this goes last. Peer threads started while
-				// you confirmed go too.
+				// The thread running this goes last.
 				const here = ctx.thread?.id
 				const all = [...new Set([...ids, ...state.known, ...Object.values(state.hubs)])]
 				let archived = 0
@@ -1680,7 +1683,8 @@ export default async function (amp: PluginAPI) {
 	// their threads and would not know them before their first cpd thread,
 	// and threads waiting on you catch up without waiting for an event. A
 	// peer's thread an earlier release briefed is replaced too, as what you
-	// type there may reach an agent told it can send.
+	// type there may reach an agent told it can send; a removed peer's is
+	// only retired.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
 		const id = state.inbox
@@ -1691,12 +1695,22 @@ export default async function (amp: PluginAPI) {
 		void catchUpNow()
 		setTimeout(() => void catchUpNow(), 30_000).unref()
 		void serial(async () => {
-			for (const peer of (await readPeers())?.keys() ?? []) {
+			const peers = await readPeers()
+			for (const peer of peers?.keys() ?? []) {
 				// Uninstall archives what the state lists, and runs outside serial.
 				if (uninstalled) return
 				const known = Object.hasOwn(state.hubs, peer) ? state.hubs[peer] : undefined
 				const labels = known ? await labelsOf(known) : undefined
 				if (!labels?.includes(hubLabel)) await inbox.hub(ctx, peer, labels)
+			}
+			for (const [peer, hub] of Object.entries(state.hubs)) {
+				if (uninstalled) return
+				if (!peers || peers.has(peer)) continue
+				const labels = await labelsOf(hub)
+				if (!labels || labels.includes(hubLabel)) continue
+				await retireHub(hub, labels)
+				delete state.hubs[peer]
+				await saveState(state)
 			}
 			if (!uninstalled) await inbox.sweep(ctx)
 		}).catch((err) => amp.logger.log('cp-inbox: could not start the peer threads:', err instanceof Error ? err.message : err))

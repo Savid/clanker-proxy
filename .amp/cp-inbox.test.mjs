@@ -1255,15 +1255,21 @@ test("loaded in the inbox, the plugin gives each peer without a thread one, so a
 })
 
 test("loaded in the inbox, the plugin replaces a peer's thread an earlier release briefed, whose agent may try to send", async (t) => {
-	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', hubs: { alice: 'old-hub', bob: 'hub-bob' } }), {
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', hubs: { alice: 'old-hub', bob: 'hub-bob', carol: 'old-carol', dave: 'hub-dave' } }), {
 		peers: [{ name: 'alice', aliases: [] }, { name: 'bob', aliases: [] }],
-		labelled: { 'old-hub': ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b', 'mine'], 'hub-bob': ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-bob', 'inbox-b'] },
+		labelled: {
+			'old-hub': ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b', 'mine'],
+			'hub-bob': ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-bob', 'inbox-b'],
+			'old-carol': ['cp-peer', 'cp-sealed', 'peer-carol', 'inbox-b'],
+			'hub-dave': ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-dave', 'inbox-b'],
+		},
 	})
-	await f.until(async () => (await f.readState()).hubs.alice === 'thread-1')
+	await f.until(async () => !(await f.readState()).hubs.carol)
 	const state = await f.readState()
 	// Alice's has v0.8.8's labels, sealed but briefed to send; bob's is
-	// current, and stays.
-	assert.deepEqual(state.hubs, { alice: 'thread-1', bob: 'hub-bob' })
+	// current, and stays. Carol and dave are no longer peers: carol's, from
+	// v0.8.8, is retired, not replaced; dave's is current, and stays.
+	assert.deepEqual(state.hubs, { alice: 'thread-1', bob: 'hub-bob', dave: 'hub-dave' })
 	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }])
 	assert.deepEqual(f.labels['thread-1'], ['cp-peer', 'cp-sealed', 'cp-peer-2', 'peer-alice', 'inbox-b'])
 	// Its briefing has its agent answer what you type there, once nothing
@@ -1272,10 +1278,22 @@ test("loaded in the inbox, the plugin replaces a peer's thread an earlier releas
 	// The old one is retired: ask_peer no longer finds it, and the guard
 	// holds it like a conversation.
 	assert.deepEqual(f.labels['old-hub'], ['cp-sealed', 'mine'])
-	assert.ok(f.cancelled.includes('old-hub'))
-	assert.deepEqual((await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2]), ['old-hub'])
-	assert.ok(state.known.includes('old-hub'))
+	assert.deepEqual(f.labels['old-carol'], ['cp-sealed'])
+	assert.deepEqual(f.cancelled, ['old-hub', 'old-carol'])
+	assert.deepEqual((await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2]), ['old-hub', 'old-carol'])
+	assert.ok(['old-hub', 'old-carol'].every((id) => state.known.includes(id)))
 	assert.equal((await f.check('old-hub', 'shell_command', { cmd: 'ls' })).action, 'modify')
+})
+
+test("uninstalling while the load replaces a peer's thread archives the new one too", async (t) => {
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', hubs: { alice: 'old-hub' } }), {
+		peers: [{ name: 'alice', aliases: [] }],
+		labelled: { 'old-hub': ['cp-peer', 'cp-sealed', 'peer-alice', 'inbox-b'] },
+	})
+	await f.command('cp-uninstall', 'inbox')
+	await f.until(async () => f.created.length > 0)
+	const archived = (await f.ampCalls()).filter((c) => c[1] === 'archive').map((c) => c[2])
+	for (const { id } of f.created) assert.ok(archived.includes(id), `${id} was archived`)
 })
 
 test("asks are checked before anything goes out: who sent them, the peer's name, secrets, repeats, the title and an unknown outcome", async (t) => {
