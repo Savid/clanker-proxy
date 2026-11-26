@@ -179,6 +179,8 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	const deleted = new Set(gone)
 	// Threads whose labels fail once.
 	const flaky = new Set()
+	// Threads whose messages cannot be read, as while the orb is cut off from Amp.
+	const unread = new Set()
 	// Threads whose turn the plugin cancelled, and its keep-awake leases.
 	const cancelled = []
 	const leases = []
@@ -186,6 +188,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		id,
 		// As Amp reads them: the newest last, counted from the end.
 		messages: async ({ from = 'end', offset = 0, limit = 10, roles } = {}) => {
+			if (unread.has(id)) throw new Error('not connected')
 			const all = (history[id] ?? []).filter((m) => !roles || roles.includes(m.role))
 			const end = from === 'end' ? all.length - offset : offset + Math.min(limit, 20)
 			return all.slice(Math.max(0, from === 'end' ? end - Math.min(limit, 20) : offset), Math.max(0, end))
@@ -309,7 +312,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		},
 		messages, posted, logs, created, agents, tools, confirms, buttons, notices, cancelled, leases, handle, ui,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
-		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing, deleted, flaky,
+		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing, deleted, flaky, unread,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
 		// Threads cpd knows besides the subject, with their peers.
 		knows: (threads) => writeFile(join(dir, 'threads.json'), JSON.stringify(threads)),
@@ -1404,8 +1407,9 @@ test('an ask Amp hands the inbox while the orb resumes is sent once the plugin s
 	const arrives = (title) => history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date(Date.now()).toISOString(), asker, title, message: 'hi' })))
 	// The catch-up at load, which finds nothing.
 	await new Promise((resolve) => setTimeout(resolve, 200))
-	// Paused, the plugin neither ticks nor sees the ask that wakes the orb.
-	paused = 10 * 60 * 1000
+	// Paused, the plugin neither ticks nor sees the ask that wakes the orb;
+	// a short pause counts too.
+	paused = 30_000
 	arrives('Woke the orb')
 	await new Promise((resolve) => setTimeout(resolve, 200))
 	assert.equal((await f.sends()).length, 0)
@@ -1424,6 +1428,106 @@ test('an ask Amp hands the inbox while the orb resumes is sent once the plugin s
 	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Woke the orb', 'Missed otherwise'])
 	await new Promise((resolve) => setTimeout(resolve, 200))
 	assert.equal(told().length, 2, 'each asker told once')
+})
+
+test('after a resume the orb is kept awake until a catch-up reads the inbox, on a retry if Amp is not back, and for four minutes at most', async (t) => {
+	t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
+	const realNow = Date.now
+	let paused = 0
+	Date.now = () => realNow() + paused
+	t.after(() => { Date.now = realNow })
+	// The test's own waits, which the mocked setTimeout would stop.
+	const until = async (check) => {
+		for (let i = 0; i < 100_000 && !(await check()); i++) await new Promise((resolve) => setImmediate(resolve))
+	}
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
+	// The catch-up at load reads the inbox, and lets the orb go.
+	await until(async () => f.leases.length > 0 && f.leases.every((l) => l.ended))
+	assert.ok(f.leases.every((l) => l.ended))
+	const failures = () => f.logs.filter((l) => l[0] === 'cp-inbox: could not catch up on asks:').length
+	// Woken by an ask before Amp is back.
+	paused = 10 * 60 * 1000
+	f.unread.add('inbox')
+	history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date(Date.now()).toISOString(), asker, title: 'Woke the orb', message: 'hi' })))
+	const before = f.leases.length
+	t.mock.timers.tick(5_000)
+	await until(async () => failures() === 1)
+	assert.equal(failures(), 1)
+	assert.equal((await f.sends()).length, 0)
+	assert.equal(f.leases.length, before + 1)
+	const held = f.leases[before]
+	assert.equal(held.ended, false, 'kept awake while the inbox cannot be read')
+	// Back by the first retry, which sends it and lets the orb go.
+	f.unread.delete('inbox')
+	t.mock.timers.tick(30_000)
+	await until(async () => f.posted.some((p) => p.thread === asker) && f.leases.every((l) => l.ended))
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Woke the orb'])
+	assert.ok(f.leases.every((l) => l.ended))
+	// Never back, the orb is let go after four minutes anyway.
+	paused += 10 * 60 * 1000
+	f.unread.add('inbox')
+	const leases = f.leases.length
+	t.mock.timers.tick(5_000)
+	await until(async () => f.leases.length > leases && failures() === 2)
+	const stuck = f.leases[leases]
+	// Its last retry fails too, and the orb is still held.
+	const failed = failures()
+	t.mock.timers.tick(180_000)
+	await until(async () => failures() >= failed + 3)
+	assert.ok(failures() >= failed + 3)
+	assert.equal(stuck.ended, false)
+	t.mock.timers.tick(60_000)
+	await until(async () => stuck.ended)
+	assert.ok(stuck.ended)
+	assert.equal((await f.sends()).length, 1)
+})
+
+test('an ask whose claim cannot be written is settled once by this process, however often it catches up', async (t) => {
+	t.mock.timers.enable({ apis: ['setInterval'] })
+	const realNow = Date.now
+	let paused = 0
+	Date.now = () => realNow() + paused
+	t.after(() => { Date.now = realNow })
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'slow', aliases: [] }], history })
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	// A file where the claims go.
+	await rm(join(f.dir, 'cp-inbox', 'asks'), { recursive: true, force: true })
+	await writeFile(join(f.dir, 'cp-inbox', 'asks'), '')
+	// cpctl cannot say whether cpd has it, so it is never marked sent.
+	const message = ask('slow', { id: randomUUID(), at: new Date(Date.now()).toISOString(), asker, title: 'Once', message: 'hi' })
+	history.inbox.push(user(message))
+	assert.match((await f.start('inbox', message)).message.content, /cpctl did not say whether it was sent/)
+	paused = 10 * 60 * 1000
+	t.mock.timers.tick(5_000)
+	t.mock.timers.tick(10 * 60 * 1000)
+	await new Promise((resolve) => setTimeout(resolve, 500))
+	assert.equal((await f.sends()).length, 1)
+	assert.equal(f.posted.filter((p) => p.thread === asker).length, 1, 'the asker is told once')
+})
+
+test('after an uninstall in another of the orb\'s plugin processes, a catch-up here does nothing', async (t) => {
+	t.mock.timers.enable({ apis: ['setInterval'] })
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
+	await f.another()
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	await f.command('cp-uninstall', 'inbox')
+	assert.equal(f.confirms.at(-1).title, 'The inbox is uninstalled')
+	const told = f.posted.length
+	const created = f.created.length
+	history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker, title: 'After uninstall', message: 'hi' })))
+	// The other process's ten-minute catch-up.
+	t.mock.timers.tick(10 * 60 * 1000)
+	await new Promise((resolve) => setTimeout(resolve, 500))
+	assert.deepEqual({ sends: (await f.sends()).length, told: f.posted.slice(told), created: f.created.slice(created), state: await stat(f.stateFile).then(() => 'recreated', () => 'gone') }, { sends: 0, told: [], created: [], state: 'gone' })
 })
 
 test("a copy another thread wrote with a real ask's ID is refused, and the real ask still goes", async (t) => {
