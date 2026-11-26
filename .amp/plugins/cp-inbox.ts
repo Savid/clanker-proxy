@@ -9,8 +9,9 @@
 // comes back with it. cp_send lets a thread here open a cpd thread; its
 // answers go to a conversation too. Your other threads' asks for a peer come
 // to the inbox, which wakes for them, and the plugin sends them, or passes a
-// follow-up to its conversation, with no agent in between; one that woke the
-// orb before the plugin ran is sent when the plugin loads. A peer's thread
+// follow-up to its conversation, with no agent in between; one whose turn
+// ran without the plugin, as when it wakes the orb, is sent when the plugin
+// catches up. A peer's thread
 // only lists the peer and parents its conversations. Threads that ask watch
 // the cpd thread: they are told of each of the peer's moves, never the
 // peer's words. See docs/amp.md.
@@ -67,10 +68,22 @@ const conversationsPerPeer = 10
 const noticeGap = 10 * 60 * 1000
 const sweepEvery = 10 * 60 * 1000
 const sweepMax = 5
-// An ask that woke the orb before the plugin ran is sent when the plugin
-// loads, if it is this recent: an older one's thread has likely done
-// without it.
+// An ask whose turn ran without the plugin is sent by a catch-up if it is
+// this recent: an older one's thread has likely done without it.
 const catchUpWithin = 60 * 60 * 1000
+// After the plugin loads or the orb resumes, Amp may take a while to serve
+// the inbox's latest messages, so the catch-up runs at once and after each
+// of these, keeping the orb awake until a retry has read them, for at most
+// catchUpHold: the turn Amp ran without the plugin may be too short to.
+const catchUpAfter = [30_000, 90_000, 180_000]
+const catchUpHold = 4 * 60 * 1000
+// A pause stops this process's ticks but not the wall clock: a tick that
+// finds it more than resumeGap past its due time follows a pause.
+const resumeTick = 5_000
+const resumeGap = 10_000
+// Should Amp run the inbox's turn without the plugin otherwise, the ask
+// waits at most this long while the orb is awake.
+const catchUpEvery = 10 * 60 * 1000
 const keepEnded = 30 * day
 // An approval prompt must show the whole command.
 const maxApprovable = 2000
@@ -133,12 +146,13 @@ const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(not
 // An ask is claimed on disk before it is settled, by whichever of its own
 // turn and a catch-up, in any of the orb's plugin processes, gets there
 // first, and never settled again, even after a restart midway, when cpd may
-// have it already. Claims outlast the catch-up's window.
+// have it already. Claims outlast the catch-up's window, which an ask's
+// time from another orb's clock opens, by far more than clocks differ.
 const claimDir = join(stateDir, 'asks')
-const keepClaims = 2 * catchUpWithin
+const keepClaims = day
 // The plugin process this is. A thread the plugin starts runs on the client
 // running the plugin, not in an orb of its own: a message there never wakes
-// the orb, and once that client restarts (each time the orb wakes), or
+// the orb, and once that client restarts (as it may when the orb wakes), or
 // another client continues the thread, nothing with this plugin runs it,
 // and a message waits for ever. The plugin cannot see which client runs a
 // thread, but a restarted client means a new plugin process: each process
@@ -245,8 +259,10 @@ export default async function (amp: PluginAPI) {
 	// settle passes an ask on, or tells the thread that asked why not, and
 	// returns the note saying which. In this process, every caller of one ask
 	// gets the note of its one settling; in another, or after a restart, its
-	// claim leaves it be.
+	// claim leaves it be. Catch-ups skip what this process settled, even
+	// when its claim could not be written.
 	const settling = new Map<string, Promise<string>>()
+	const settledHere = new Set<string>()
 	const settle = (ctx: Context, ask: Ask, labels: string[]): Promise<string> => {
 		const key = askKey(ask)
 		if (!key) return settleOnce(ctx, ask, labels)
@@ -255,7 +271,14 @@ export default async function (amp: PluginAPI) {
 		const settled = claim(key)
 			.catch(() => true)
 			.then((first) => (first ? settleOnce(ctx, ask, labels) : 'cp-inbox had already handled this ask.'))
-			.finally(() => settling.delete(key))
+			.finally(() => {
+				settling.delete(key)
+				settledHere.add(key)
+				for (const old of settledHere) {
+					if (settledHere.size <= 1000) break
+					settledHere.delete(old)
+				}
+			})
 		settling.set(key, settled)
 		return settled
 	}
@@ -1649,11 +1672,15 @@ export default async function (amp: PluginAPI) {
 		return found
 	}
 
-	// Amp can start the inbox's turn for an ask that woke the orb before the
-	// plugin runs: the inbox's agent gets it, and no note follows. Each such
-	// ask from the last hour that nothing has claimed is settled now.
+	// Amp starts the inbox's turn for an ask without the plugin while the
+	// orb's connection to Amp is down: before the plugin loads, and after a
+	// pause, which resumes the plugin rather than loading it again, until Amp
+	// reconnects. The inbox's agent gets the ask, and no note follows. Each
+	// such ask from the last hour that nothing has claimed is settled here.
 	const catchUp = async (ctx: Context, id: ThreadID) => {
-		if (uninstalled) return
+		// Uninstalling in another of the orb's plugin processes leaves only
+		// the tombstone.
+		if (uninstalled || (await lstat(tombstone).then(() => true, () => false))) return
 		await pruneClaims()
 		const missed: Ask[] = []
 		for (const m of await recentMessages(id)) {
@@ -1663,7 +1690,7 @@ export default async function (amp: PluginAPI) {
 			// All of it, so Amp's mark on a message another thread sent is read.
 			const ask = parseAsk(texts.join('\n\n'))
 			const key = ask && askKey(ask)
-			if (!ask || !key || ask.at === undefined || state.seen.includes(`ask:${ask.id}`) || (await claimed(key))) continue
+			if (!ask || !key || ask.at === undefined || settledHere.has(key) || state.seen.includes(`ask:${ask.id}`) || (await claimed(key))) continue
 			const age = Date.now() - ask.at
 			if (age > -tolerance && age < catchUpWithin) missed.push(ask)
 		}
@@ -1677,6 +1704,47 @@ export default async function (amp: PluginAPI) {
 			lease?.unsubscribe()
 		}
 	}
+	// Catch-ups run unserialized, so one stuck on a read while the orb is cut
+	// off holds up none after it; claims keep any two, here or in another of
+	// the orb's plugin processes, from settling an ask twice. Each says
+	// whether it read the inbox.
+	const catchUpNow = async (): Promise<boolean> => {
+		const id = state.inbox
+		if (!id) return true
+		const ctx: Context = { thread: amp.threads.get(id), logger: amp.logger, ui: amp.ui }
+		return catchUp(ctx, id).then(
+			() => true,
+			(err) => {
+				amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err)
+				return false
+			},
+		)
+	}
+	// A read at once may succeed without the latest messages, so only a
+	// retry's lets the orb go. The lease may come only once Amp is back, so
+	// nothing waits for it.
+	const catchUpSoon = () => {
+		if (!state.inbox) return
+		const lease = Promise.resolve()
+			.then(() => amp.system.executor.keepAlive())
+			.catch(() => undefined)
+		let held = true
+		const release = () => {
+			if (held) void lease.then((l) => l?.unsubscribe())
+			held = false
+		}
+		setTimeout(release, catchUpHold).unref()
+		void catchUpNow()
+		for (const after of catchUpAfter) setTimeout(() => void catchUpNow().then((read) => read && release()), after).unref()
+	}
+	catchUpSoon()
+	let ticked = Date.now()
+	setInterval(() => {
+		const now = Date.now()
+		if (now - ticked > resumeTick + resumeGap) catchUpSoon()
+		ticked = now
+	}, resumeTick).unref()
+	setInterval(() => void catchUpNow(), catchUpEvery).unref()
 
 	// Loaded in the inbox's orb, after an update or a restart: each peer
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
@@ -1687,13 +1755,6 @@ export default async function (amp: PluginAPI) {
 	// only retired.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
-		const id = state.inbox
-		// Amp may serve the inbox's messages only once the orb has the thread,
-		// just after the plugin loads, so the catch-up runs again shortly;
-		// claims keep the two from settling an ask twice.
-		const catchUpNow = () => catchUp(ctx, id).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err))
-		void catchUpNow()
-		setTimeout(() => void catchUpNow(), 30_000).unref()
 		void serial(async () => {
 			const peers = await readPeers()
 			for (const peer of peers?.keys() ?? []) {
