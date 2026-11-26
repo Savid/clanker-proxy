@@ -1390,6 +1390,41 @@ test('an ask its turn and the catch-up both have is settled once, sent or refuse
 	assert.equal(f.posted.length, told)
 })
 
+test('an ask Amp hands the inbox while the orb resumes is sent once the plugin sees the pause, and any other within ten minutes', async (t) => {
+	// The plugin's own ticks, and a wall clock that a pause moves on.
+	t.mock.timers.enable({ apis: ['setInterval'] })
+	const realNow = Date.now
+	let paused = 0
+	Date.now = () => realNow() + paused
+	t.after(() => { Date.now = realNow })
+	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
+	const arrives = (title) => history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date(Date.now()).toISOString(), asker, title, message: 'hi' })))
+	// The catch-up at load, which finds nothing.
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	// Paused, the plugin neither ticks nor sees the ask that wakes the orb.
+	paused = 10 * 60 * 1000
+	arrives('Woke the orb')
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal((await f.sends()).length, 0)
+	t.mock.timers.tick(5_000)
+	await f.until(async () => (await f.sends()).length > 0)
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Woke the orb'])
+	assert.match(f.posted.find((p) => p.thread === asker).content, new RegExp(`^clanker-proxy: sent to alice as cpd thread ${sent}\\.`))
+	// Awake, ticks without a pause read nothing, until the fallback.
+	arrives('Missed otherwise')
+	t.mock.timers.tick(5_000)
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal((await f.sends()).length, 1)
+	t.mock.timers.tick(10 * 60 * 1000)
+	await f.until(async () => (await f.sends()).length > 1)
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Woke the orb', 'Missed otherwise'])
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.equal(f.posted.filter((p) => p.thread === asker).length, 2, 'each asker told once')
+})
+
 test("a copy another thread wrote with a real ask's ID is refused, and the real ask still goes", async (t) => {
 	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
 	const forger = 'T-00000000-0000-4000-8000-0000000000a2'

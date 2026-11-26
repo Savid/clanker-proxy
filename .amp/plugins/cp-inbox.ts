@@ -68,9 +68,17 @@ const noticeGap = 10 * 60 * 1000
 const sweepEvery = 10 * 60 * 1000
 const sweepMax = 5
 // An ask that woke the orb before the plugin ran is sent when the plugin
-// loads, if it is this recent: an older one's thread has likely done
+// catches up, if it is this recent: an older one's thread has likely done
 // without it.
 const catchUpWithin = 60 * 60 * 1000
+// After the plugin loads or the orb resumes, Amp may take a while to serve
+// the inbox's messages, so the catch-up runs at once and after each of these.
+const catchUpAfter = [30_000, 90_000, 180_000]
+// A pause stops this process but not the wall clock, which has moved this
+// much further than the plugin's own ticks by the first one after it.
+const resumeGap = 60_000
+const resumeTick = 5_000
+const catchUpEvery = 10 * 60 * 1000
 const keepEnded = 30 * day
 // An approval prompt must show the whole command.
 const maxApprovable = 2000
@@ -1649,9 +1657,11 @@ export default async function (amp: PluginAPI) {
 		return found
 	}
 
-	// Amp can start the inbox's turn for an ask that woke the orb before the
-	// plugin runs: the inbox's agent gets it, and no note follows. Each such
-	// ask from the last hour that nothing has claimed is settled now.
+	// Amp starts the inbox's turn for an ask without the plugin while the
+	// orb's connection to Amp is down: before the plugin loads, and after a
+	// pause, which resumes the plugin rather than loading it again, until Amp
+	// reconnects. The inbox's agent gets the ask, and no note follows. Each
+	// such ask from the last hour that nothing has claimed is settled here.
 	const catchUp = async (ctx: Context, id: ThreadID) => {
 		if (uninstalled) return
 		await pruneClaims()
@@ -1677,6 +1687,29 @@ export default async function (amp: PluginAPI) {
 			lease?.unsubscribe()
 		}
 	}
+	// Claims keep any two catch-ups, here or in another of the orb's plugin
+	// processes, from settling an ask twice, so one stuck on a read while the
+	// orb is cut off holds up none after it.
+	const catchUpNow = () => {
+		const id = state.inbox
+		if (!id) return
+		const ctx: Context = { thread: amp.threads.get(id), logger: amp.logger, ui: amp.ui }
+		void catchUp(ctx, id).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err))
+	}
+	const catchUpSoon = () => {
+		catchUpNow()
+		for (const after of catchUpAfter) setTimeout(catchUpNow, after).unref()
+	}
+	catchUpSoon()
+	let ticked = Date.now()
+	setInterval(() => {
+		const now = Date.now()
+		if (now - ticked > resumeTick + resumeGap) catchUpSoon()
+		ticked = now
+	}, resumeTick).unref()
+	// Should Amp start the inbox's turn without the plugin otherwise, the ask
+	// waits at most this long while the orb is awake.
+	setInterval(catchUpNow, catchUpEvery).unref()
 
 	// Loaded in the inbox's orb, after an update or a restart: each peer
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
@@ -1687,13 +1720,6 @@ export default async function (amp: PluginAPI) {
 	// only retired.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
-		const id = state.inbox
-		// Amp may serve the inbox's messages only once the orb has the thread,
-		// just after the plugin loads, so the catch-up runs again shortly;
-		// claims keep the two from settling an ask twice.
-		const catchUpNow = () => catchUp(ctx, id).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err))
-		void catchUpNow()
-		setTimeout(() => void catchUpNow(), 30_000).unref()
 		void serial(async () => {
 			const peers = await readPeers()
 			for (const peer of peers?.keys() ?? []) {
