@@ -265,6 +265,8 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 	const plugin = await import(`./plugins/cp-inbox.ts?fixture=${randomUUID()}`)
 	await plugin.default(amp)
 	assert.equal(typeof handler, 'function')
+	// Taken at load: in an inbox, the catch-up's, held until its first retry.
+	const loadLeases = leases.length
 	// Another thread's plugin instance, sharing the orb's state file.
 	const another = async () => {
 		const own = {}
@@ -310,7 +312,7 @@ if (args[0] === 'clone' && args[1] === 'user-plugins') {
 		until: async (check) => {
 			for (let i = 0; i < 250 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 20))
 		},
-		messages, posted, logs, created, agents, tools, confirms, buttons, notices, cancelled, leases, handle, ui,
+		messages, posted, logs, created, agents, tools, confirms, buttons, notices, cancelled, leases, loadLeases, handle, ui,
 		open: (thread) => sessionStart({ thread: { id: thread } }),
 		command: (id, thread) => commands[id]({ ui, thread: thread && handle(thread) }), another, ampCalls, labels, failing, deleted, flaky, unread,
 		searches: (found) => writeFile(join(dir, 'search.json'), JSON.stringify(found)),
@@ -1315,7 +1317,8 @@ test("asks are checked before anything goes out: who sent them, the peer's name,
 	// One ask, handled twice, is sent once.
 	assert.deepEqual(await f.start('inbox', ask('alice', { id: 'a1b2c3d4e5', asker, title: 'one\ttwo\u200b  three', message: 'hi' })), note(`sent this to alice as cpd thread ${sent}`))
 	assert.equal((await f.lastSent()).args.at(-1), 'one two three', 'a title cpd takes')
-	assert.ok(f.leases.length >= 1 && f.leases.every((l) => l.ended), 'the orb is kept up while it sends, and let go')
+	const sending = f.leases.slice(f.loadLeases)
+	assert.ok(sending.length >= 1 && sending.every((l) => l.ended), 'the orb is kept up while it sends, and let go')
 	const sent1 = (await f.ampCalls()).length
 	assert.deepEqual(await f.start('inbox', ask('alice', { id: 'a1b2c3d4e5', asker, message: 'hi' })), note('had already handled this ask'))
 	assert.equal((await f.ampCalls()).length, sent1)
@@ -1345,7 +1348,9 @@ test('an ask that woke the orb before the plugin ran is sent when it loads, once
 		user('How many conversations are open?'),
 	] }
 	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox', seen: [`ask:${settled}`] }), { peers: [{ name: 'alice', aliases: [] }], history })
-	await f.until(async () => f.posted.some((p) => p.thread === asker(6)) && f.leases.length > 0 && f.leases.every((l) => l.ended))
+	const sending = () => f.leases.slice(f.loadLeases)
+	await f.until(async () => f.posted.some((p) => p.thread === asker(6)) && sending().length > 0 && sending().every((l) => l.ended))
+	assert.ok(sending().every((l) => l.ended))
 	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Missed'])
 	assert.match(f.posted.find((p) => p.thread === asker(1)).content, new RegExp(`^clanker-proxy: sent to alice as cpd thread ${sent}\\.`))
 	assert.equal(f.posted.find((p) => p.thread === asker(6)).content, 'clanker-proxy: your message for alice was not sent: asks come only from ask_peer.')
@@ -1430,7 +1435,7 @@ test('an ask Amp hands the inbox while the orb resumes is sent once the plugin s
 	assert.equal(told().length, 2, 'each asker told once')
 })
 
-test('after a resume the orb is kept awake until a catch-up reads the inbox, on a retry if Amp is not back, and for four minutes at most', async (t) => {
+test('after a load or a resume the orb is kept awake until a retry reads the inbox, and for four minutes at most', async (t) => {
 	t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
 	const realNow = Date.now
 	let paused = 0
@@ -1443,46 +1448,64 @@ test('after a resume the orb is kept awake until a catch-up reads the inbox, on 
 	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
 	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
 	const history = { inbox: [] }
-	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
-	// The catch-up at load reads the inbox, and lets the orb go.
-	await until(async () => f.leases.length > 0 && f.leases.every((l) => l.ended))
-	assert.ok(f.leases.every((l) => l.ended))
+	const arrives = (title) => history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date(Date.now()).toISOString(), asker, title, message: 'hi' })))
+	const sent = async () => (await f.sends()).map((args) => args.at(-1))
 	const failures = () => f.logs.filter((l) => l[0] === 'cp-inbox: could not catch up on asks:').length
-	// Woken by an ask before Amp is back.
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
+	// At load, the read at once does not let the orb go; the first retry's does.
+	assert.equal(f.loadLeases, 1)
+	const atLoad = f.leases[0]
+	await new Promise((resolve) => setImmediate(resolve))
+	assert.equal(atLoad.ended, false)
+	t.mock.timers.tick(30_000)
+	await until(async () => atLoad.ended)
+	assert.ok(atLoad.ended)
+	// Resumed, the read at once succeeds without the ask that woke the orb,
+	// which Amp serves only later: the orb is held until the retry sends it.
 	paused = 10 * 60 * 1000
-	f.unread.add('inbox')
-	history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date(Date.now()).toISOString(), asker, title: 'Woke the orb', message: 'hi' })))
-	const before = f.leases.length
+	let before = f.leases.length
 	t.mock.timers.tick(5_000)
-	await until(async () => failures() === 1)
-	assert.equal(failures(), 1)
-	assert.equal((await f.sends()).length, 0)
-	assert.equal(f.leases.length, before + 1)
-	const held = f.leases[before]
-	assert.equal(held.ended, false, 'kept awake while the inbox cannot be read')
-	// Back by the first retry, which sends it and lets the orb go.
+	await until(async () => f.leases.length > before)
+	const stale = f.leases[before]
+	// Its read at once is done before the ask shows.
+	for (let i = 0; i < 500; i++) await new Promise((resolve) => setImmediate(resolve))
+	arrives('Woke the orb')
+	assert.equal(stale.ended, false)
+	t.mock.timers.tick(30_000)
+	await until(async () => f.posted.some((p) => p.thread === asker) && stale.ended)
+	assert.deepEqual(await sent(), ['Woke the orb'])
+	assert.ok(stale.ended)
+	// Woken again before Amp is back: the read at once fails, and the orb is
+	// held until a retry reads the inbox.
+	paused += 10 * 60 * 1000
+	f.unread.add('inbox')
+	arrives('Before Amp is back')
+	before = f.leases.length
+	const failed = failures()
+	t.mock.timers.tick(5_000)
+	await until(async () => f.leases.length > before && failures() > failed)
+	const cutOff = f.leases[before]
+	assert.equal(cutOff.ended, false)
+	assert.deepEqual(await sent(), ['Woke the orb'])
 	f.unread.delete('inbox')
 	t.mock.timers.tick(30_000)
-	await until(async () => f.posted.some((p) => p.thread === asker) && f.leases.every((l) => l.ended))
-	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Woke the orb'])
-	assert.ok(f.leases.every((l) => l.ended))
+	await until(async () => (await sent()).length > 1 && cutOff.ended)
+	assert.deepEqual(await sent(), ['Woke the orb', 'Before Amp is back'])
+	assert.ok(cutOff.ended)
 	// Never back, the orb is let go after four minutes anyway.
 	paused += 10 * 60 * 1000
 	f.unread.add('inbox')
-	const leases = f.leases.length
+	before = f.leases.length
 	t.mock.timers.tick(5_000)
-	await until(async () => f.leases.length > leases && failures() === 2)
-	const stuck = f.leases[leases]
-	// Its last retry fails too, and the orb is still held.
-	const failed = failures()
+	await until(async () => f.leases.length > before)
+	const stuck = f.leases[before]
 	t.mock.timers.tick(180_000)
-	await until(async () => failures() >= failed + 3)
-	assert.ok(failures() >= failed + 3)
-	assert.equal(stuck.ended, false)
+	await until(async () => failures() > failed + 3)
+	assert.equal(stuck.ended, false, 'held past the last retry, which failed')
 	t.mock.timers.tick(60_000)
 	await until(async () => stuck.ended)
 	assert.ok(stuck.ended)
-	assert.equal((await f.sends()).length, 1)
+	assert.equal((await f.sends()).length, 2)
 })
 
 test('an ask whose claim cannot be written is settled once by this process, however often it catches up', async (t) => {

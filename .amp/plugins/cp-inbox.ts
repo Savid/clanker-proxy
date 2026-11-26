@@ -72,8 +72,8 @@ const sweepMax = 5
 // this recent: an older one's thread has likely done without it.
 const catchUpWithin = 60 * 60 * 1000
 // After the plugin loads or the orb resumes, Amp may take a while to serve
-// the inbox's messages, so the catch-up runs at once and after each of
-// these, keeping the orb awake until one has read them, for at most
+// the inbox's latest messages, so the catch-up runs at once and after each
+// of these, keeping the orb awake until a retry has read them, for at most
 // catchUpHold: the turn Amp ran without the plugin may be too short to.
 const catchUpAfter = [30_000, 90_000, 180_000]
 const catchUpHold = 4 * 60 * 1000
@@ -1720,7 +1720,9 @@ export default async function (amp: PluginAPI) {
 			},
 		)
 	}
-	// The lease may come only once Amp is back, so nothing waits for it.
+	// A read at once may succeed without the latest messages, so only a
+	// retry's lets the orb go. The lease may come only once Amp is back, so
+	// nothing waits for it.
 	const catchUpSoon = () => {
 		if (!state.inbox) return
 		const lease = Promise.resolve()
@@ -1732,9 +1734,8 @@ export default async function (amp: PluginAPI) {
 			held = false
 		}
 		setTimeout(release, catchUpHold).unref()
-		const run = () => void catchUpNow().then((read) => read && release())
-		run()
-		for (const after of catchUpAfter) setTimeout(run, after).unref()
+		void catchUpNow()
+		for (const after of catchUpAfter) setTimeout(() => void catchUpNow().then((read) => read && release()), after).unref()
 	}
 	catchUpSoon()
 	let ticked = Date.now()
