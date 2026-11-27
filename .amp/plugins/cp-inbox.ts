@@ -227,6 +227,7 @@ type Outcome = { done: string } | { why: string; maybe?: boolean }
 interface Sending {
 	record?: string
 	gone?: string
+	subject?: string
 }
 
 // What the plugin uses of a handler's or a tool's context.
@@ -1600,7 +1601,10 @@ export default async function (amp: PluginAPI) {
 			}
 			const why = err instanceof Error ? err.message : String(err)
 			amp.logger.log(`cp-inbox: an ask for ${ask.peer} went, but the inbox could not finish with it: ${why}`)
-			if (ask.asker && (await mayWatch(ask.asker).catch(() => false))) await tell(ask.asker, `clanker-proxy: your ask ${sending.gone}.`)
+			const watching = !!ask.asker && !!sending.subject && (await watch(ask.asker, sending.subject).catch(() => false))
+			if (ask.asker && (watching || (await mayWatch(ask.asker).catch(() => false)))) {
+				await tell(ask.asker, `clanker-proxy: your ask ${sending.gone}.${watching ? ` You're watching it: you'll be told of each of ${ask.peer}'s moves, never their words.` : ''}`)
+			}
 			return { done: `found this ${sending.gone}, though the inbox could not finish with it: ${why}` }
 		}
 	}
@@ -1634,6 +1638,7 @@ export default async function (amp: PluginAPI) {
 		// Recorded as soon as it went, before anything after can fail.
 		const went = async (where: string, subject: string, followUp: boolean) => {
 			sending.gone = where
+			sending.subject = subject
 			if (sending.record) await wentNow(sending.record, { at: Date.now(), went: where, subject, followUp }).catch((err) => amp.logger.log('cp-inbox: could not record an ask that went:', err instanceof Error ? err.message : err))
 		}
 		let outcome: Outcome
