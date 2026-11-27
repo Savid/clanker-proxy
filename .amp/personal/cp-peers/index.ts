@@ -142,8 +142,11 @@ export default async function (amp: PluginAPI) {
 	guardInbox(amp)
 	const known = await peers().catch(() => [])
 	if (!known.length) return
-	const inboxes = await withLabels(amp, 'cp-inbox').catch(() => [] as string[])
-	const repeats = inboxes.length > 0 && (await withLabels(amp, 'cp-inbox', repeatsLabel).catch(() => [] as string[])).length === inboxes.length
+	// Every inbox found counts, whether or not its labels can be read.
+	const inboxes = await search('label:cp-inbox archived:false')
+		.then((found) => found.filter((t: any) => typeof t?.id === 'string' && ampThread.test(t.id)).length)
+		.catch(() => 0)
+	const repeats = inboxes > 0 && (await withLabels(amp, 'cp-inbox', repeatsLabel).catch(() => [] as string[])).length === inboxes
 	const again = repeats
 		? ' If a call errors, or this thread lost its result, call it again with exactly the same arguments: the inbox does not send an ask again within an hour of the same one from this thread, and tells this thread where that one went. Once a call has returned, do as its result says.'
 		: ''

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -68,7 +68,8 @@ async function fixture(t, base, seed = (state) => state, { peers = [], waiting =
 			if (value === undefined) delete process.env[name]
 			else process.env[name] = value
 		}
-		await rm(dir, { recursive: true, force: true })
+		// Other plugin processes may still be saving.
+		await rm(dir, { recursive: true, force: true, maxRetries: 5 })
 	})
 	await mkdir(join(dir, 'cp-inbox'))
 	await mkdir(checkout, { recursive: true })
@@ -1669,7 +1670,8 @@ test('an ask that went is a repeat even when what follows the send fails', async
 	await writeFile(join(f.dir, 'lock-once'), '')
 	t.after(() => chmod(dir, 0o700).catch(() => undefined))
 	const lunch = () => ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, title: 'Lunch', message: 'Lunch on Friday?' })
-	await f.start('inbox', lunch())
+	assert.match((await f.start('inbox', lunch())).message.content, new RegExp(`^cp-inbox found this went to alice as cpd thread ${sent}, though the inbox could not finish with it: `))
+	assert.equal(f.posted.filter((p) => p.thread === me).at(-1).content, `clanker-proxy: your ask went to alice as cpd thread ${sent}.`)
 	await chmod(dir, 0o700)
 	assert.deepEqual(await f.start('inbox', lunch()), note(`did not send this: the same ask from the thread that asked went to alice as cpd thread ${sent}`))
 	assert.equal((await f.sends()).length, 1)
@@ -1685,6 +1687,70 @@ test('in an inbox a new orb knows only by its label, a turn is followed by a cat
 	await f.start('inbox', 'How are the threads going?')
 	await f.until(async () => (await f.sends()).length > 0)
 	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Folded'])
+})
+
+test("which of the peer's moves make the same words a new ask: a follow-up's by what the peer says, a new thread's by its end", async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d5'
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }] })
+	const lunch = () => ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, title: 'Lunch', message: 'Lunch on Friday?' })
+	const repeat = note(`did not send this: the same ask from the thread that asked went to alice as cpd thread ${sent}`)
+	assert.deepEqual(await f.start('inbox', lunch()), note(`sent this to alice as cpd thread ${sent}`))
+	// The fake cpd knows nothing more of the thread, so handling each event
+	// fails after its move is marked.
+	const moves = (type, state) => f.deliver(f.event(type, state, false, sent)).catch(() => undefined)
+	// Alice's agent acks it and answers: a retry that lost its result is still a repeat.
+	await moves('thread.ack', 'acked')
+	assert.deepEqual(await f.start('inbox', lunch()), repeat)
+	await moves('thread.resolve', 'resolved')
+	assert.deepEqual(await f.start('inbox', lunch()), repeat)
+	// Ended, the same words open a new thread.
+	await moves('thread.decline', 'declined')
+	assert.deepEqual(await f.start('inbox', lunch()), note(`sent this to alice as cpd thread ${sent}`))
+	assert.equal((await f.sends()).length, 2)
+	// A follow-up is new again once alice says something, not for her ack.
+	await f.respond({ state: 'needs-input' })
+	const follow = () => f.start('inbox', ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, thread: subject, message: 'Friday works.' }))
+	const followed = note(`passed this follow-up to the conversation handling ${subject}`)
+	assert.deepEqual(await follow(), followed)
+	await f.deliver(f.event('thread.ack', 'acked', false)).catch(() => undefined)
+	assert.deepEqual(await follow(), note(`did not send this: the same ask from the thread that asked was passed to the conversation handling ${subject}`))
+	await f.deliver(f.event('thread.reply', 'needs-input', true)).catch(() => undefined)
+	assert.deepEqual(await follow(), followed)
+})
+
+test('two asks with the same words that find an old record take the next one: one goes', async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d6'
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }] })
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	const dir = join(f.dir, 'cp-inbox', 'repeats')
+	await mkdir(dir, { recursive: true })
+	const hourAgo = Date.now() - 61 * 60 * 1000
+	const dinner = (i) => ask('alice', { id: randomUUID(), asker: me, title: 'Dinner', message: `Dinner ${i}?` })
+	const added = []
+	for (let i = 0; i < 30; i++) {
+		const key = createHash('sha256').update(JSON.stringify([me, 'alice', '', 'Dinner', `Dinner ${i}?`])).digest('hex')
+		const file = join(dir, `${key}.0`)
+		await writeFile(file, JSON.stringify({ at: hourAgo, went: `went to alice as cpd thread ${sent}`, subject: sent, followUp: false }))
+		await utimes(file, hourAgo / 1000, hourAgo / 1000)
+		const before = (await f.sends()).length
+		await Promise.all([0, 1, 2].map((n) => new Promise((resolve) => setTimeout(resolve, (i + n) % 3)).then(() => f.start('inbox', dinner(i)))))
+		added.push((await f.sends()).length - before)
+	}
+	assert.deepEqual(added, Array(30).fill(1))
+})
+
+test("a record that cannot be read counts as an ask that may have gone, and only the process running the inbox's hooks says asks go once", async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d7'
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }] })
+	await f.another()
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.ok(!(f.labels.inbox ?? []).includes('cp-inbox-2'), 'not by loading')
+	const key = createHash('sha256').update(JSON.stringify([me, 'alice', '', 'Lunch', 'Lunch on Friday?'])).digest('hex')
+	await mkdir(join(f.dir, 'cp-inbox', 'repeats'), { recursive: true })
+	await writeFile(join(f.dir, 'cp-inbox', 'repeats', `${key}.0`), '{"at":')
+	assert.deepEqual(await f.start('inbox', ask('alice', { id: randomUUID(), asker: me, title: 'Lunch', message: 'Lunch on Friday?' })), note('did not send this: the same ask from the thread that asked may have gone to alice'))
+	assert.equal((await f.sends()).length, 0)
+	assert.ok(f.labels.inbox.includes('cp-inbox-2'), "by the inbox's hook")
 })
 
 test("a copy another thread wrote with a real ask's ID is refused, and the real ask still goes", async (t) => {
