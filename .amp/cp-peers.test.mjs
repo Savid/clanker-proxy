@@ -80,6 +80,8 @@ test("ask_peer knows your peers by name and alias, and brings the ask to their i
 		...keyed,
 	}, {}, inboxLabels)
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
+	// The inbox sends the same ask from a thread once an hour at most, so a call that may have failed is asked again.
+	assert.match(f.tools.ask_peer.description, /If a call fails, or you cannot tell whether it went, call it again with the same peer, title, thread and message/)
 	assert.equal(
 		await f.ask({ peer: 'ally', message: 'Up for a beer?\nFriday?' }),
 		"Passed to your clanker-proxy inbox, whose plugin sends it to alice and tells this thread its cpd thread ID. If the inbox was asleep, that can take a few minutes. Never send it again unless the owner says to: if nothing comes, tell the owner. This thread is told of each of alice's moves, with a short form; never look for their words.",

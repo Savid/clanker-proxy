@@ -143,7 +143,7 @@ export default async function (amp: PluginAPI) {
 	amp.registerTool({
 		name: 'ask_peer',
 		title: 'Ask a clanker-proxy peer',
-		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through your clanker-proxy inbox, which sends it as written, so give only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00".`,
+		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through your clanker-proxy inbox, which sends it as written, so give only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00". If a call fails, or you cannot tell whether it went, call it again with the same peer, title, thread and message: the inbox sends the same ask from this thread once an hour at most, and tells this thread where the first went.`,
 		inputSchema: {
 			type: 'object',
 			properties: {

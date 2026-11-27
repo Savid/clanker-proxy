@@ -17,7 +17,7 @@
 // peer's words. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -150,6 +150,12 @@ const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(not
 // time from another orb's clock opens, by far more than clocks differ.
 const claimDir = join(stateDir, 'asks')
 const keepClaims = day
+// An ask with the words of one that went, from the same thread to the same
+// peer and cpd thread, within this long of it, is not sent again: a thread
+// that cannot tell whether its ask reached the inbox asks again. The thread
+// hears where the first went.
+const repeatWithin = 60 * 60 * 1000
+const repeatDir = join(stateDir, 'repeats')
 // The plugin process this is. A thread the plugin starts runs on the client
 // running the plugin, not in an orb of its own: a message there never wakes
 // the orb, and once that client restarts (as it may when the orb wakes), or
@@ -207,7 +213,8 @@ interface State {
 
 // What became of an ask: done says what the plugin did, why what stopped it,
 // and maybe that cpd may have it all the same.
-type Outcome = { done: string } | { why: string; maybe?: boolean }
+// went says where an ask went, for its repeats.
+type Outcome = { done: string; went?: string } | { why: string; maybe?: boolean }
 
 // What the plugin uses of a handler's or a tool's context.
 type Context = Pick<WebhookHandlerContext, 'thread' | 'logger' | 'ui'>
@@ -251,6 +258,9 @@ export default async function (amp: PluginAPI) {
 	}
 	let watchStart: ((event: { thread: { id: ThreadID }; message: string }) => Promise<void>) | undefined
 	let stale = async (_ask: Ask) => {}
+	// Amp folds asks that come together into one turn, whose hook sees only
+	// the last, so each turn in the inbox is followed by a catch-up.
+	let afterTurn = (_id: ThreadID) => {}
 	let notRunning = 'cp-inbox is starting'
 	let loaded!: () => void
 	const ready = new Promise<void>((resolve) => {
@@ -297,53 +307,57 @@ export default async function (amp: PluginAPI) {
 		return `cp-inbox did not pass this on (${outcome.why})${told ? ' and told the thread that asked' : ''}.`
 	}
 	amp.on('agent.start', async (event, ctx) => {
-		const ask = parseAsk(event.message)
-		const cancel = () =>
-			Promise.resolve()
-				.then(() => ctx.thread.cancel())
-				.catch(() => undefined)
-		const done = (note: string) => ({ message: { content: `${note}${noteEnd}` } })
-		if (!ask) {
+		try {
+			const ask = parseAsk(event.message)
+			const cancel = () =>
+				Promise.resolve()
+					.then(() => ctx.thread.cancel())
+					.catch(() => undefined)
+			const done = (note: string) => ({ message: { content: `${note}${noteEnd}` } })
+			if (!ask) {
+				const labels = await amp.threads
+					.get(event.thread.id)
+					.labels()
+					.catch(() => undefined)
+				// A peer's thread runs only its briefing: asks go to the inbox.
+				if (labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed') && !event.message.startsWith(hubBriefingStart)) {
+					await cancel()
+					return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
+				}
+				// The inbox runs only what you type in it: another thread's message
+				// there would reach an agent with every tool and the token.
+				if (labels?.includes('cp-inbox') && sentBy.test(event.message)) {
+					sentBy.lastIndex = 0
+					await cancel()
+					return done("cp-inbox: the inbox runs no other thread's messages; ask peers with ask_peer.")
+				}
+				sentBy.lastIndex = 0
+				await watchStart?.(event).catch(() => undefined)
+				return {}
+			}
+			await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000).unref())])
 			const labels = await amp.threads
 				.get(event.thread.id)
 				.labels()
 				.catch(() => undefined)
-			// A peer's thread runs only its briefing: asks go to the inbox.
-			if (labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed') && !event.message.startsWith(hubBriefingStart)) {
+			if (await sealed(event.thread.id, labels).catch(() => false)) {
+				if (!labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed')) return {}
 				await cancel()
 				return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
 			}
-			// The inbox runs only what you type in it: another thread's message
-			// there would reach an agent with every tool and the token.
-			if (labels?.includes('cp-inbox') && sentBy.test(event.message)) {
-				sentBy.lastIndex = 0
-				await cancel()
-				return done("cp-inbox: the inbox runs no other thread's messages; ask peers with ask_peer.")
-			}
-			sentBy.lastIndex = 0
-			await watchStart?.(event).catch(() => undefined)
-			return {}
-		}
-		await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000).unref())])
-		const labels = await amp.threads
-			.get(event.thread.id)
-			.labels()
-			.catch(() => undefined)
-		if (await sealed(event.thread.id, labels).catch(() => false)) {
-			if (!labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed')) return {}
 			await cancel()
-			return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
-		}
-		await cancel()
-		// The inbox's own turn is cancelled, so nothing else keeps the orb up
-		// while the plugin sends.
-		const lease = await Promise.resolve()
-			.then(() => amp.system.executor.keepAlive())
-			.catch(() => undefined)
-		try {
-			return done(await settle(ctx, ask, labels ?? []))
+			// The inbox's own turn is cancelled, so nothing else keeps the orb up
+			// while the plugin sends.
+			const lease = await Promise.resolve()
+				.then(() => amp.system.executor.keepAlive())
+				.catch(() => undefined)
+			try {
+				return done(await settle(ctx, ask, labels ?? []))
+			} finally {
+				lease?.unsubscribe()
+			}
 		} finally {
-			lease?.unsubscribe()
+			afterTurn(event.thread.id)
 		}
 	})
 
@@ -1558,6 +1572,33 @@ export default async function (amp: PluginAPI) {
 		// The name as the asker gave it, maybe an alias, must be that peer.
 		const named = peers.has(ask.named) ? ask.named : [...peers].find(([, aliases]) => aliases.includes(ask.named))?.[0]
 		if (named !== ask.peer) return { why: `${ask.named} does not name ${ask.peer}` }
+		const key = repeatKey(ask)
+		if (!key) return sendOn(ctx, ask)
+		// Asks with the same words go one at a time, so a repeat finds where
+		// the first went.
+		const passed = (repeating.get(key) ?? Promise.resolve())
+			.catch(() => undefined)
+			.then(async (): Promise<Outcome> => {
+				const went = await wentBefore(key).catch(() => undefined)
+				if (!went) {
+					const outcome = await sendOn(ctx, ask)
+					// One cpd may have, asked again, would go twice.
+					const gone = 'went' in outcome ? outcome.went : 'maybe' in outcome && outcome.maybe ? `may have gone to ${ask.peer}` : undefined
+					if (gone) await wentNow(key, gone).catch((err) => amp.logger.log('cp-inbox: could not record an ask that went:', err instanceof Error ? err.message : err))
+					return outcome
+				}
+				if (ask.asker && (await mayWatch(ask.asker))) await tell(ask.asker, `clanker-proxy: the same ask from this thread ${went} within the last hour, so this one was not sent. To send another, change its words.`)
+				return { done: `did not send this again: the same ask from that thread ${went}` }
+			})
+		repeating.set(key, passed)
+		const clear = () => {
+			if (repeating.get(key) === passed) repeating.delete(key)
+		}
+		void passed.then(clear, clear)
+		return passed
+	}
+	const repeating = new Map<string, Promise<Outcome>>()
+	const sendOn = async (ctx: Context, ask: Ask): Promise<Outcome> => {
 		const handled = () => {
 			if (!ask.id) return
 			state.seen.push(`ask:${ask.id}`)
@@ -1586,7 +1627,7 @@ export default async function (amp: PluginAPI) {
 			} else if (ask.asker && (await mayWatch(ask.asker))) {
 				await tell(ask.asker, `clanker-proxy: passed your follow-up on ${r.subject} to its conversation.`)
 			}
-			outcome = { done: `passed this follow-up to the conversation handling ${r.subject}` }
+			outcome = { done: `passed this follow-up to the conversation handling ${r.subject}`, went: `was passed to the conversation handling ${r.subject}` }
 		} else {
 			let id: string
 			try {
@@ -1604,7 +1645,7 @@ export default async function (amp: PluginAPI) {
 			} else if (ask.asker && (await mayWatch(ask.asker))) {
 				await tell(ask.asker, `clanker-proxy: sent to ${ask.peer} as cpd thread ${id}.`)
 			}
-			outcome = { done: `sent this to ${ask.peer} as cpd thread ${id}` }
+			outcome = { done: `sent this to ${ask.peer} as cpd thread ${id}`, went: `went to ${ask.peer} as cpd thread ${id}` }
 		}
 		// Woken by an ask, the inbox also catches up on threads waiting on you.
 		void serial(() => inbox.sweep(ctx)).catch(() => undefined)
@@ -1745,6 +1786,9 @@ export default async function (amp: PluginAPI) {
 		ticked = now
 	}, resumeTick).unref()
 	setInterval(() => void catchUpNow(), catchUpEvery).unref()
+	afterTurn = (id) => {
+		if (id === state.inbox) void catchUpNow()
+	}
 
 	// Loaded in the inbox's orb, after an update or a restart: each peer
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
@@ -2431,10 +2475,36 @@ function claimed(key: string): Promise<boolean> {
 
 async function pruneClaims(): Promise<void> {
 	const now = Date.now()
-	for (const name of await readdir(claimDir).catch(() => [] as string[])) {
-		const s = await lstat(join(claimDir, name)).catch(() => undefined)
-		if (s && now - s.mtimeMs > keepClaims) await rm(join(claimDir, name), { force: true })
+	for (const [dir, keep] of [
+		[claimDir, keepClaims],
+		[repeatDir, repeatWithin],
+	] as const) {
+		for (const name of await readdir(dir).catch(() => [] as string[])) {
+			const s = await lstat(join(dir, name)).catch(() => undefined)
+			if (s && now - s.mtimeMs > keep) await rm(join(dir, name), { force: true })
+		}
 	}
+}
+
+// repeatKey names what makes two asks the same: who asked, whom, about
+// what, in which words.
+function repeatKey(ask: Ask): string | undefined {
+	if (!ask.asker || ask.error) return undefined
+	return createHash('sha256')
+		.update(JSON.stringify([ask.asker, ask.peer, ask.thread ?? '', ask.title, ask.message]))
+		.digest('hex')
+}
+
+// wentBefore says where the same ask went, if it did within repeatWithin.
+async function wentBefore(key: string): Promise<string | undefined> {
+	const record = JSON.parse(await readFile(join(repeatDir, key), 'utf8').catch(() => 'null')) as { at?: unknown; went?: unknown } | null
+	if (typeof record?.at !== 'number' || typeof record.went !== 'string') return undefined
+	return Date.now() - record.at < repeatWithin ? record.went : undefined
+}
+
+async function wentNow(key: string, went: string): Promise<void> {
+	await mkdir(repeatDir, { recursive: true, mode: 0o700 })
+	await writeFile(join(repeatDir, key), JSON.stringify({ at: Date.now(), went }), { mode: 0o600 })
 }
 
 // parseAsk reads an ask cp-peers brought to the inbox: a JSON line, or, from

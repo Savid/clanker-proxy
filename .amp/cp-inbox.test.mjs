@@ -1553,6 +1553,68 @@ test('after an uninstall in another of the orb\'s plugin processes, a catch-up h
 	assert.deepEqual({ sends: (await f.sends()).length, told: f.posted.slice(told), created: f.created.slice(created), state: await stat(f.stateFile).then(() => 'recreated', () => 'gone') }, { sends: 0, told: [], created: [], state: 'gone' })
 })
 
+test('asks Amp folds into one turn are each sent, as a catch-up follows every turn in the inbox', async (t) => {
+	const asker = (n) => `T-00000000-0000-4000-8000-0000000000b${n}`
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
+	// The catch-up at load, which finds nothing.
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	const asked = (n, title) => ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: asker(n), title, message: 'hi' })
+	const told = (n) => f.posted.filter((p) => p.thread === asker(n)).length
+	// Two that came together: the turn's hook sees only the second.
+	const second = asked(2, 'Second')
+	history.inbox.push(user(asked(1, 'First')), user(second))
+	assert.deepEqual(await f.start('inbox', second), note(`sent this to alice as cpd thread ${sent}`))
+	await f.until(async () => told(1) > 0)
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)).sort(), ['First', 'Second'])
+	// An ask folded into a turn of yours goes too.
+	history.inbox.push(user(asked(3, 'Third')), user('How are the threads going?'))
+	assert.deepEqual(await f.start('inbox', 'How are the threads going?'), {})
+	await f.until(async () => told(3) > 0)
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)).sort(), ['First', 'Second', 'Third'])
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	assert.deepEqual([told(1), told(2), told(3)], [1, 1, 1], 'each asker told once')
+	assert.equal((await f.sends()).length, 3)
+})
+
+test('the same ask from the same thread goes once an hour at most, and a repeat hears where the first went', async (t) => {
+	const realNow = Date.now
+	let later = 0
+	Date.now = () => realNow() + later
+	t.after(() => { Date.now = realNow })
+	const me = 'T-00000000-0000-4000-8000-0000000000c1'
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }, { name: 'bob', aliases: [] }, { name: 'slow', aliases: [] }] })
+	const same = (to = 'alice', fields = {}) => ask(to, { id: randomUUID(), asker: me, title: 'Lunch', message: 'Lunch on Friday?', ...fields })
+	const sends = async () => (await f.sends()).length
+	const lastTold = () => f.posted.filter((p) => p.thread === me).at(-1)?.content
+	assert.deepEqual(await f.start('inbox', same()), note(`sent this to alice as cpd thread ${sent}`))
+	// Asked again by a thread that could not tell whether it went.
+	assert.deepEqual(await f.start('inbox', same()), note(`did not send this again: the same ask from that thread went to alice as cpd thread ${sent}`))
+	assert.equal(await sends(), 1)
+	assert.equal(lastTold(), `clanker-proxy: the same ask from this thread went to alice as cpd thread ${sent} within the last hour, so this one was not sent. To send another, change its words.`)
+	// Other words, another thread, another peer or another title are other asks.
+	await f.start('inbox', same('alice', { message: 'Lunch on Saturday?' }))
+	await f.start('inbox', same('alice', { asker: 'T-00000000-0000-4000-8000-0000000000c2' }))
+	await f.start('inbox', same('bob'))
+	await f.start('inbox', same('alice', { title: 'Friday' }))
+	assert.equal(await sends(), 5)
+	// Two at once go once.
+	const both = await Promise.all([f.start('inbox', same('alice', { message: 'Dinner?' })), f.start('inbox', same('alice', { message: 'Dinner?' }))])
+	assert.equal(await sends(), 6)
+	assert.deepEqual(both.map((r) => r.message.content).sort(), [note(`did not send this again: the same ask from that thread went to alice as cpd thread ${sent}`), note(`sent this to alice as cpd thread ${sent}`)].map((n) => n.message.content).sort())
+	// One that cpd may have is not sent again; one refused is tried again.
+	assert.match((await f.start('inbox', same('slow'))).message.content, /cpctl did not say whether it was sent/)
+	assert.deepEqual(await f.start('inbox', same('slow')), note('did not send this again: the same ask from that thread may have gone to slow'))
+	assert.equal(await sends(), 7)
+	assert.deepEqual(await f.start('inbox', same('nobody')), notPassed("nobody is not one of this inbox's peers"))
+	assert.deepEqual(await f.start('inbox', same('nobody')), notPassed("nobody is not one of this inbox's peers"))
+	// An hour on, it is a new ask.
+	later = 61 * 60 * 1000
+	assert.deepEqual(await f.start('inbox', same()), note(`sent this to alice as cpd thread ${sent}`))
+	assert.equal(await sends(), 8)
+})
+
 test("a copy another thread wrote with a real ask's ID is refused, and the real ask still goes", async (t) => {
 	const asker = 'T-00000000-0000-4000-8000-0000000000a1'
 	const forger = 'T-00000000-0000-4000-8000-0000000000a2'
