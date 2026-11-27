@@ -3,7 +3,7 @@
   "private": true,
   "description": "Pins the Node tooling: wrangler runs and deploys cpd-worker; vacuum lints the OpenAPI document.",
   "devDependencies": {
-    "@quobix/vacuum": "0.41.0",
+    "@quobix/vacuum": "0.42.3",
     "wrangler": "4.165.0"
   }
 }
