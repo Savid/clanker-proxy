@@ -68,8 +68,9 @@ const conversationsPerPeer = 10
 const noticeGap = 10 * 60 * 1000
 const sweepEvery = 10 * 60 * 1000
 const sweepMax = 5
-// An ask whose turn ran without the plugin is sent by a catch-up if it is
-// this recent: an older one's thread has likely done without it.
+// An ask whose turn ran without the plugin, or that Amp folded into another's
+// turn, is sent by a catch-up if it is this recent: an older one's thread has
+// likely done without it.
 const catchUpWithin = 60 * 60 * 1000
 // After the plugin loads or the orb resumes, Amp may take a while to serve
 // the inbox's latest messages, so the catch-up runs at once and after each
@@ -150,12 +151,17 @@ const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(not
 // time from another orb's clock opens, by far more than clocks differ.
 const claimDir = join(stateDir, 'asks')
 const keepClaims = day
-// An ask with the words of one that went, from the same thread to the same
-// peer and cpd thread, within this long of it, is not sent again: a thread
-// that cannot tell whether its ask reached the inbox asks again. The thread
-// hears where the first went.
+// An ask with the words of one that went, or may have, from the same
+// thread to the same peer and cpd thread, within this long of it and before
+// the peer moves on that thread, is not sent again: a thread whose call
+// errored cannot tell whether its ask reached the inbox, so it asks again.
+// It hears where the first went. Each is recorded before it is sent, so no
+// two of the orb's plugin processes send it.
 const repeatWithin = 60 * 60 * 1000
 const repeatDir = join(stateDir, 'repeats')
+// The inbox's label once its plugin sends an ask once: only then does
+// cp-peers tell agents to call again.
+const repeatsLabel = 'cp-inbox-2'
 // The plugin process this is. A thread the plugin starts runs on the client
 // running the plugin, not in an orb of its own: a message there never wakes
 // the orb, and once that client restarts (as it may when the orb wakes), or
@@ -213,8 +219,7 @@ interface State {
 
 // What became of an ask: done says what the plugin did, why what stopped it,
 // and maybe that cpd may have it all the same.
-// went says where an ask went, for its repeats.
-type Outcome = { done: string; went?: string } | { why: string; maybe?: boolean }
+type Outcome = { done: string } | { why: string; maybe?: boolean }
 
 // What the plugin uses of a handler's or a tool's context.
 type Context = Pick<WebhookHandlerContext, 'thread' | 'logger' | 'ui'>
@@ -259,8 +264,8 @@ export default async function (amp: PluginAPI) {
 	let watchStart: ((event: { thread: { id: ThreadID }; message: string }) => Promise<void>) | undefined
 	let stale = async (_ask: Ask) => {}
 	// Amp folds asks that come together into one turn, whose hook sees only
-	// the last, so each turn in the inbox is followed by a catch-up.
-	let afterTurn = (_id: ThreadID) => {}
+	// the last, so every hook in the inbox ends with a catch-up.
+	let afterTurn = (_id: ThreadID, _labels: string[] | undefined) => {}
 	let notRunning = 'cp-inbox is starting'
 	let loaded!: () => void
 	const ready = new Promise<void>((resolve) => {
@@ -307,6 +312,7 @@ export default async function (amp: PluginAPI) {
 		return `cp-inbox did not pass this on (${outcome.why})${told ? ' and told the thread that asked' : ''}.`
 	}
 	amp.on('agent.start', async (event, ctx) => {
+		let labels: string[] | undefined
 		try {
 			const ask = parseAsk(event.message)
 			const cancel = () =>
@@ -315,7 +321,7 @@ export default async function (amp: PluginAPI) {
 					.catch(() => undefined)
 			const done = (note: string) => ({ message: { content: `${note}${noteEnd}` } })
 			if (!ask) {
-				const labels = await amp.threads
+				labels = await amp.threads
 					.get(event.thread.id)
 					.labels()
 					.catch(() => undefined)
@@ -336,7 +342,7 @@ export default async function (amp: PluginAPI) {
 				return {}
 			}
 			await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000).unref())])
-			const labels = await amp.threads
+			labels = await amp.threads
 				.get(event.thread.id)
 				.labels()
 				.catch(() => undefined)
@@ -357,7 +363,7 @@ export default async function (amp: PluginAPI) {
 				lease?.unsubscribe()
 			}
 		} finally {
-			afterTurn(event.thread.id)
+			afterTurn(event.thread.id, labels)
 		}
 	})
 
@@ -1547,7 +1553,7 @@ export default async function (amp: PluginAPI) {
 		state.inbox = ctx.thread.id
 		if (inboxMarked) return
 		inboxMarked = true
-		await ctx.thread.addLabels(['cp-inbox', inboxKey(ctx.thread.id)]).catch(() => {
+		await ctx.thread.addLabels(['cp-inbox', inboxKey(ctx.thread.id), repeatsLabel]).catch(() => {
 			inboxMarked = false
 		})
 	}
@@ -1573,32 +1579,29 @@ export default async function (amp: PluginAPI) {
 		const named = peers.has(ask.named) ? ask.named : [...peers].find(([, aliases]) => aliases.includes(ask.named))?.[0]
 		if (named !== ask.peer) return { why: `${ask.named} does not name ${ask.peer}` }
 		const key = repeatKey(ask)
-		if (!key) return sendOn(ctx, ask)
-		// Asks with the same words go one at a time, so a repeat finds where
-		// the first went.
-		const passed = (repeating.get(key) ?? Promise.resolve())
-			.catch(() => undefined)
-			.then(async (): Promise<Outcome> => {
-				const went = await wentBefore(key).catch(() => undefined)
-				if (!went) {
-					const outcome = await sendOn(ctx, ask)
-					// One cpd may have, asked again, would go twice.
-					const gone = 'went' in outcome ? outcome.went : 'maybe' in outcome && outcome.maybe ? `may have gone to ${ask.peer}` : undefined
-					if (gone) await wentNow(key, gone).catch((err) => amp.logger.log('cp-inbox: could not record an ask that went:', err instanceof Error ? err.message : err))
-					return outcome
-				}
-				if (ask.asker && (await mayWatch(ask.asker))) await tell(ask.asker, `clanker-proxy: the same ask from this thread ${went} within the last hour, so this one was not sent. To send another, change its words.`)
-				return { done: `did not send this again: the same ask from that thread ${went}` }
-			})
-		repeating.set(key, passed)
-		const clear = () => {
-			if (repeating.get(key) === passed) repeating.delete(key)
+		const earlier = key ? await takeRepeat(key, `may have gone to ${ask.peer}`).catch((err) => (amp.logger.log('cp-inbox: could not check for a repeat:', err instanceof Error ? err.message : err), false as const)) : false
+		if (typeof earlier === 'string') {
+			if (ask.asker && (await mayWatch(ask.asker))) await tell(ask.asker, `clanker-proxy: not sent again: the same ask from this thread ${earlier} within the last hour. If the owner wants it sent twice, change its words.`)
+			return { done: `did not send this: the same ask from the thread that asked ${earlier}` }
 		}
-		void passed.then(clear, clear)
-		return passed
+		// Recorded once it went, before anything after can fail; dropped if
+		// it surely did not, so it can be asked again.
+		let gone = false
+		const went = async (where: string, subject: string) => {
+			gone = true
+			if (key && earlier === undefined) await wentNow(key, where, subject).catch((err) => amp.logger.log('cp-inbox: could not record an ask that went:', err instanceof Error ? err.message : err))
+		}
+		const drop = () => (key && earlier === undefined && !gone ? rm(join(repeatDir, key), { force: true }).catch(() => undefined) : undefined)
+		try {
+			const outcome = await sendOn(ctx, ask, went)
+			if (!('maybe' in outcome && outcome.maybe)) await drop()
+			return outcome
+		} catch (err) {
+			await drop()
+			throw err
+		}
 	}
-	const repeating = new Map<string, Promise<Outcome>>()
-	const sendOn = async (ctx: Context, ask: Ask): Promise<Outcome> => {
+	const sendOn = async (ctx: Context, ask: Ask, went: (where: string, subject: string) => Promise<void>): Promise<Outcome> => {
 		const handled = () => {
 			if (!ask.id) return
 			state.seen.push(`ask:${ask.id}`)
@@ -1616,6 +1619,7 @@ export default async function (amp: PluginAPI) {
 			const r = await serial(async () => {
 				const r = await followUp(ctx, ask.peer, ask.thread!, ask.message)
 				if (!('error' in r)) {
+					await went(`was passed to the conversation handling ${r.subject}`, r.subject)
 					handled()
 					await saveState(state)
 				}
@@ -1627,11 +1631,12 @@ export default async function (amp: PluginAPI) {
 			} else if (ask.asker && (await mayWatch(ask.asker))) {
 				await tell(ask.asker, `clanker-proxy: passed your follow-up on ${r.subject} to its conversation.`)
 			}
-			outcome = { done: `passed this follow-up to the conversation handling ${r.subject}`, went: `was passed to the conversation handling ${r.subject}` }
+			outcome = { done: `passed this follow-up to the conversation handling ${r.subject}` }
 		} else {
 			let id: string
 			try {
 				id = await sendThread(ask.peer, ask.title, ask.message, false)
+				await went(`went to ${ask.peer} as cpd thread ${id}`, id)
 			} catch (err) {
 				// Only cpd's refusal means it was not sent.
 				return { why: `cpctl ${cpctlRefused(err) ? 'could not send it' : 'did not say whether it was sent; the owner can check with cpctl ls before it is asked again'}: ${cpctlError(err)}`, maybe: !cpctlRefused(err) }
@@ -1645,7 +1650,7 @@ export default async function (amp: PluginAPI) {
 			} else if (ask.asker && (await mayWatch(ask.asker))) {
 				await tell(ask.asker, `clanker-proxy: sent to ${ask.peer} as cpd thread ${id}.`)
 			}
-			outcome = { done: `sent this to ${ask.peer} as cpd thread ${id}`, went: `went to ${ask.peer} as cpd thread ${id}` }
+			outcome = { done: `sent this to ${ask.peer} as cpd thread ${id}` }
 		}
 		// Woken by an ask, the inbox also catches up on threads waiting on you.
 		void serial(() => inbox.sweep(ctx)).catch(() => undefined)
@@ -1716,9 +1721,11 @@ export default async function (amp: PluginAPI) {
 	// Amp starts the inbox's turn for an ask without the plugin while the
 	// orb's connection to Amp is down: before the plugin loads, and after a
 	// pause, which resumes the plugin rather than loading it again, until Amp
-	// reconnects. The inbox's agent gets the ask, and no note follows. Each
-	// such ask from the last hour that nothing has claimed is settled here.
-	const catchUp = async (ctx: Context, id: ThreadID) => {
+	// reconnects. Amp also folds messages that come together into one turn,
+	// whose hook sees only the last. Either way no note follows. Each such
+	// ask from the last hour that nothing has claimed is settled here; labels
+	// are the inbox's, for one a new orb's state does not name yet.
+	const catchUp = async (ctx: Context, id: ThreadID, labels: string[] = []) => {
 		// Uninstalling in another of the orb's plugin processes leaves only
 		// the tombstone.
 		if (uninstalled || (await lstat(tombstone).then(() => true, () => false))) return
@@ -1740,7 +1747,7 @@ export default async function (amp: PluginAPI) {
 			.then(() => amp.system.executor.keepAlive())
 			.catch(() => undefined)
 		try {
-			for (const ask of missed) amp.logger.log(`cp-inbox: caught up on an ask for ${ask.peer}: ${await settle(ctx, ask, [])}`)
+			for (const ask of missed) amp.logger.log(`cp-inbox: caught up on an ask for ${ask.peer}: ${await settle(ctx, ask, labels)}`)
 		} finally {
 			lease?.unsubscribe()
 		}
@@ -1786,8 +1793,12 @@ export default async function (amp: PluginAPI) {
 		ticked = now
 	}, resumeTick).unref()
 	setInterval(() => void catchUpNow(), catchUpEvery).unref()
-	afterTurn = (id) => {
+	afterTurn = (id, labels) => {
 		if (id === state.inbox) void catchUpNow()
+		else if (labels?.includes('cp-inbox')) {
+			const ctx: Context = { thread: amp.threads.get(id), logger: amp.logger, ui: amp.ui }
+			void catchUp(ctx, id, labels).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err))
+		}
 	}
 
 	// Loaded in the inbox's orb, after an update or a restart: each peer
@@ -1799,6 +1810,7 @@ export default async function (amp: PluginAPI) {
 	// only retired.
 	if (state.inbox) {
 		const ctx: Context = { thread: amp.threads.get(state.inbox), logger: amp.logger, ui: amp.ui }
+		void ctx.thread.addLabels([repeatsLabel]).catch(() => undefined)
 		void serial(async () => {
 			const peers = await readPeers()
 			for (const peer of peers?.keys() ?? []) {
@@ -1835,6 +1847,7 @@ export default async function (amp: PluginAPI) {
 				// Delivery is at least once, from both cpd and Amp; cpd keeps the
 				// notification ID across its retries.
 				if (state.seen.includes(n.id)) return
+				await movedOn(n.subject).catch(() => undefined)
 				await markInbox(ctx)
 				try {
 					// Watchers are ready for the short form before the conversation
@@ -2487,24 +2500,46 @@ async function pruneClaims(): Promise<void> {
 }
 
 // repeatKey names what makes two asks the same: who asked, whom, about
-// what, in which words.
+// which cpd thread, however much of its ID was given, in which words.
 function repeatKey(ask: Ask): string | undefined {
 	if (!ask.asker || ask.error) return undefined
 	return createHash('sha256')
-		.update(JSON.stringify([ask.asker, ask.peer, ask.thread ?? '', ask.title, ask.message]))
+		.update(JSON.stringify([ask.asker, ask.peer, ask.thread?.toLowerCase().slice(0, 8) ?? '', ask.title.trim(), ask.message.trim()]))
 		.digest('hex')
 }
 
-// wentBefore says where the same ask went, if it did within repeatWithin.
-async function wentBefore(key: string): Promise<string | undefined> {
-	const record = JSON.parse(await readFile(join(repeatDir, key), 'utf8').catch(() => 'null')) as { at?: unknown; went?: unknown } | null
-	if (typeof record?.at !== 'number' || typeof record.went !== 'string') return undefined
-	return Date.now() - record.at < repeatWithin ? record.went : undefined
+// takeRepeat records an ask as pending before it is sent, as claim does,
+// and returns undefined; or, for a repeat, where the earlier one went.
+async function takeRepeat(key: string, pending: string): Promise<string | undefined> {
+	await mkdir(repeatDir, { recursive: true, mode: 0o700 })
+	const file = join(repeatDir, key)
+	for (let tries = 0; tries < 2; tries++) {
+		try {
+			await writeFile(file, JSON.stringify({ at: Date.now(), went: pending }), { flag: 'wx', mode: 0o600 })
+			return undefined
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+		}
+		const record = JSON.parse(await readFile(file, 'utf8').catch(() => 'null')) as { at?: unknown; went?: unknown; subject?: unknown } | null
+		const fresh = typeof record?.at === 'number' && typeof record.went === 'string' && Date.now() - record.at < repeatWithin
+		// A peer's move since makes the same words a new ask: a second yes, or
+		// one asked again after a decline.
+		const moved = fresh && typeof record.subject === 'string' && (await lstat(join(repeatDir, `moved-${record.subject}`)).then((m) => m.mtimeMs >= (record.at as number), () => false))
+		if (fresh && !moved) return record.went as string
+		await rm(file, { force: true })
+	}
+	return undefined
 }
 
-async function wentNow(key: string, went: string): Promise<void> {
+async function wentNow(key: string, went: string, subject: string): Promise<void> {
+	await writeFile(join(repeatDir, key), JSON.stringify({ at: Date.now(), went, subject }), { mode: 0o600 })
+}
+
+// movedOn marks a move on a cpd thread, which cpd sends only for the peer's.
+async function movedOn(subject: string): Promise<void> {
+	if (!/^[0-9a-f-]{36}$/.test(subject)) return
 	await mkdir(repeatDir, { recursive: true, mode: 0o700 })
-	await writeFile(join(repeatDir, key), JSON.stringify({ at: Date.now(), went }), { mode: 0o600 })
+	await writeFile(join(repeatDir, `moved-${subject}`), '', { mode: 0o600 })
 }
 
 // parseAsk reads an ask cp-peers brought to the inbox: a JSON line, or, from

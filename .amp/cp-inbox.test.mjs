@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHmac, randomUUID } from 'node:crypto'
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -1073,7 +1073,8 @@ test("an ask comes to the inbox, which wakes for it; the plugin sends it, and th
 	f.labels[asker] = ['work']
 	assert.deepEqual(await f.start('inbox', ask('alice', { named: 'ally', asker, message: 'Up for a beer?' })), note(`sent this to alice as cpd thread ${sent}`))
 	assert.ok(f.cancelled.includes('inbox'), 'the turn is cancelled')
-	assert.deepEqual([...f.labels.inbox].sort(), ['cp-inbox', 'inbox-b'])
+	// cp-inbox-2: cp-peers tells agents an ask may be made again.
+	assert.deepEqual([...f.labels.inbox].sort(), ['cp-inbox', 'cp-inbox-2', 'inbox-b'])
 	// A peer's thread was started, to list alice and parent her answer.
 	assert.deepEqual(f.created, [{ id: 'thread-1', parent: 'inbox' }])
 	assert.equal((await f.readState()).hubs.alice, 'thread-1')
@@ -1590,9 +1591,11 @@ test('the same ask from the same thread goes once an hour at most, and a repeat 
 	const lastTold = () => f.posted.filter((p) => p.thread === me).at(-1)?.content
 	assert.deepEqual(await f.start('inbox', same()), note(`sent this to alice as cpd thread ${sent}`))
 	// Asked again by a thread that could not tell whether it went.
-	assert.deepEqual(await f.start('inbox', same()), note(`did not send this again: the same ask from that thread went to alice as cpd thread ${sent}`))
+	assert.deepEqual(await f.start('inbox', same()), note(`did not send this: the same ask from the thread that asked went to alice as cpd thread ${sent}`))
 	assert.equal(await sends(), 1)
-	assert.equal(lastTold(), `clanker-proxy: the same ask from this thread went to alice as cpd thread ${sent} within the last hour, so this one was not sent. To send another, change its words.`)
+	assert.equal(lastTold(), `clanker-proxy: not sent again: the same ask from this thread went to alice as cpd thread ${sent} within the last hour. If the owner wants it sent twice, change its words.`)
+	// However its words are padded.
+	assert.deepEqual(await f.start('inbox', same('alice', { title: ' Lunch ', message: 'Lunch on Friday?\n' })), note(`did not send this: the same ask from the thread that asked went to alice as cpd thread ${sent}`))
 	// Other words, another thread, another peer or another title are other asks.
 	await f.start('inbox', same('alice', { message: 'Lunch on Saturday?' }))
 	await f.start('inbox', same('alice', { asker: 'T-00000000-0000-4000-8000-0000000000c2' }))
@@ -1602,10 +1605,13 @@ test('the same ask from the same thread goes once an hour at most, and a repeat 
 	// Two at once go once.
 	const both = await Promise.all([f.start('inbox', same('alice', { message: 'Dinner?' })), f.start('inbox', same('alice', { message: 'Dinner?' }))])
 	assert.equal(await sends(), 6)
-	assert.deepEqual(both.map((r) => r.message.content).sort(), [note(`did not send this again: the same ask from that thread went to alice as cpd thread ${sent}`), note(`sent this to alice as cpd thread ${sent}`)].map((n) => n.message.content).sort())
+	// The second finds the first still going, or gone.
+	const [one, other] = both.map((r) => r.message.content).sort()
+	assert.match(one, /^cp-inbox did not send this: the same ask from the thread that asked (may have gone to alice|went to alice as cpd thread .*)\. /)
+	assert.equal(other, note(`sent this to alice as cpd thread ${sent}`).message.content)
 	// One that cpd may have is not sent again; one refused is tried again.
 	assert.match((await f.start('inbox', same('slow'))).message.content, /cpctl did not say whether it was sent/)
-	assert.deepEqual(await f.start('inbox', same('slow')), note('did not send this again: the same ask from that thread may have gone to slow'))
+	assert.deepEqual(await f.start('inbox', same('slow')), note('did not send this: the same ask from the thread that asked may have gone to slow'))
 	assert.equal(await sends(), 7)
 	assert.deepEqual(await f.start('inbox', same('nobody')), notPassed("nobody is not one of this inbox's peers"))
 	assert.deepEqual(await f.start('inbox', same('nobody')), notPassed("nobody is not one of this inbox's peers"))
@@ -1613,6 +1619,72 @@ test('the same ask from the same thread goes once an hour at most, and a repeat 
 	later = 61 * 60 * 1000
 	assert.deepEqual(await f.start('inbox', same()), note(`sent this to alice as cpd thread ${sent}`))
 	assert.equal(await sends(), 8)
+})
+
+test("a repeat goes once whichever of the orb's plugin processes has it, and a follow-up is the same by its cpd thread's short or full ID", async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d1'
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }], history })
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	const lunch = () => ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, title: 'Lunch', message: 'Lunch on Friday?' })
+	// Asked three times: this process's hook has the last, and two more
+	// processes catch up on all of them.
+	const last = lunch()
+	history.inbox.push(user(lunch()), user(lunch()), user(last))
+	await Promise.all([f.start('inbox', last), f.reload(), f.another()])
+	await new Promise((resolve) => setTimeout(resolve, 1500))
+	assert.equal((await f.sends()).length, 1)
+	assert.equal(f.posted.filter((p) => p.thread === me && p.content.startsWith('clanker-proxy: sent to alice')).length, 1)
+	await f.respond({ state: 'needs-input' })
+	const follow = (thread) => f.start('inbox', ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, thread, message: 'Friday works.' }))
+	assert.deepEqual(await follow(subject.slice(0, 8)), note(`passed this follow-up to the conversation handling ${subject}`))
+	assert.deepEqual(await follow(subject), note(`did not send this: the same ask from the thread that asked was passed to the conversation handling ${subject}`))
+	assert.equal(f.posted.filter((p) => p.thread === 'conversation' && p.content.endsWith('Friday works.')).length, 1)
+})
+
+test('the same words after the peer moves on that cpd thread are a new ask: a second yes goes', async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d2'
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }] })
+	await f.respond({ state: 'needs-input' })
+	const answer = () => f.start('inbox', ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, thread: subject, message: 'Yes' }))
+	const passed = note(`passed this follow-up to the conversation handling ${subject}`)
+	assert.deepEqual(await answer(), passed)
+	assert.deepEqual(await answer(), note(`did not send this: the same ask from the thread that asked was passed to the conversation handling ${subject}`))
+	// Alice asks something else, which the same yes answers.
+	await f.deliver(f.event('thread.needs-input', 'needs-input', true))
+	assert.deepEqual(await answer(), passed)
+	assert.equal(f.posted.filter((p) => p.thread === 'conversation' && p.content.endsWith('Yes')).length, 2)
+})
+
+test('an ask that went is a repeat even when what follows the send fails', async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d3'
+	const f = await fixture(t, undefined, (s) => ({ ...s, inbox: 'inbox' }), { peers: [{ name: 'alice', aliases: [] }] })
+	const dir = join(f.dir, 'cp-inbox')
+	for (const d of ['asks', 'repeats']) await mkdir(join(dir, d), { recursive: true })
+	// The state cannot be saved once cpctl has sent it, the first time.
+	const file = join(f.dir, 'cpctl')
+	await writeFile(file, (await readFile(file, 'utf8')).replace('    process.stdout.write(JSON.stringify({ id:',
+		"    if (fs.existsSync(path.join(__dirname, 'lock-once'))) { fs.rmSync(path.join(__dirname, 'lock-once')); fs.chmodSync(path.join(__dirname, 'cp-inbox'), 0o500) }\n    process.stdout.write(JSON.stringify({ id:"), { mode: 0o700 })
+	await writeFile(join(f.dir, 'lock-once'), '')
+	t.after(() => chmod(dir, 0o700).catch(() => undefined))
+	const lunch = () => ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, title: 'Lunch', message: 'Lunch on Friday?' })
+	await f.start('inbox', lunch())
+	await chmod(dir, 0o700)
+	assert.deepEqual(await f.start('inbox', lunch()), note(`did not send this: the same ask from the thread that asked went to alice as cpd thread ${sent}`))
+	assert.equal((await f.sends()).length, 1)
+})
+
+test('in an inbox a new orb knows only by its label, a turn is followed by a catch-up too', async (t) => {
+	const me = 'T-00000000-0000-4000-8000-0000000000d4'
+	const user = (text) => ({ id: randomUUID(), role: 'user', content: [{ type: 'text', text }] })
+	const history = { inbox: [] }
+	const f = await fixture(t, undefined, (s) => s, { peers: [{ name: 'alice', aliases: [] }], history, labelled: { inbox: ['cp-inbox'] } })
+	await new Promise((resolve) => setTimeout(resolve, 200))
+	history.inbox.push(user(ask('alice', { id: randomUUID(), at: new Date().toISOString(), asker: me, title: 'Folded', message: 'hi' })), user('How are the threads going?'))
+	await f.start('inbox', 'How are the threads going?')
+	await f.until(async () => (await f.sends()).length > 0)
+	assert.deepEqual((await f.sends()).map((args) => args.at(-1)), ['Folded'])
 })
 
 test("a copy another thread wrote with a real ask's ID is refused, and the real ask still goes", async (t) => {

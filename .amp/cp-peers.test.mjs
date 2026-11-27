@@ -80,8 +80,6 @@ test("ask_peer knows your peers by name and alias, and brings the ask to their i
 		...keyed,
 	}, {}, inboxLabels)
 	assert.match(f.tools.ask_peer.description, /clanker-proxy peers \(alice \(also ally, al\)\)/)
-	// The inbox sends the same ask from a thread once an hour at most, so a call that may have failed is asked again.
-	assert.match(f.tools.ask_peer.description, /If a call fails, or you cannot tell whether it went, call it again with the same peer, title, thread and message/)
 	assert.equal(
 		await f.ask({ peer: 'ally', message: 'Up for a beer?\nFriday?' }),
 		"Passed to your clanker-proxy inbox, whose plugin sends it to alice and tells this thread its cpd thread ID. If the inbox was asleep, that can take a few minutes. Never send it again unless the owner says to: if nothing comes, tell the owner. This thread is told of each of alice's moves, with a short form; never look for their words.",
@@ -129,6 +127,20 @@ test("ask_peer finds the peer's own inbox, or your only one, and never writes in
 	}, {}, { [hub]: inboxLabels[hub], [other]: ['cp-inbox', 'inbox-00000000f002'] })
 	assert.match(await gone.ask({ peer: 'alice', message: 'hi' }), /cannot tell which of your threads is the clanker-proxy inbox/)
 	assert.deepEqual(gone.posted, [])
+})
+
+test('ask_peer tells agents to call again only when every inbox sends an ask once', async (t) => {
+	const other = 'T-00000000-0000-4000-8000-0000000000f2'
+	const again = /If a call errors, or this thread lost its result, call it again with exactly the same arguments/
+	const peersFound = { 'label:cp-peer archived:false': [{ id: hub, title: 'alice' }] }
+	const newer = { [inbox]: ['cp-inbox', 'cp-inbox-2', 'inbox-00000000f001'] }
+	let f = await load(t, { ...peersFound, 'label:cp-inbox archived:false': [{ id: inbox }] }, {}, { ...inboxLabels, ...newer })
+	assert.match(f.tools.ask_peer.description, again)
+	// An inbox still on an earlier plugin would send it twice.
+	f = await load(t, { ...peersFound, 'label:cp-inbox archived:false': [{ id: inbox }] }, {}, inboxLabels)
+	assert.doesNotMatch(f.tools.ask_peer.description, again)
+	f = await load(t, { ...peersFound, 'label:cp-inbox archived:false': [{ id: inbox }, { id: other }] }, {}, { ...inboxLabels, ...newer, [other]: ['cp-inbox', 'inbox-00000000f002'] })
+	assert.doesNotMatch(f.tools.ask_peer.description, again)
 })
 
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
