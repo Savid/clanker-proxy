@@ -19,6 +19,9 @@ const peerName = /^[a-z0-9](?:-?[a-z0-9])*$/
 const ampThread = /^T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // The label cp-inbox puts on an inbox and its peers' threads.
 const inboxKey = /^inbox-[0-9a-f]{1,12}$/
+// The label cp-inbox puts on an inbox that sends the same ask from a thread
+// once: only there is asking again safe.
+const repeatsLabel = 'cp-inbox-2'
 // The form of the ask this writes, which cp-inbox reads. Threads keep the
 // cp-peers they started with, so a change only adds optional fields, and
 // raises this and cp-inbox's askFormat.
@@ -139,11 +142,19 @@ export default async function (amp: PluginAPI) {
 	guardInbox(amp)
 	const known = await peers().catch(() => [])
 	if (!known.length) return
+	// Every inbox found counts, whether or not its labels can be read.
+	const inboxes = await search('label:cp-inbox archived:false')
+		.then((found) => found.filter((t: any) => typeof t?.id === 'string' && ampThread.test(t.id)).length)
+		.catch(() => 0)
+	const repeats = inboxes > 0 && (await withLabels(amp, 'cp-inbox', repeatsLabel).catch(() => [] as string[])).length === inboxes
+	const again = repeats
+		? ' If a call errors, or this thread lost its result, call it again with exactly the same arguments: the inbox does not send an ask again within an hour of the same one from this thread, and tells this thread where that one went. Once a call has returned, do as its result says.'
+		: ''
 
 	amp.registerTool({
 		name: 'ask_peer',
 		title: 'Ask a clanker-proxy peer',
-		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through your clanker-proxy inbox, which sends it as written, so give only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00".`,
+		description: `Ask one of your clanker-proxy peers (${known.map(called).join('; ')}) something: their agent answers for them. It goes through your clanker-proxy inbox, which sends it as written, so give only what they need. Their words never come back: this thread is told of each of their moves, with a short form such as "yes, 2026-11-27T18:00+10:00".${again}`,
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -193,8 +204,8 @@ export default async function (amp: PluginAPI) {
 				...(typeof title === 'string' && title.trim() ? { title: title.trim().split('\n', 1)[0] } : {}),
 				...(typeof about === 'string' ? { thread: about } : {}),
 			}
-			// The inbox's agent sees it only while the plugin is starting, and
-			// the plugin sends it once loaded. The agent only tells the thread
+			// The inbox's agent sees it only when its turn runs without the
+			// plugin, which sends it once it can. The agent only tells the thread
 			// that asked to wait: one told it may not have gone would ask again,
 			// and one told nothing would not hear of a plugin that never runs.
 			const forInbox = `cp-inbox: for ${name}'s thread. Only the cp-inbox plugin acts on this message, and notes at its end what it did. If no such note follows, the plugin was still starting: do nothing with this message but tell ${ctx.thread.id}, with send_thread_message, that the inbox got its ask while starting and sends it once its plugin runs, so it must not be sent again.`

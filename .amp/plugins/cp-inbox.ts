@@ -17,8 +17,8 @@
 // peer's words. See docs/amp.md.
 
 import { execFile } from 'node:child_process'
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { link, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -68,8 +68,9 @@ const conversationsPerPeer = 10
 const noticeGap = 10 * 60 * 1000
 const sweepEvery = 10 * 60 * 1000
 const sweepMax = 5
-// An ask whose turn ran without the plugin is sent by a catch-up if it is
-// this recent: an older one's thread has likely done without it.
+// An ask whose turn ran without the plugin, or that Amp folded into another's
+// turn, is sent by a catch-up if it is this recent: an older one's thread has
+// likely done without it.
 const catchUpWithin = 60 * 60 * 1000
 // After the plugin loads or the orb resumes, Amp may take a while to serve
 // the inbox's latest messages, so the catch-up runs at once and after each
@@ -150,6 +151,19 @@ const isNote = (text: string) => /^cp-inbox[ :]/.test(text) && text.endsWith(not
 // time from another orb's clock opens, by far more than clocks differ.
 const claimDir = join(stateDir, 'asks')
 const keepClaims = day
+// An ask with the words of one that went, or may have, from the same
+// thread to the same peer and cpd thread, within this long of it, is not
+// sent again: a thread whose call errored cannot tell whether its ask
+// reached the inbox, so it asks again. It hears where the first went. A
+// follow-up is new again once the peer has said something on that thread,
+// and any ask once the thread has ended. Each is recorded just before it is
+// sent, so no two of the orb's plugin processes send it.
+const repeatWithin = 60 * 60 * 1000
+const keepRepeats = 7 * day
+const repeatDir = join(stateDir, 'repeats')
+// The inbox's label once the plugin running its hooks sends an ask once:
+// only then does cp-peers tell agents to call again.
+const repeatsLabel = 'cp-inbox-2'
 // The plugin process this is. A thread the plugin starts runs on the client
 // running the plugin, not in an orb of its own: a message there never wakes
 // the orb, and once that client restarts (as it may when the orb wakes), or
@@ -209,6 +223,13 @@ interface State {
 // and maybe that cpd may have it all the same.
 type Outcome = { done: string } | { why: string; maybe?: boolean }
 
+// An ask being sent: the record that stops its repeats, and where it went.
+interface Sending {
+	record?: string
+	gone?: string
+	subject?: string
+}
+
 // What the plugin uses of a handler's or a tool's context.
 type Context = Pick<WebhookHandlerContext, 'thread' | 'logger' | 'ui'>
 
@@ -251,6 +272,9 @@ export default async function (amp: PluginAPI) {
 	}
 	let watchStart: ((event: { thread: { id: ThreadID }; message: string }) => Promise<void>) | undefined
 	let stale = async (_ask: Ask) => {}
+	// Amp folds asks that come together into one turn, whose hook sees only
+	// the last, so every hook in the inbox ends with a catch-up.
+	let afterTurn = (_id: ThreadID, _labels: string[] | undefined) => {}
 	let notRunning = 'cp-inbox is starting'
 	let loaded!: () => void
 	const ready = new Promise<void>((resolve) => {
@@ -297,53 +321,58 @@ export default async function (amp: PluginAPI) {
 		return `cp-inbox did not pass this on (${outcome.why})${told ? ' and told the thread that asked' : ''}.`
 	}
 	amp.on('agent.start', async (event, ctx) => {
-		const ask = parseAsk(event.message)
-		const cancel = () =>
-			Promise.resolve()
-				.then(() => ctx.thread.cancel())
-				.catch(() => undefined)
-		const done = (note: string) => ({ message: { content: `${note}${noteEnd}` } })
-		if (!ask) {
-			const labels = await amp.threads
+		let labels: string[] | undefined
+		try {
+			const ask = parseAsk(event.message)
+			const cancel = () =>
+				Promise.resolve()
+					.then(() => ctx.thread.cancel())
+					.catch(() => undefined)
+			const done = (note: string) => ({ message: { content: `${note}${noteEnd}` } })
+			if (!ask) {
+				labels = await amp.threads
+					.get(event.thread.id)
+					.labels()
+					.catch(() => undefined)
+				// A peer's thread runs only its briefing: asks go to the inbox.
+				if (labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed') && !event.message.startsWith(hubBriefingStart)) {
+					await cancel()
+					return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
+				}
+				// The inbox runs only what you type in it: another thread's message
+				// there would reach an agent with every tool and the token.
+				if (labels?.includes('cp-inbox') && sentBy.test(event.message)) {
+					sentBy.lastIndex = 0
+					await cancel()
+					return done("cp-inbox: the inbox runs no other thread's messages; ask peers with ask_peer.")
+				}
+				sentBy.lastIndex = 0
+				await watchStart?.(event).catch(() => undefined)
+				return {}
+			}
+			await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000).unref())])
+			labels = await amp.threads
 				.get(event.thread.id)
 				.labels()
 				.catch(() => undefined)
-			// A peer's thread runs only its briefing: asks go to the inbox.
-			if (labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed') && !event.message.startsWith(hubBriefingStart)) {
+			if (await sealed(event.thread.id, labels).catch(() => false)) {
+				if (!labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed')) return {}
 				await cancel()
 				return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
 			}
-			// The inbox runs only what you type in it: another thread's message
-			// there would reach an agent with every tool and the token.
-			if (labels?.includes('cp-inbox') && sentBy.test(event.message)) {
-				sentBy.lastIndex = 0
-				await cancel()
-				return done("cp-inbox: the inbox runs no other thread's messages; ask peers with ask_peer.")
-			}
-			sentBy.lastIndex = 0
-			await watchStart?.(event).catch(() => undefined)
-			return {}
-		}
-		await Promise.race([ready, new Promise((resolve) => setTimeout(resolve, 20_000).unref())])
-		const labels = await amp.threads
-			.get(event.thread.id)
-			.labels()
-			.catch(() => undefined)
-		if (await sealed(event.thread.id, labels).catch(() => false)) {
-			if (!labels?.some((l) => l === 'cp-peer' || l === 'cp-sealed')) return {}
 			await cancel()
-			return done('cp-inbox: this thread runs nothing; ask_peer brings asks for this peer to the inbox, which sends them.')
-		}
-		await cancel()
-		// The inbox's own turn is cancelled, so nothing else keeps the orb up
-		// while the plugin sends.
-		const lease = await Promise.resolve()
-			.then(() => amp.system.executor.keepAlive())
-			.catch(() => undefined)
-		try {
-			return done(await settle(ctx, ask, labels ?? []))
+			// The inbox's own turn is cancelled, so nothing else keeps the orb up
+			// while the plugin sends.
+			const lease = await Promise.resolve()
+				.then(() => amp.system.executor.keepAlive())
+				.catch(() => undefined)
+			try {
+				return done(await settle(ctx, ask, labels ?? []))
+			} finally {
+				lease?.unsubscribe()
+			}
 		} finally {
-			lease?.unsubscribe()
+			afterTurn(event.thread.id, labels)
 		}
 	})
 
@@ -1558,6 +1587,28 @@ export default async function (amp: PluginAPI) {
 		// The name as the asker gave it, maybe an alias, must be that peer.
 		const named = peers.has(ask.named) ? ask.named : [...peers].find(([, aliases]) => aliases.includes(ask.named))?.[0]
 		if (named !== ask.peer) return { why: `${ask.named} does not name ${ask.peer}` }
+		// The record of an ask that surely did not go is dropped, so it can be
+		// asked again; one that went is not undone by a failure after it.
+		const sending: Sending = {}
+		try {
+			const outcome = await sendOn(ctx, ask, sending)
+			if (sending.record && !sending.gone && !('maybe' in outcome && outcome.maybe)) await rm(sending.record, { force: true }).catch(() => undefined)
+			return outcome
+		} catch (err) {
+			if (!sending.gone) {
+				if (sending.record) await rm(sending.record, { force: true }).catch(() => undefined)
+				throw err
+			}
+			const why = err instanceof Error ? err.message : String(err)
+			amp.logger.log(`cp-inbox: an ask for ${ask.peer} went, but the inbox could not finish with it: ${why}`)
+			const watching = !!ask.asker && !!sending.subject && (await watch(ask.asker, sending.subject).catch(() => false))
+			if (ask.asker && (watching || (await mayWatch(ask.asker).catch(() => false)))) {
+				await tell(ask.asker, `clanker-proxy: your ask ${sending.gone}.${watching ? ` You're watching it: you'll be told of each of ${ask.peer}'s moves, never their words.` : ''}`)
+			}
+			return { done: `found this ${sending.gone}, though the inbox could not finish with it: ${why}` }
+		}
+	}
+	const sendOn = async (ctx: Context, ask: Ask, sending: Sending): Promise<Outcome> => {
 		const handled = () => {
 			if (!ask.id) return
 			state.seen.push(`ask:${ask.id}`)
@@ -1570,11 +1621,32 @@ export default async function (amp: PluginAPI) {
 			await inbox.hub(ctx, ask.peer)
 			await saveState(state)
 		})
+		// Taken just before it goes, so only a crash while it goes leaves a
+		// record of one that may not have.
+		const key = repeatKey(ask)
+		if (key) {
+			const taken = await takeRepeat(key, `may have gone to ${ask.peer}`).catch((err) => {
+				amp.logger.log('cp-inbox: could not check for a repeat:', err instanceof Error ? err.message : err)
+				return undefined
+			})
+			if (taken && 'went' in taken) {
+				if (ask.asker && (await mayWatch(ask.asker))) await tell(ask.asker, `clanker-proxy: not sent again: the same ask from this thread ${taken.went} within the last hour. If the owner wants it sent twice, change its words.`)
+				return { done: `did not send this: the same ask from the thread that asked ${taken.went}` }
+			}
+			sending.record = taken?.file
+		}
+		// Recorded as soon as it went, before anything after can fail.
+		const went = async (where: string, subject: string, followUp: boolean) => {
+			sending.gone = where
+			sending.subject = subject
+			if (sending.record) await wentNow(sending.record, { at: Date.now(), went: where, subject, followUp }).catch((err) => amp.logger.log('cp-inbox: could not record an ask that went:', err instanceof Error ? err.message : err))
+		}
 		let outcome: Outcome
 		if (ask.thread) {
 			const r = await serial(async () => {
 				const r = await followUp(ctx, ask.peer, ask.thread!, ask.message)
 				if (!('error' in r)) {
+					await went(`was passed to the conversation handling ${r.subject}`, r.subject, true)
 					handled()
 					await saveState(state)
 				}
@@ -1591,6 +1663,7 @@ export default async function (amp: PluginAPI) {
 			let id: string
 			try {
 				id = await sendThread(ask.peer, ask.title, ask.message, false)
+				await went(`went to ${ask.peer} as cpd thread ${id}`, id, false)
 			} catch (err) {
 				// Only cpd's refusal means it was not sent.
 				return { why: `cpctl ${cpctlRefused(err) ? 'could not send it' : 'did not say whether it was sent; the owner can check with cpctl ls before it is asked again'}: ${cpctlError(err)}`, maybe: !cpctlRefused(err) }
@@ -1675,9 +1748,11 @@ export default async function (amp: PluginAPI) {
 	// Amp starts the inbox's turn for an ask without the plugin while the
 	// orb's connection to Amp is down: before the plugin loads, and after a
 	// pause, which resumes the plugin rather than loading it again, until Amp
-	// reconnects. The inbox's agent gets the ask, and no note follows. Each
-	// such ask from the last hour that nothing has claimed is settled here.
-	const catchUp = async (ctx: Context, id: ThreadID) => {
+	// reconnects. Amp also folds messages that come together into one turn,
+	// whose hook sees only the last. Either way no note follows. Each such
+	// ask from the last hour that nothing has claimed is settled here; labels
+	// are the inbox's, for one a new orb's state does not name yet.
+	const catchUp = async (ctx: Context, id: ThreadID, labels: string[] = []) => {
 		// Uninstalling in another of the orb's plugin processes leaves only
 		// the tombstone.
 		if (uninstalled || (await lstat(tombstone).then(() => true, () => false))) return
@@ -1699,7 +1774,7 @@ export default async function (amp: PluginAPI) {
 			.then(() => amp.system.executor.keepAlive())
 			.catch(() => undefined)
 		try {
-			for (const ask of missed) amp.logger.log(`cp-inbox: caught up on an ask for ${ask.peer}: ${await settle(ctx, ask, [])}`)
+			for (const ask of missed) amp.logger.log(`cp-inbox: caught up on an ask for ${ask.peer}: ${await settle(ctx, ask, labels)}`)
 		} finally {
 			lease?.unsubscribe()
 		}
@@ -1745,6 +1820,25 @@ export default async function (amp: PluginAPI) {
 		ticked = now
 	}, resumeTick).unref()
 	setInterval(() => void catchUpNow(), catchUpEvery).unref()
+	let saysOnce = false
+	afterTurn = (id, labels) => {
+		if (id !== state.inbox && !labels?.includes('cp-inbox')) return
+		// Only the process running the inbox's hooks says its asks go once.
+		if (!saysOnce) {
+			saysOnce = true
+			void amp.threads
+				.get(id)
+				.addLabels([repeatsLabel])
+				.catch(() => {
+					saysOnce = false
+				})
+		}
+		if (id === state.inbox) void catchUpNow()
+		else {
+			const ctx: Context = { thread: amp.threads.get(id), logger: amp.logger, ui: amp.ui }
+			void catchUp(ctx, id, labels).catch((err) => amp.logger.log('cp-inbox: could not catch up on asks:', err instanceof Error ? err.message : err))
+		}
+	}
 
 	// Loaded in the inbox's orb, after an update or a restart: each peer
 	// whose thread is missing or gone gets one, as ask_peer finds peers by
@@ -1791,6 +1885,7 @@ export default async function (amp: PluginAPI) {
 				// Delivery is at least once, from both cpd and Amp; cpd keeps the
 				// notification ID across its retries.
 				if (state.seen.includes(n.id)) return
+				await movedOn(n).catch(() => undefined)
 				await markInbox(ctx)
 				try {
 					// Watchers are ready for the short form before the conversation
@@ -2431,10 +2526,112 @@ function claimed(key: string): Promise<boolean> {
 
 async function pruneClaims(): Promise<void> {
 	const now = Date.now()
-	for (const name of await readdir(claimDir).catch(() => [] as string[])) {
-		const s = await lstat(join(claimDir, name)).catch(() => undefined)
-		if (s && now - s.mtimeMs > keepClaims) await rm(join(claimDir, name), { force: true })
+	const prune = async (dir: string, name: string, keep: number) => {
+		const s = await lstat(join(dir, name)).catch(() => undefined)
+		if (s && now - s.mtimeMs > keep) await rm(join(dir, name), { force: true })
 	}
+	for (const name of await readdir(claimDir).catch(() => [] as string[])) await prune(claimDir, name, keepClaims)
+	// An ask's latest record stays for days: gone, the next ask with its
+	// words would start the count again beside one taking the next number.
+	const names = await readdir(repeatDir).catch(() => [] as string[])
+	const latest = new Map<string, number>()
+	for (const name of names) {
+		const m = /^([0-9a-f]{64})\.(\d+)$/.exec(name)
+		if (m) latest.set(m[1]!, Math.max(latest.get(m[1]!) ?? -1, Number(m[2])))
+	}
+	for (const name of names) {
+		const m = /^([0-9a-f]{64})\.(\d+)$/.exec(name)
+		await prune(repeatDir, name, m && latest.get(m[1]!) === Number(m[2]) ? keepRepeats : repeatWithin)
+	}
+}
+
+// repeatKey names what makes two asks the same: who asked, whom, about
+// which cpd thread, however much of its ID was given, in which words.
+function repeatKey(ask: Ask): string | undefined {
+	if (!ask.asker || ask.error) return undefined
+	return createHash('sha256')
+		.update(JSON.stringify([ask.asker, ask.peer, ask.thread?.toLowerCase().slice(0, 8) ?? '', ask.title.trim(), ask.message.trim()]))
+		.digest('hex')
+}
+
+// An ask's record, numbered: each is created once, whole, and a stale or
+// reopened one is followed by the next, so no two asks replace one.
+interface Repeat {
+	at: number
+	went: string
+	subject?: string
+	followUp?: boolean
+}
+
+// takeRepeat takes the next record for an ask before it is sent, as claim
+// does; or, for a repeat, says where the earlier one went. One it cannot
+// read counts as one that may have gone.
+async function takeRepeat(key: string, pending: string): Promise<{ file: string } | { went: string }> {
+	await mkdir(repeatDir, { recursive: true, mode: 0o700 })
+	for (let tries = 0; tries < 3; tries++) {
+		const numbers = (await readdir(repeatDir)).flatMap((n) => (n.startsWith(`${key}.`) && /^\d+$/.test(n.slice(key.length + 1)) ? [Number(n.slice(key.length + 1))] : []))
+		const last = numbers.length ? Math.max(...numbers) : -1
+		if (last >= 0) {
+			const went = await standing(join(repeatDir, `${key}.${last}`), pending)
+			if (went) return { went }
+		}
+		const file = join(repeatDir, `${key}.${last + 1}`)
+		if (await createWhole(file, JSON.stringify({ at: Date.now(), went: pending } satisfies Repeat))) return { file }
+	}
+	// Lost every race: another ask with these words is going.
+	return { went: pending }
+}
+
+// standing says where the ask a record is for went, while it stops repeats.
+async function standing(file: string, pending: string): Promise<string | undefined> {
+	const text = await readFile(file, 'utf8').catch(() => undefined)
+	if (text === undefined) return undefined
+	let record: Partial<Repeat> | undefined
+	try {
+		record = JSON.parse(text) as Partial<Repeat>
+	} catch {
+		record = undefined
+	}
+	if (typeof record?.at !== 'number' || typeof record.went !== 'string') {
+		const m = await lstat(file).catch(() => undefined)
+		return m && Date.now() - m.mtimeMs < repeatWithin ? pending : undefined
+	}
+	if (Date.now() - record.at >= repeatWithin) return undefined
+	if (typeof record.subject === 'string') {
+		const since = async (mark: string) => (await lstat(join(repeatDir, `${mark}-${record.subject}`)).then((m) => m.mtimeMs, () => -1)) >= (record.at as number)
+		if ((await since('ended')) || (record.followUp && (await since('moved')))) return undefined
+	}
+	return record.went
+}
+
+// createWhole creates file with content, failing as wx does if it exists;
+// a reader never sees it half written.
+async function createWhole(file: string, content: string): Promise<boolean> {
+	const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
+	await writeFile(tmp, content, { mode: 0o600 })
+	try {
+		await link(tmp, file)
+		return true
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+		throw err
+	} finally {
+		await rm(tmp, { force: true })
+	}
+}
+
+async function wentNow(file: string, record: Repeat): Promise<void> {
+	const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
+	await writeFile(tmp, JSON.stringify(record), { mode: 0o600 })
+	await rename(tmp, file)
+}
+
+// movedOn marks the peer's moves on a cpd thread: one that says something,
+// which makes a follow-up's words new, or one that ends it.
+async function movedOn(n: Notification): Promise<void> {
+	if (!moves[n.type] || !/^[0-9a-f-]{36}$/.test(n.subject)) return
+	await mkdir(repeatDir, { recursive: true, mode: 0o700 })
+	await writeFile(join(repeatDir, `${ended.has(n.type) ? 'ended' : 'moved'}-${n.subject}`), '', { mode: 0o600 })
 }
 
 // parseAsk reads an ask cp-peers brought to the inbox: a JSON line, or, from

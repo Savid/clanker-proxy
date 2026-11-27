@@ -129,6 +129,20 @@ test("ask_peer finds the peer's own inbox, or your only one, and never writes in
 	assert.deepEqual(gone.posted, [])
 })
 
+test('ask_peer tells agents to call again only when every inbox sends an ask once', async (t) => {
+	const other = 'T-00000000-0000-4000-8000-0000000000f2'
+	const again = /If a call errors, or this thread lost its result, call it again with exactly the same arguments/
+	const peersFound = { 'label:cp-peer archived:false': [{ id: hub, title: 'alice' }] }
+	const newer = { [inbox]: ['cp-inbox', 'cp-inbox-2', 'inbox-00000000f001'] }
+	let f = await load(t, { ...peersFound, 'label:cp-inbox archived:false': [{ id: inbox }] }, {}, { ...inboxLabels, ...newer })
+	assert.match(f.tools.ask_peer.description, again)
+	// An inbox still on an earlier plugin would send it twice.
+	f = await load(t, { ...peersFound, 'label:cp-inbox archived:false': [{ id: inbox }] }, {}, inboxLabels)
+	assert.doesNotMatch(f.tools.ask_peer.description, again)
+	f = await load(t, { ...peersFound, 'label:cp-inbox archived:false': [{ id: inbox }, { id: other }] }, {}, { ...inboxLabels, ...newer, [other]: ['cp-inbox', 'inbox-00000000f002'] })
+	assert.doesNotMatch(f.tools.ask_peer.description, again)
+})
+
 test("ask_peer prefers a peer's name to another's alias, and finds an untitled peer thread by its label", async (t) => {
 	const bob = 'T-00000000-0000-4000-8000-0000000000b0'
 	const dave = 'T-00000000-0000-4000-8000-0000000000d0'
